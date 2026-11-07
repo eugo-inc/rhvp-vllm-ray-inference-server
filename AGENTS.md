@@ -485,7 +485,8 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
   - Why: the Argo CD apps ignore the image of the image-triggered container (`server`, `notebook`), and with
     `RespectIgnoreDifferences=true` an ignored field keeps its live value even when Git changes it. The rule names
     only that container, so an `oauthProxy.image` change does sync; an `image.override` change does not.
-  - Fix, in this order:
+  - Fix, in this order, when the install was building the image in the cluster (`image.override` was empty). To
+    change one prebuilt image for another, only step 2 is needed: there is no trigger, and nothing to remove.
     1. Wait until Argo CD has applied the commit: this prints nothing once the image-trigger annotation is gone
        (before that, the trigger would put the old image back):
        `oc get deployment/ray-serve-llm -n rhvp-inference -o jsonpath='{.metadata.annotations.image\.openshift\.io/triggers}'`
