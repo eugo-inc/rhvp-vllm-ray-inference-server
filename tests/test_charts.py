@@ -638,6 +638,9 @@ def test_rebuild_playbook_end_to_end(tmp_path):
                 UTILITY_IMAGE, "ansible/rebuild-on-commit.yaml"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+        # The job exits 0 even when its oc or git commands fail, so "nothing started" alone cannot tell "nothing
+        # to do" from "every command failed". Its ERROR lines can.
+        assert "ERROR" not in proc.stdout, proc.stdout[-3000:] + proc.stderr[-3000:]
         return log.read_text() if log.exists() else ""
 
     # Both images built from the first commit; the checkout is that commit: nothing to do.
