@@ -168,6 +168,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except subprocess.CalledProcessError as err:
-        # Only the git commands before the first target get here. Exit 0 for the same reason as in main().
-        sys.stderr.write(f"ERROR command failed ({err.returncode}): {' '.join(err.cmd)}\n{err.stderr}\n")
+        # Only the git commands before the first target get here. Printed to stdout, which the playbook reports,
+        # like the per-build errors. Exit 0 for the same reason as in main().
+        print(f"ERROR command failed ({err.returncode}): {' '.join(err.cmd)}: {(err.stderr or '').strip()}")
         sys.exit(0)

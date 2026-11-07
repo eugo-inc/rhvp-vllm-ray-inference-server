@@ -484,6 +484,19 @@ def test_lock_matches_requirements_and_baseline(arch):
     assert pins["nvidia-cuda-runtime"].startswith("13.0.")
 
 
+def test_image_labels_name_the_locked_versions():
+    pins = _pins(LOCKS["x86_64"])
+    labels = dict(re.findall(r'^\s+(?:LABEL\s+)?([a-z0-9.\-]+)="([^"]*)"', CONTAINERFILE, re.M))
+    assert labels["version"] == f"ray{pins['ray']}-vllm{pins['vllm']}"
+    stack = f"Ray {pins['ray']}, vLLM {pins['vllm']} and PyTorch {pins['torch']}"
+    assert labels["description"].startswith(stack), labels["description"]
+    assert labels["io.k8s.description"].startswith(stack), labels["io.k8s.description"]
+    # The base image's own build labels are replaced, not inherited.
+    for name in ("build-date", "vcs-ref", "release", "org.opencontainers.image.revision", "cpe"):
+        assert labels[name] == "", name
+    assert labels["com.redhat.component"] == "rhvp-vllm-ray-inference-server"
+
+
 def test_both_locks_pin_the_same_versions():
     assert _pins(LOCKS["x86_64"]) == _pins(LOCKS["aarch64"])
 

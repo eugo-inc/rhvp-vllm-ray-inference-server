@@ -41,3 +41,8 @@
     - name: Report what was decided
       ansible.builtin.debug:
         var: rhvp_rebuild.stdout_lines
+
+    - name: Report anything the script wrote to stderr
+      ansible.builtin.debug:
+        var: rhvp_rebuild.stderr_lines
+      when: rhvp_rebuild.stderr_lines | length > 0

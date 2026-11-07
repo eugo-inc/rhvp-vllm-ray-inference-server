@@ -439,7 +439,7 @@ def test_shared_value_files_switch(cg, render):
 
 def test_imperative_jobs(cg):
     # The override restates rebuild-on-commit because a later list replaces the earlier one.
-    # rebuild-on-commit first: the CronJob stops at the first failing job, and rebuild-on-commit never fails.
+    # rebuild-on-commit first: the CronJob stops at the first failing job, and rebuild-on-commit exits 0 on errors.
     assert imperative_jobs(cg["default"]) == ["rebuild-on-commit", "create-gpu-machineset"]
     assert imperative_jobs(cg["none"]) == ["rebuild-on-commit"]
     assert imperative_jobs(cg["gcp"]) == ["rebuild-on-commit"]

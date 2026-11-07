@@ -316,7 +316,8 @@ needs one extra step; see Troubleshooting.
     `ansible/rebuild_on_commit.py`. An error on one build (for example a Forbidden `start-build` when
     `rebuildOnCommit.enabled` is false in that chart) is printed as an `ERROR` line in the job's log, and the job
     still checks the other build and exits 0. The imperative CronJob runs its jobs one after another and stops at
-    the first that fails, so `rebuild-on-commit` runs first and never fails the pod.
+    the first that fails, so `rebuild-on-commit` runs first and exits 0 on any `oc` or `git` error. Only its
+    300-second job timeout can still fail the pod, and that also skips the GPU MachineSet job for that run.
   - **By hand:**
     ```sh
     oc start-build ray-serve-llm -n rhvp-inference --follow
@@ -399,8 +400,9 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
    ```
 5. If the install step fails in hash mode, check `inference-server/requirements-pip.lock`: the image installs that
    pip first, and an older pip can reject a dependency that is asked for with an extra.
-6. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook. A test checks the label
-   against the lock file. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
+6. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook, and update the
+   `version`, `description` and `io.k8s.description` image labels in `inference-server/Containerfile`. A test checks
+   all of them against the lock files. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
 7. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
 
 ## Rules
@@ -478,14 +480,16 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     set `oauthProxy.image` in `charts/all/notebook/values.yaml` to a Red Hat image such as
     `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19`, because the default proxy image is pulled
     through the internal registry.
-- **You set or changed `image.override` (or `oauthProxy.image`) on a running install, and the pod still runs the
-  old image.**
+- **You set or changed `image.override` on a running install, and the pod still runs the old image.**
   - Why: the Argo CD apps ignore the image of the image-triggered container (`server`, `notebook`), and with
     `RespectIgnoreDifferences=true` an ignored field keeps its live value even when Git changes it. The rule names
     only that container, so an `oauthProxy.image` change does sync; an `image.override` change does not.
-  - Fix: once, after the change has synced, delete the Deployment; Argo CD recreates it from Git with the new image.
-    The model PVC is a separate object and is kept:
-    `oc delete deployment ray-serve-llm -n rhvp-inference` (or `oc delete deployment rhvp-notebook -n rhvp-notebook`).
+  - Fix: after the change has synced, set the image on the Deployment yourself. Argo CD ignores that one field, so
+    the value stays:
+    `oc set image deployment/ray-serve-llm server=<your image> -n rhvp-inference`
+    (for the notebook: `oc set image deployment/rhvp-notebook notebook=<your image> -n rhvp-notebook`).
+  - Do not delete the Deployment instead: these apps sync automatically without self-heal, so Argo CD recreates a
+    deleted Deployment only on the next commit or a manual sync, and the server stays down until then.
 - **The image did not change after a push, or the first build failed.**
   - Why: ConfigChange triggers fire only when the BuildConfig is created. `rebuild-on-commit` starts a new build
     only after a push changes the build's folder, and it never retries a failed build on its own.

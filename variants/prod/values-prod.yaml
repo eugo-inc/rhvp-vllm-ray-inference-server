@@ -71,8 +71,8 @@ clusterGroup:
       # of each finished build, so Argo CD must not compare or reset it. The
       # rule names that one container only. With RespectIgnoreDifferences an
       # ignored field keeps its live value even when Git changes it, so after
-      # setting or changing image.override on a running install, delete the
-      # Deployment once (AGENTS.md, Troubleshooting).
+      # setting or changing image.override on a running install, set the image
+      # with `oc set image` once (AGENTS.md, Troubleshooting).
       ignoreDifferences:
         - group: apps
           kind: Deployment

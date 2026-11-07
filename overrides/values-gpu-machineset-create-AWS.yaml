@@ -24,7 +24,7 @@
 # clusterGroup.imperative.jobs is a list, and a list in a later values file replaces
 # the earlier one. This file therefore restates every imperative job of the prod
 # variant. The imperative CronJob runs the jobs one after another and stops at the
-# first that fails, so rebuild-on-commit (which never fails the pod) comes first and
+# first that fails, so rebuild-on-commit (which exits 0 on oc and git errors) comes first and
 # the GPU machine job second. Keep it in step with variants/prod/values-prod.yaml.
 clusterGroup:
   imperative:
