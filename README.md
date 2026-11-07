@@ -1,12 +1,19 @@
-# vLLM + Ray Serve inference server: a Validated Pattern for OpenShift
+# vLLM + Ray Serve inference server: a community GitOps pattern by Eugo
 
-This [Validated Pattern](https://validatedpatterns.io/) deploys an OpenAI-compatible LLM server on Red Hat OpenShift
-through OpenShift GitOps. The server is a single pod that runs Ray Serve LLM with the vLLM engine. The cluster builds
+This [Validated Pattern](https://validatedpatterns.io/) deploys an OpenAI-compatible LLM server on Red Hat®
+OpenShift® through Red Hat OpenShift GitOps. The server is a single pod that runs Ray Serve LLM with the vLLM engine. The cluster builds
 its image from this repository, using stock packages only: PyPI wheels on NVIDIA's CUDA UBI 9 image. The pattern
 also deploys the pieces the server needs: Node Feature Discovery and the NVIDIA GPU Operator, and Vault with External
 Secrets for an optional Hugging Face token. It adds a small JupyterLab whose notebook times the server.
 
 **Community sandbox pattern by Eugo — not produced, supported or validated by Red Hat.**
+
+**The problem it solves.** A team that wants a private, OpenAI-compatible LLM endpoint on its own OpenShift
+cluster usually assembles it by hand: GPU enablement, a serving runtime, a model cache, a secret for gated models,
+and a way to rebuild the image when the stack changes. This pattern turns all of that into one Git repository.
+Fork it, set the model, push, and the cluster converges to a running endpoint. Every Python package is pinned by
+hash and the base image by digest, so a rebuild installs the same stack, and every change is a reviewable commit.
+It uses upstream open-source components only (vLLM, Ray Serve, PyPI wheels on NVIDIA's CUDA UBI 9 image).
 
 > [!WARNING]
 > **Cost.** On AWS, the default install creates **one billable GPU instance: `g6.2xlarge` with one NVIDIA L4**.
@@ -28,6 +35,7 @@ Secrets for an optional Hugging Face token. It adds a small JupyterLab whose not
 - [Uninstall](#uninstall)
 - [Support](#support)
 - [License](#license)
+- [Trademarks](#trademarks)
 - [What this pattern was verified against](#what-this-pattern-was-verified-against)
 
 Contributors and coding agents: read [AGENTS.md](AGENTS.md). It covers the repo layout, every deploy path, the rules
@@ -328,6 +336,14 @@ Red Hat does not support this pattern.
 This repository is licensed under [Apache-2.0](LICENSE). Server code ported from Eugo is licensed under
 BSD-3-Clause, Copyright (c) 2026, Eugo; those files say so in their header (see [LICENSES/](LICENSES/)). Packages
 installed at build time keep their own licenses.
+
+## Trademarks
+
+Red Hat, Red Hat OpenShift and OpenShift are trademarks or registered trademarks of Red Hat, LLC or its
+subsidiaries in the United States and other countries. vLLM and Ray are trademarks of LF Projects, LLC. PyTorch is
+a trademark of The Linux Foundation. NVIDIA and CUDA are trademarks or registered trademarks of NVIDIA
+Corporation. Other names are trademarks of their respective owners. They are used here only to identify the
+software this pattern deploys, and their use does not imply endorsement.
 
 ## What this pattern was verified against
 
