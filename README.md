@@ -332,7 +332,8 @@ installed at build time keep their own licenses.
 - **Checked:**
   - The charts were rendered with Helm and schema-checked against the clustergroup chart's values schema.
   - The secrets template was checked against the Validated Patterns secrets schema.
-- **Not yet checked: the server image build and a local serve on a GPU.**
+  - The aarch64 server image was built and served locally with docker on one NVIDIA GPU, running as an arbitrary
+    UID in group 0: the model loaded, a chat request was answered, and SIGTERM stopped the server cleanly.
 - **Not yet checked: an install on a live OpenShift cluster.** That means none of these has run: the GitOps install,
   the in-cluster image builds, the GPU Operator setup, the MachineSet job, and the notebook pod behind oauth-proxy.
 - **Not built:** the x86_64 image, which the default AWS GPU node uses. Its lock file exists.
