@@ -16,7 +16,7 @@ docs_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server#readme
 ci_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server/actions
 # can be sandbox, tested or maintained
 tier: sandbox
-owners: eugo
+owners: BwL1289
 requirements:
   hub: # Main cluster
     compute:

@@ -486,8 +486,11 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     `RespectIgnoreDifferences=true` an ignored field keeps its live value even when Git changes it. The rule names
     only that container, so an `oauthProxy.image` change does sync; an `image.override` change does not.
   - Fix, in this order:
-    1. Wait until the change has synced (the sync removes the image-trigger annotation; before that, the trigger
-       would put the old image back).
+    1. Wait until Argo CD has applied the commit: this prints nothing once the image-trigger annotation is gone
+       (before that, the trigger would put the old image back):
+       `oc get deployment/ray-serve-llm -n rhvp-inference -o jsonpath='{.metadata.annotations.image\.openshift\.io/triggers}'`
+       (for the notebook, `deployment/rhvp-notebook -n rhvp-notebook`). The app still shows OutOfSync at this
+       point, because of the objects step 3 removes.
     2. Set the image on the Deployment yourself. Argo CD ignores that one field, so the value stays:
        `oc set image deployment/ray-serve-llm server=<your image> -n rhvp-inference`
        (for the notebook: `oc set image deployment/rhvp-notebook notebook=<your image> -n rhvp-notebook`).
