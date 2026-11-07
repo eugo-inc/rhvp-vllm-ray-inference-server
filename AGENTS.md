@@ -299,7 +299,7 @@ credentials:
    `charts/all/notebook/values.yaml`, then push.
 
 Or keep the fork public, or set `image.override` to a prebuilt image. On a running install, a new `image.override`
-needs one extra step; see Troubleshooting.
+needs extra steps; see Troubleshooting.
 
 ### Updating a running install
 
@@ -402,7 +402,7 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
    pip first, and an older pip can reject a dependency that is asked for with an extra.
 6. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook, and update the
    `version`, `description` and `io.k8s.description` image labels in `inference-server/Containerfile`. A test checks
-   all of them against the lock files. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
+   their Ray, vLLM, PyTorch and CUDA versions against the lock files. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
 7. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
 
 ## Rules
@@ -476,7 +476,8 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
   - Why: the internal image registry must be `Managed`. On bare metal and vSphere it starts as `Removed`, because
     there is no shared object storage. The `Build` capability must also be enabled.
   - Fix: give the registry storage and set it to `Managed`. Or set `image.override` in both charts to prebuilt
-    images that you host; the charts then render no BuildConfig and no image trigger. Without the registry, also
+    images that you host; the charts then render no BuildConfig and no image trigger (on a running install, see the
+    `image.override` entry below for the extra steps). Without the registry, also
     set `oauthProxy.image` in `charts/all/notebook/values.yaml` to a Red Hat image such as
     `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19`, because the default proxy image is pulled
     through the internal registry.
@@ -484,12 +485,24 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
   - Why: the Argo CD apps ignore the image of the image-triggered container (`server`, `notebook`), and with
     `RespectIgnoreDifferences=true` an ignored field keeps its live value even when Git changes it. The rule names
     only that container, so an `oauthProxy.image` change does sync; an `image.override` change does not.
-  - Fix: after the change has synced, set the image on the Deployment yourself. Argo CD ignores that one field, so
-    the value stays:
-    `oc set image deployment/ray-serve-llm server=<your image> -n rhvp-inference`
-    (for the notebook: `oc set image deployment/rhvp-notebook notebook=<your image> -n rhvp-notebook`).
+  - Fix, in this order:
+    1. Wait until the change has synced (the sync removes the image-trigger annotation; before that, the trigger
+       would put the old image back).
+    2. Set the image on the Deployment yourself. Argo CD ignores that one field, so the value stays:
+       `oc set image deployment/ray-serve-llm server=<your image> -n rhvp-inference`
+       (for the notebook: `oc set image deployment/rhvp-notebook notebook=<your image> -n rhvp-notebook`).
+       Wait until the new pod runs that image.
+    3. Remove what the chart no longer renders. The apps sync automatically without pruning, so Argo CD leaves the
+       BuildConfig, ImageStream and the rebuild Role and RoleBinding in place; the app stays OutOfSync and
+       `rebuild-on-commit` keeps starting builds of that BuildConfig. Either sync once with Prune checked in the
+       Argo CD UI, or delete them:
+       `oc delete buildconfig/ray-serve-llm imagestream/ray-serve-llm role/rhvp-rebuild-on-commit rolebinding/rhvp-rebuild-on-commit -n rhvp-inference`
+       (for the notebook, `buildconfig/rhvp-notebook imagestream/rhvp-notebook` and the same Role and RoleBinding,
+       in `rhvp-notebook`). Do this only after step 2: the old pod's image is pulled through that ImageStream.
   - Do not delete the Deployment instead: these apps sync automatically without self-heal, so Argo CD recreates a
     deleted Deployment only on the next commit or a manual sync, and the server stays down until then.
+  - A fresh install with `image.override` set from the start needs none of this: no BuildConfig, ImageStream,
+    trigger or rebuild Role is ever created.
 - **The image did not change after a push, or the first build failed.**
   - Why: ConfigChange triggers fire only when the BuildConfig is created. `rebuild-on-commit` starts a new build
     only after a push changes the build's folder, and it never retries a failed build on its own.

@@ -7,7 +7,8 @@ the pattern's target revision. Uses only the Python standard library, `oc` and `
 
 For each BuildConfig it is given, it decides one of these, in order:
 
-1. The BuildConfig does not exist (image.override is set, or Argo CD has not created it
+1. The BuildConfig does not exist (image.override was set from the start, a leftover
+   BuildConfig was pruned after image.override was set, or Argo CD has not created it
    yet): do nothing.
 2. It has no builds yet: do nothing. Its ConfigChange trigger starts the first build.
 3. A build is New, Pending or Running: do nothing.

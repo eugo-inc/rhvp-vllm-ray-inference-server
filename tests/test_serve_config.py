@@ -491,6 +491,10 @@ def test_image_labels_name_the_locked_versions():
     stack = f"Ray {pins['ray']}, vLLM {pins['vllm']} and PyTorch {pins['torch']}"
     assert labels["description"].startswith(stack), labels["description"]
     assert labels["io.k8s.description"].startswith(stack), labels["io.k8s.description"]
+    cuda = pins["cuda-toolkit"].rsplit(".", 1)[0]  # 13.0.3.0 -> 13.0.3
+    assert re.search(rf"^FROM \S*cuda:{re.escape(cuda)}-devel-ubi9@", CONTAINERFILE, re.M)
+    for name in ("description", "io.k8s.description"):
+        assert f"CUDA {cuda} UBI 9 image" in labels[name], name
     # The base image's own build labels are replaced, not inherited.
     for name in ("build-date", "vcs-ref", "release", "org.opencontainers.image.revision", "cpe"):
         assert labels[name] == "", name
