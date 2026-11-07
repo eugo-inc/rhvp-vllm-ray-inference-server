@@ -338,4 +338,5 @@ installed at build time keep their own licenses.
     UID in group 0: the model loaded, a chat request was answered, and SIGTERM stopped the server cleanly.
 - **Not yet checked: an install on a live OpenShift cluster.** That means none of these has run: the GitOps install,
   the in-cluster image builds, the GPU Operator setup, the MachineSet job, and the notebook pod behind oauth-proxy.
-- **Not built:** the x86_64 image, which the default AWS GPU node uses. Its lock file exists.
+- **Not built:** the x86_64 image, which the default AWS GPU node uses. Its lock resolves: a pip dry run for
+  x86_64 found every pinned wheel with a matching hash.
