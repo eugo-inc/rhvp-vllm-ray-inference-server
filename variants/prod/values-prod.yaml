@@ -67,13 +67,18 @@ clusterGroup:
       name: ray-serve-llm
       namespace: rhvp-inference
       path: charts/all/ray-serve-llm
-      # The image trigger rewrites the container image to the digest of each
-      # finished build, so Argo CD must not compare or reset it.
+      # The image trigger rewrites the server container's image to the digest
+      # of each finished build, so Argo CD must not compare or reset it. The
+      # rule names that one container only. With RespectIgnoreDifferences an
+      # ignored field keeps its live value even when Git changes it, so after
+      # setting or changing image.override on a running install, delete the
+      # Deployment once (AGENTS.md, Troubleshooting).
       ignoreDifferences:
         - group: apps
           kind: Deployment
+          name: ray-serve-llm
           jqPathExpressions:
-            - '.spec.template.spec.containers[].image'
+            - '.spec.template.spec.containers[] | select(.name == "server") | .image'
         - group: build.openshift.io
           kind: BuildConfig
           jqPathExpressions:
@@ -90,11 +95,14 @@ clusterGroup:
       name: notebook
       namespace: rhvp-notebook
       path: charts/all/notebook
+      # Only the notebook container is image-triggered; the oauth-proxy
+      # container's image stays compared, so an oauthProxy.image change syncs.
       ignoreDifferences:
         - group: apps
           kind: Deployment
+          name: rhvp-notebook
           jqPathExpressions:
-            - '.spec.template.spec.containers[].image'
+            - '.spec.template.spec.containers[] | select(.name == "notebook") | .image'
         - group: build.openshift.io
           kind: BuildConfig
           jqPathExpressions:

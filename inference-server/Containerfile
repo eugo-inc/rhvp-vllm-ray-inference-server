@@ -6,7 +6,7 @@
 # repository root:
 #
 #   podman build -t rhvp-server:dev inference-server
-#   docker build -t rhvp-server:dev inference-server
+#   docker build -t rhvp-server:dev -f inference-server/Containerfile inference-server
 #
 # The base is the CUDA *devel* flavour on purpose: it ships nvcc, which
 # FlashInfer (used by vLLM's sampler) needs to compile its GPU kernels the first
@@ -16,6 +16,10 @@
 # index (amd64 and arm64); docker.io/nvidia/cuda:13.0.3-devel-ubi9 has the same.
 FROM nvcr.io/nvidia/cuda:13.0.3-devel-ubi9@sha256:c99ab53f9d1e0ba4b5817014ac398aafec516042b73e09d74fac4d2598f8f5fb
 
+# The base image's own labels describe NVIDIA's and Red Hat's base build (its
+# component, version, date and commit). The ones below replace them so the
+# image does not claim to be that build; the base's license terms label stays,
+# since its layers keep their terms.
 LABEL name="rhvp-vllm-ray-inference-server" \
       summary="OpenAI-compatible LLM server: Ray Serve LLM with the vLLM engine" \
       description="Ray 2.60.0, vLLM 0.29.0 and PyTorch 2.13.0 from PyPI on NVIDIA's CUDA 13.0.3 UBI 9 image. Community sandbox pattern by Eugo; not produced or validated by Red Hat." \
@@ -24,7 +28,17 @@ LABEL name="rhvp-vllm-ray-inference-server" \
       io.openshift.expose-services="8000:http" \
       io.openshift.tags="llm,vllm,ray,inference" \
       vendor="Eugo" \
-      maintainer="Eugo"
+      maintainer="Eugo" \
+      url="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
+      org.opencontainers.image.source="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
+      com.redhat.component="rhvp-vllm-ray-inference-server" \
+      version="ray2.60.0-vllm0.29.0" \
+      release="" \
+      build-date="" \
+      org.opencontainers.image.created="" \
+      vcs-ref="" \
+      org.opencontainers.image.revision="" \
+      cpe=""
 
 USER 0
 

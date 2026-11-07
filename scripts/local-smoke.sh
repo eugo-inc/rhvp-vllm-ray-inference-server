@@ -124,7 +124,8 @@ if [[ "${SKIP_BUILD:-0}" == 1 ]]; then
 else
     say "building $IMAGE (log: $LOG_DIR/build.log)"
     started=$SECONDS
-    docker build -t "$IMAGE" "$REPO/inference-server" > "$LOG_DIR/build.log" 2>&1 \
+    docker build -t "$IMAGE" -f "$REPO/inference-server/Containerfile" "$REPO/inference-server" \
+        > "$LOG_DIR/build.log" 2>&1 \
         || die "docker build failed; see $LOG_DIR/build.log"
     say "built $IMAGE in $(( SECONDS - started )) s"
 fi

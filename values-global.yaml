@@ -14,6 +14,8 @@ global:
   #            AWS bills that instance by the hour for as long as it runs.
   #   none   - the install adds no machine; bring your own GPU worker node.
   # On platforms other than AWS no machine is added, whatever this says.
+  # AWS clusters installed into existing subnets: use "none" and add the GPU
+  # MachineSet yourself; the job cannot copy a subnet given by ID and fails.
   # Change it in your fork BEFORE you install. Switching to "none" later stops
   # the job but does not delete a machine that was already created.
   gpuMachineSet: create

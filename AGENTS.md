@@ -155,12 +155,19 @@ it to sync.
   ```
   On bare metal and vSphere the registry starts as `Removed`; see [Troubleshooting](#troubleshooting).
 - A GPU. On AWS with `global.gpuMachineSet: create`, the pattern creates the node. Anywhere else, add a node with
-  an NVIDIA GPU that the NVIDIA GPU Operator supports. The server requests `nvidia.com/gpu: 1` and tolerates the
+  an NVIDIA GPU that the NVIDIA GPU Operator supports. One AWS exception: on a cluster installed into existing
+  subnets (`platform.aws.subnets` or `vpc.subnets` in its install-config), the worker MachineSets name their subnet
+  by ID, and the `create_machineset` job's template reads subnet filters, so it fails on every run. Set
+  `gpuMachineSet: none` there and add the GPU MachineSet yourself. The server requests `nvidia.com/gpu: 1` and tolerates the
   `nvidia.com/gpu` taint.
 - The CPU type of that GPU node. Both Deployments and both BuildConfigs select nodes with
   `kubernetes.io/arch: amd64`, from the `arch` value in `charts/all/ray-serve-llm/values.yaml` and
-  `charts/all/notebook/values.yaml`. If your GPU node is arm64, set `arch: arm64` in both files in your fork before
-  you install; otherwise the server pod and the builds never get a node.
+  `charts/all/notebook/values.yaml`. If your GPU node is arm64, set `arch: arm64` in
+  `charts/all/ray-serve-llm/values.yaml` in your fork before you install; otherwise the server pod and its build
+  never get a node. Leave the notebook chart on the CPU type of your ordinary workers: it needs no GPU and does not
+  tolerate the GPU taint. The server's build also needs a node of that CPU type without the `nvidia.com/gpu`
+  taint: a BuildConfig cannot carry tolerations (only a cluster-wide build override can add them), so a lone,
+  tainted arm64 GPU node cannot run it.
 - On your workstation:
   - podman 4.3 or newer. `pattern.sh` runs everything in a podman container; docker alone is not enough.
   - git.
@@ -291,7 +298,8 @@ credentials:
 2. Set `build.sourceSecret: rhvp-git` in `charts/all/ray-serve-llm/values.yaml` and
    `charts/all/notebook/values.yaml`, then push.
 
-Or keep the fork public, or set `image.override` to a prebuilt image.
+Or keep the fork public, or set `image.override` to a prebuilt image. On a running install, a new `image.override`
+needs one extra step; see Troubleshooting.
 
 ### Updating a running install
 
@@ -305,7 +313,10 @@ Or keep the fork public, or set `image.override` to a prebuilt image.
     minutes, for both `ray-serve-llm` and `rhvp-notebook`. It starts a build only when that build's folder
     (`inference-server/` or `notebooks/`) changed between the last successful build's commit and the head of the
     target branch. A failed build is not retried automatically. The full rule list is at the top of
-    `ansible/rebuild_on_commit.py`.
+    `ansible/rebuild_on_commit.py`. An error on one build (for example a Forbidden `start-build` when
+    `rebuildOnCommit.enabled` is false in that chart) is printed as an `ERROR` line in the job's log, and the job
+    still checks the other build and exits 0. The imperative CronJob runs its jobs one after another and stops at
+    the first that fails, so `rebuild-on-commit` runs first and never fails the pod.
   - **By hand:**
     ```sh
     oc start-build ray-serve-llm -n rhvp-inference --follow
@@ -467,6 +478,14 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     set `oauthProxy.image` in `charts/all/notebook/values.yaml` to a Red Hat image such as
     `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19`, because the default proxy image is pulled
     through the internal registry.
+- **You set or changed `image.override` (or `oauthProxy.image`) on a running install, and the pod still runs the
+  old image.**
+  - Why: the Argo CD apps ignore the image of the image-triggered container (`server`, `notebook`), and with
+    `RespectIgnoreDifferences=true` an ignored field keeps its live value even when Git changes it. The rule names
+    only that container, so an `oauthProxy.image` change does sync; an `image.override` change does not.
+  - Fix: once, after the change has synced, delete the Deployment; Argo CD recreates it from Git with the new image.
+    The model PVC is a separate object and is kept:
+    `oc delete deployment ray-serve-llm -n rhvp-inference` (or `oc delete deployment rhvp-notebook -n rhvp-notebook`).
 - **The image did not change after a push, or the first build failed.**
   - Why: ConfigChange triggers fire only when the BuildConfig is created. `rebuild-on-commit` starts a new build
     only after a push changes the build's folder, and it never retries a failed build on its own.
@@ -475,9 +494,9 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     `oc start-build rhvp-notebook -n rhvp-notebook --follow`).
 - **The `ray-serve-llm` Argo CD app shows OutOfSync.**
   - Why: the image trigger rewrites the Deployment's container image to a digest. The app entry in
-    `variants/prod/values-prod.yaml` handles this with `ignoreDifferences` on
-    `.spec.template.spec.containers[].image` (Deployment) and `.spec.paused` (BuildConfig), plus
-    `RespectIgnoreDifferences=true`.
+    `variants/prod/values-prod.yaml` handles this with `ignoreDifferences` on the triggered container's image
+    (`.spec.template.spec.containers[] | select(.name == "server") | .image`, and `"notebook"` for the notebook app)
+    and `.spec.paused` (BuildConfig), plus `RespectIgnoreDifferences=true`.
   - Fix: if you add another image-triggered resource, add the same rules.
 - **`make install` fails after about an hour, with apps not Healthy.**
   - Why: the installer waits at most 60 minutes, and a first install can take longer. Everything before the wait

@@ -160,6 +160,7 @@ def test_bad_yaml_and_non_mapping(tmp_path):
         ({"min_replicas": 2, "max_replicas": 1}, "must not exceed"),
         ({"max_replicas": 0}, "max_replicas"),
         ({"min_replicas": -1}, "min_replicas"),
+        ({"min_replicas": 0}, "min_replicas must be an integer >= 1"),
         ({"min_replicas": True}, "min_replicas"),
         ({"http_port": 70000}, "http_port"),
         ({"http_port": "8000"}, "http_port"),

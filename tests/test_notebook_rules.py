@@ -292,8 +292,10 @@ def test_baseline_matches_the_server_pins():
     pins = requirements.read_text(encoding="utf-8")
     assert re.search(rf"^ray\[llm\]=={re.escape(version['Ray'])}\s*$", pins, re.MULTILINE), "Ray pin"
     assert re.search(rf"^cuda-toolkit\[[^\]]*\]=={re.escape(version['CUDA'])}\s*$", pins, re.MULTILINE), "CUDA pin"
-    locks = sorted(SERVER.glob("requirements-*.lock"))
+    # The two CPU-architecture locks only; requirements-pip.lock pins pip alone.
+    locks = [SERVER / f"requirements-{arch}.lock" for arch in ("x86_64", "aarch64")]
     for lock in locks:
+        assert lock.is_file(), lock.name
         text = lock.read_text(encoding="utf-8")
         assert re.search(rf"^vllm=={re.escape(version['vLLM'])}\b", text, re.MULTILINE), lock.name
         assert re.search(rf"^torch=={re.escape(version['PyTorch'])}\b", text, re.MULTILINE), lock.name

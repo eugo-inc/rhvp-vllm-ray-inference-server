@@ -2,9 +2,9 @@
 """The prompt set: prompts.jsonl, written from a seed by make_notebook.py and committed.
 
 Each prompt is a run of plain words picked from VOCABULARY with a seeded generator, every prompt the same number of
-words (so about the same number of tokens), every prompt different from its first word on. measure.py picks seeded
-subsets of them, and puts a fresh tag in front of each prompt it sends: no two requests share a prefix, in one run or
-across runs. Stdlib only.
+words (so about the same number of tokens), no two prompts the same. measure.py picks seeded subsets of them, and puts
+a fresh random tag in front of each prompt it sends: no two requests share a prefix, in one run or across runs.
+Stdlib only.
 """
 
 import json

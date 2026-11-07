@@ -136,25 +136,38 @@ def main() -> int:
     for target in json.loads(args.targets):
         ns, bc, context_dir = target["namespace"], target["buildconfig"], target["context_dir"]
         label = f"{ns}/{bc}"
-        found = run([args.oc, "get", "buildconfig", bc, "-n", ns, "--ignore-not-found", "-o", "name"])
-        if not found.stdout.strip():
-            print(f"SKIP {label}: no such BuildConfig")
-            continue
-        listed = run([args.oc, "get", "builds", "-n", ns, "-l", f"openshift.io/build-config.name={bc}",
-                      "-o", "json"])
-        builds = json.loads(listed.stdout or "{}").get("items") or []
-        action, reason = decide(builds, head, head_time, make_folder_changed(args.repo, context_dir))
-        if action == "start":
-            started = run([args.oc, "start-build", bc, "-n", ns, f"--commit={head}", "-o", "name"])
-            print(f"STARTED {label}: {started.stdout.strip()} - {reason}")
-        else:
-            print(f"SKIP {label}: {reason}")
+        try:
+            check_target(args.oc, args.repo, ns, bc, context_dir, head, head_time, label)
+        except subprocess.CalledProcessError as err:
+            # One target's error (a Forbidden start-build when rebuildOnCommit is off in that chart, a transient
+            # API error) must not stop the other targets.
+            print(f"ERROR {label}: command failed ({err.returncode}): {' '.join(err.cmd)}: "
+                  f"{(err.stderr or '').strip()}")
+    # Always 0: the imperative CronJob runs its jobs one after another and stops at the first failing one, so a
+    # failure here would also stop the jobs after it. Errors are in this job's log as ERROR lines.
     return 0
+
+
+def check_target(oc: str, repo: str, ns: str, bc: str, context_dir: str, head: str,
+                 head_time: Optional[datetime], label: str) -> None:
+    found = run([oc, "get", "buildconfig", bc, "-n", ns, "--ignore-not-found", "-o", "name"])
+    if not found.stdout.strip():
+        print(f"SKIP {label}: no such BuildConfig")
+        return
+    listed = run([oc, "get", "builds", "-n", ns, "-l", f"openshift.io/build-config.name={bc}", "-o", "json"])
+    builds = json.loads(listed.stdout or "{}").get("items") or []
+    action, reason = decide(builds, head, head_time, make_folder_changed(repo, context_dir))
+    if action == "start":
+        started = run([oc, "start-build", bc, "-n", ns, f"--commit={head}", "-o", "name"])
+        print(f"STARTED {label}: {started.stdout.strip()} - {reason}")
+    else:
+        print(f"SKIP {label}: {reason}")
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except subprocess.CalledProcessError as err:
-        sys.stderr.write(f"command failed ({err.returncode}): {' '.join(err.cmd)}\n{err.stderr}\n")
-        sys.exit(1)
+        # Only the git commands before the first target get here. Exit 0 for the same reason as in main().
+        sys.stderr.write(f"ERROR command failed ({err.returncode}): {' '.join(err.cmd)}\n{err.stderr}\n")
+        sys.exit(0)

@@ -4,12 +4,17 @@
 How a request is timed (sections 2 to 4):
 
 - Each request is a streamed `POST /v1/completions` with `temperature: 0`, `max_tokens: N`, `ignore_eos: true` and
-  `stream_options: {include_usage: true}`, on a prompt of its own from prompts.jsonl with a fresh tag in front.
+  `stream_options: {include_usage: true, continuous_usage_stats: true}`, on a prompt of its own from prompts.jsonl
+  with a fresh tag in front. With continuous usage stats, every event carries the running `completion_tokens`.
 - The clock starts just before the request is sent. Time to first token ends at the first event whose text is not
   empty (a first event with no text, such as a chat stream's role-only event, does not count).
 - Tokens are counted from the server's `usage.completion_tokens`, never from the number of events: Ray Serve LLM
   sends tokens in groups, several events in one network write.
-- Decode speed is (N - 1) / (time of the last text event - time of the first text event).
+- Decode speed is (N - k) / (time of the last text event - time of the first text event), where k is the number of
+  tokens in the first network write that carried text. Ray Serve LLM holds the first write back until its first
+  50 ms tick and sends the last one as soon as the stream ends, so the k tokens of the first write were generated
+  before the timed window starts. k comes from the running `completion_tokens` of the events in that write; when
+  the server sends no running counts, k is the number of text events in that write.
 - A request whose `completion_tokens` is not exactly N is dropped and counted as dropped; a request that fails (an
   HTTP error, an error event in the stream, a stream that ends before `[DONE]`) is counted as failed.
 
@@ -102,6 +107,9 @@ class StreamResult:
     completion_tokens: int | None = None
     prompt_tokens: int | None = None
     text_events: int = 0
+    #: In the first network write that carried text: its text events, and the highest running completion_tokens.
+    first_write_text_events: int = 0
+    first_write_tokens: int | None = None
     done: bool = False
     error: str | None = None
 
@@ -114,14 +122,20 @@ class StreamResult:
         return None if self.first_token_at is None else self.first_token_at - self.sent_at
 
     @property
+    def first_write_token_count(self) -> int:
+        """Tokens in the first network write that carried text: the running count if the server sent one."""
+        if self.first_write_tokens is not None:
+            return self.first_write_tokens
+        return max(self.first_write_text_events, 1)
+
+    @property
     def decode_tokens_per_s(self) -> float | None:
-        """(N - 1) tokens over the time from the first text to the last; None when that time is zero."""
-        if self.completion_tokens is None or self.completion_tokens < 2:
+        """The tokens after the first write over the time from the first text to the last; None when either is 0."""
+        if self.completion_tokens is None or self.first_token_at is None or self.last_token_at is None:
             return None
-        if self.first_token_at is None or self.last_token_at is None:
-            return None
+        later = self.completion_tokens - self.first_write_token_count
         span = self.last_token_at - self.first_token_at
-        return (self.completion_tokens - 1) / span if span > 0 else None
+        return later / span if later > 0 and span > 0 else None
 
 
 def _choice_text(choice: dict) -> str:
@@ -175,11 +189,18 @@ def read_events(timed: Iterable[tuple[float, str]], sent_at: float, finished_at:
                 out.text_events += 1
                 if out.first_token_at is None:
                     out.first_token_at = at
+                if at == out.first_token_at:
+                    out.first_write_text_events += 1
                 out.last_token_at = at
         usage = event.get("usage")
         if isinstance(usage, dict):
             if isinstance(usage.get("completion_tokens"), int):
                 out.completion_tokens = usage["completion_tokens"]
+                # Events of one network write share its time; only events carrying text count toward the first
+                # write (a final usage-only event in the same write is the total, not the first write's share).
+                if at == out.first_token_at and any(isinstance(c, dict) and _choice_text(c)
+                                                    for c in event.get("choices") or []):
+                    out.first_write_tokens = max(out.first_write_tokens or 0, usage["completion_tokens"])
             if isinstance(usage.get("prompt_tokens"), int):
                 out.prompt_tokens = usage["prompt_tokens"]
     out.finished_at = finished_at if finished_at is not None else last_time
@@ -265,7 +286,7 @@ def request_body(model: str, prompt: str, max_tokens: int, api: str = "completio
     else:
         body["prompt"] = prompt
     if stream:
-        body["stream_options"] = {"include_usage": True}
+        body["stream_options"] = {"include_usage": True, "continuous_usage_stats": True}
     return body
 
 

@@ -6,6 +6,29 @@
 # 127.0.0.1:8888, behind the pod's OpenShift oauth-proxy sidecar.
 FROM registry.access.redhat.com/ubi9/python-312@sha256:19e1e927138b40454858f297884c2c4e2f13f5ba95b3f55faea174d3cbb57067
 
+# The base image's own labels describe Red Hat's Python 3.12 build (its component, version, date, commit and s2i
+# usage). These replace them so the image does not claim to be that build; the base's license terms label stays.
+LABEL name="rhvp-notebook" \
+      summary="JupyterLab with the rhvp-vllm-ray-inference-server sample notebook" \
+      description="JupyterLab and the sample notebook that times the pattern's Ray Serve LLM server. Community sandbox pattern by Eugo; not produced or validated by Red Hat." \
+      io.k8s.display-name="rhvp-vllm-ray-inference-server notebook" \
+      io.k8s.description="JupyterLab and the sample notebook that times the pattern's Ray Serve LLM server." \
+      io.openshift.tags="jupyter,notebook,llm" \
+      io.openshift.expose-services="" \
+      usage="" \
+      vendor="Eugo" \
+      maintainer="Eugo" \
+      url="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
+      org.opencontainers.image.source="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
+      com.redhat.component="rhvp-notebook" \
+      version="1" \
+      release="" \
+      build-date="" \
+      org.opencontainers.image.created="" \
+      vcs-ref="" \
+      org.opencontainers.image.revision="" \
+      cpe=""
+
 # Every package pinned with its hashes (requirements.lock, made from requirements.in); wheels only, so a missing
 # wheel fails the build instead of compiling from source. Installed as the image's own user 1001 into the base
 # image's virtualenv at /opt/app-root.

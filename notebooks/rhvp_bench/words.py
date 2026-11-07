@@ -56,11 +56,11 @@ SECTION_TEXT = {
         "conditions. The pod turns Ready once the server has loaded its model and is serving. One start of the pod "
         "is one measurement."),
     2: ("The time from just before a request is sent to the first generated text coming back, for requests sent one "
-        "at a time. Every prompt differs from its first word on, and vLLM's prefix cache (on by default) has nothing "
+        "at a time. Every request starts with a fresh random tag, and vLLM's prefix cache (on by default) has nothing "
         "to reuse."),
-    3: ("How fast one stream generates text once it has started: the tokens after the first, divided by the time "
-        "from the first generated text to the last. Requests are sent one at a time. This section has no WITH EUGO "
-        "side."),
+    3: ("How fast one stream generates text once it has started: the tokens after the first group of streamed "
+        "tokens, divided by the time from the first generated text to the last. Requests are sent one at a time. This "
+        "section has no WITH EUGO side."),
     4: ("All generated tokens per second, with 1, 8 and 32 streams running at the same time, every stream generating "
         "the same number of tokens. This section has no WITH EUGO side."),
 }
@@ -91,7 +91,9 @@ STARTUP_STEPS = ("Placed on a node to container start: {to_start} s, including a
                  "Ready: {to_ready} s.")
 STARTUP_EMPTY = "Empty when the pod started: {names}."
 STARTUP_KEPT = "Kept between starts: {names}."
-STARTUP_SECONDS = "Kubernetes records these times in whole seconds."
+STARTUP_SECONDS = ("Kubernetes records these times in whole seconds. The pod's probes look for the server's ready file "
+                   "every 10 seconds, so Ready can be recorded up to about 20 seconds after the server is serving. If "
+                   "the pod lost Ready and got it back since it started, the time runs to its latest Ready.")
 #: What each of the server container's storage settings holds, by environment variable.
 CACHE_NAMES = {
     "TRITON_CACHE_DIR": "the Triton kernel cache",
@@ -115,7 +117,8 @@ TTFT_SPREAD = "p90 {p90:.3f} s · {kept} of {sent} requests counted."
 TTFT_TIMED = "Timed from just before each request is sent to the first generated text that comes back."
 DECODE_LABEL = "median decode speed, one stream at a time"
 DECODE_SPREAD = "Slowest {low:.1f} · fastest {high:.1f} tokens/s · {kept} of {sent} requests counted."
-DECODE_TIMED = "The tokens after the first, divided by the time from the first generated text to the last."
+DECODE_TIMED = ("The tokens after the first group of streamed tokens, divided by the time from the first generated "
+                "text to the last.")
 THROUGHPUT_LABEL = {1: "1 stream"}
 THROUGHPUT_LABEL_MANY = "{streams} concurrent streams"
 THROUGHPUT_CARD = ("{kept} of {sent} requests counted · {seconds:.2f} s from the first request sent to the last stream "

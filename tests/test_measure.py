@@ -74,7 +74,32 @@ def test_grouped_events_in_one_write_share_its_time():
     assert result.text_events == 8
     assert result.first_token_at == pytest.approx(0.060)
     assert result.last_token_at == pytest.approx(0.110)
-    assert result.decode_tokens_per_s == pytest.approx((N - 1) / 0.050)
+    # No running counts from the server: the first write's 4 text events count as its 4 tokens, generated before
+    # the timed window starts.
+    assert result.first_write_token_count == 4
+    assert result.decode_tokens_per_s == pytest.approx((N - 4) / 0.050)
+
+
+def test_decode_leaves_out_the_first_writes_tokens_by_running_count():
+    def counted(text: str, so_far: int) -> dict:
+        return {**_text(text), "usage": {"prompt_tokens": 300, "completion_tokens": so_far,
+                                         "total_tokens": 300 + so_far}}
+
+    # The first write holds 3 events carrying 5 tokens in all (one event holds 3 tokens); the running count says so.
+    first = _event(counted(" a", 1)) + _event(counted(" b c d", 4)) + _event(counted(" e", 5))
+    second = "".join(_event(counted(f" w{k}", k)) for k in range(6, N + 1)) + _event(_usage(N)) + _event("[DONE]")
+    result = _read([(0.050, first), (0.250, second)])
+    assert result.first_write_text_events == 3
+    assert result.first_write_tokens == 5
+    assert result.completion_tokens == N
+    assert result.decode_tokens_per_s == pytest.approx((N - 5) / 0.200)
+
+
+def test_a_final_usage_event_in_the_first_write_is_not_the_first_writes_share():
+    # The whole answer in one write: the usage-only total in that write must not be taken as the first write's count.
+    one = _read([(0.05, _event(_text(" a")) + _event(_usage(N)) + _event("[DONE]"))])
+    assert one.first_write_tokens is None and one.first_write_token_count == 1
+    assert one.decode_tokens_per_s is None  # no time span
 
 
 def test_an_event_split_across_writes_with_crlf_and_comments():
@@ -180,7 +205,7 @@ def test_median_and_p90():
 def test_request_body():
     body = measure.request_body("m", "p", N)
     assert body == {"model": "m", "prompt": "p", "max_tokens": N, "temperature": 0, "ignore_eos": True,
-                    "stream": True, "stream_options": {"include_usage": True}}
+                    "stream": True, "stream_options": {"include_usage": True, "continuous_usage_stats": True}}
     chat = measure.request_body("m", "p", N, api="chat")
     assert chat["messages"] == [{"role": "user", "content": "p"}]
 
@@ -215,13 +240,14 @@ async def _one(url: str, recorder=None) -> measure.StreamResult:
 
 def test_stream_one_over_http_times_the_grouped_writes():
     writes = []
-    with replay.FakeServer(_recording(_grouped_stream())) as server:
+    # The two writes are 200 ms apart: on a busy machine a smaller gap can land both in one read.
+    with replay.FakeServer(_recording(_grouped_stream(every=0.2))) as server:
         result = measure.run_async(_one(server.url, lambda at, data: writes.append(data)))
     assert result.ok
     assert result.completion_tokens == N
     assert result.text_events == N
     assert result.ttft_s >= 0.03
-    assert result.last_token_at - result.first_token_at >= 0.015
+    assert result.last_token_at - result.first_token_at >= 0.1
     assert measure.outcome(result, N) == measure.COUNTED
     assert b"[DONE]" in b"".join(writes)
 
@@ -259,19 +285,19 @@ def test_sequential_sends_warmup_then_distinct_tagged_prompts():
     assert all(TAG.match(b["prompt"]) for b in bodies)
     assert len({b["prompt"] for b in bodies}) == 5
     assert all(b["ignore_eos"] is True and b["temperature"] == 0 and b["max_tokens"] == N
-               and b["stream_options"] == {"include_usage": True} for b in bodies)
+               and b["stream_options"] == {"include_usage": True, "continuous_usage_stats": True} for b in bodies)
 
 
 def test_levels_send_each_level_at_once():
     pool = prompts.load()
     texts, warm = measure.choose(pool, 5, 1, seed=measure.SEEDS["throughput"])
-    with replay.FakeServer(_recording(_grouped_stream(first=0.1))) as server:
+    with replay.FakeServer(_recording(_grouped_stream(first=0.3))) as server:
         result = measure.run_async(measure.levels(server.url, "m", {1: texts[:1], 4: texts[1:]}, warm, N))
     assert [level.streams for level in result] == [1, 4]
     four = result[1]
     assert len(four.tally.counted) == 4
-    # four streams at once take about as long as one, not four times as long
-    assert four.wall_s < 0.1 * 4
+    # four streams at once take about as long as one (about 0.32 s), not four times as long (about 1.3 s)
+    assert four.wall_s < 0.3 * 3
     assert four.tokens_per_s() == pytest.approx(4 * N / four.wall_s)
 
 

@@ -262,8 +262,10 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["accelerator_type"] = accel.strip() if isinstance(accel, str) else None
 
     min_r, max_r = cfg.get("min_replicas"), cfg.get("max_replicas")
-    if not _is_int(min_r) or min_r < 0:
-        raise ConfigError(f"min_replicas must be an integer >= 0, got {min_r!r}")
+    # At least 1: with 0 replicas the app is RUNNING before any model is loaded, so the ready file (and the pod's
+    # Ready) would come before the model; the pod holds its GPU either way.
+    if not _is_int(min_r) or min_r < 1:
+        raise ConfigError(f"min_replicas must be an integer >= 1, got {min_r!r}")
     if not _is_int(max_r) or max_r < 1:
         raise ConfigError(f"max_replicas must be an integer >= 1, got {max_r!r}")
     if min_r > max_r:

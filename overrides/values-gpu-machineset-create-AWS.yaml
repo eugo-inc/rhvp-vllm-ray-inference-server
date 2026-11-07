@@ -16,12 +16,22 @@
 # push, wait for the sync, then delete the MachineSet named
 # <infrastructure-name>-nvidia-gpu-<zone> in openshift-machine-api.
 #
+# Clusters installed into existing AWS subnets (install-config platform.aws.subnets
+# or vpc.subnets) are not supported by that job: their MachineSets name the subnet by
+# ID, the job's template reads subnet filters, and the job fails on every run. On such
+# a cluster set global.gpuMachineSet: none and add the GPU MachineSet yourself.
+#
 # clusterGroup.imperative.jobs is a list, and a list in a later values file replaces
 # the earlier one. This file therefore restates every imperative job of the prod
-# variant, the GPU machine first. Keep it in step with variants/prod/values-prod.yaml.
+# variant. The imperative CronJob runs the jobs one after another and stops at the
+# first that fails, so rebuild-on-commit (which never fails the pod) comes first and
+# the GPU machine job second. Keep it in step with variants/prod/values-prod.yaml.
 clusterGroup:
   imperative:
     jobs:
+      - name: rebuild-on-commit
+        playbook: ansible/rebuild-on-commit.yaml
+        timeout: 300
       - name: create-gpu-machineset
         playbook: rhvp.cluster_utils.create_machineset
         verbosity: -vvv
@@ -35,9 +45,6 @@ clusterGroup:
           - 'machineset_taints=[{"effect":"NoSchedule","key":"nvidia.com/gpu","value":"true"}]'
           - 'machineset_node_labels={"node-role.kubernetes.io/nvidia-gpu":""}'
           - machineset_api_version=machine.openshift.io/v1beta1
-      - name: rebuild-on-commit
-        playbook: ansible/rebuild-on-commit.yaml
-        timeout: 300
     # Replaces the imperative ServiceAccount's default read-only ClusterRole; the
     # last rule keeps read access to everything.
     clusterRoleYaml:

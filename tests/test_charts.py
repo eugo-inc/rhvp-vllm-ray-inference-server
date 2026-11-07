@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -410,10 +411,14 @@ def test_applications(cg):
 
 def test_image_triggered_apps_ignore_image_drift(cg):
     apps = {d["metadata"]["name"]: d for d in cg["default"] if d["kind"] == "Application"}
-    for name in ("ray-serve-llm", "notebook"):
+    triggered = {"ray-serve-llm": ("ray-serve-llm", "server"), "notebook": ("rhvp-notebook", "notebook")}
+    for name, (deployment, container) in triggered.items():
         spec = apps[name]["spec"]
         ignore = {(i.get("group", ""), i["kind"]): i for i in spec["ignoreDifferences"]}
-        assert ignore[("apps", "Deployment")]["jqPathExpressions"] == [".spec.template.spec.containers[].image"]
+        # Only the image-triggered container: the oauth-proxy sidecar's image must stay compared.
+        assert ignore[("apps", "Deployment")]["name"] == deployment
+        assert ignore[("apps", "Deployment")]["jqPathExpressions"] == [
+            f'.spec.template.spec.containers[] | select(.name == "{container}") | .image']
         assert ignore[("build.openshift.io", "BuildConfig")]["jqPathExpressions"] == [".spec.paused"]
         assert spec["syncPolicy"] == {"automated": {}, "retry": {"limit": 20},
                                       "syncOptions": ["RespectIgnoreDifferences=true"]}
@@ -434,7 +439,8 @@ def test_shared_value_files_switch(cg, render):
 
 def test_imperative_jobs(cg):
     # The override restates rebuild-on-commit because a later list replaces the earlier one.
-    assert imperative_jobs(cg["default"]) == ["create-gpu-machineset", "rebuild-on-commit"]
+    # rebuild-on-commit first: the CronJob stops at the first failing job, and rebuild-on-commit never fails.
+    assert imperative_jobs(cg["default"]) == ["rebuild-on-commit", "create-gpu-machineset"]
     assert imperative_jobs(cg["none"]) == ["rebuild-on-commit"]
     assert imperative_jobs(cg["gcp"]) == ["rebuild-on-commit"]
     cron = one(cg["default"], "CronJob", "imperative-cronjob")
@@ -540,6 +546,39 @@ def git(*args, cwd):
 def rev(cwd) -> str:
     return subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True,
                           text=True).stdout.strip()
+
+
+def test_one_target_failing_does_not_stop_the_others_or_fail_the_job(tmp_path):
+    # The server's start-build is Forbidden (rebuildOnCommit off in that chart); the notebook must still be checked
+    # and started, and the script must exit 0 so the imperative CronJob runs its next job.
+    repo = tmp_path / "repo"
+    for rel in ("inference-server/Containerfile", "notebooks/Containerfile"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("v1\n")
+    git("init", "-q", "-b", "main", cwd=repo)
+    git("add", ".", cwd=repo)
+    git("commit", "-q", "-m", "first", cwd=repo)
+    head = rev(repo)
+    state = tmp_path / "state"
+    state.mkdir()
+    for ns, bc in (("rhvp-inference", "ray-serve-llm"), ("rhvp-notebook", "rhvp-notebook")):
+        (state / f"{ns}.{bc}.bc").write_text("")
+        (state / f"{ns}.{bc}.builds.json").write_text(json.dumps({"items": [build(f"{bc}-1", "Complete", "0" * 40)]}))
+    oc = tmp_path / "oc"
+    oc.write_text(FAKE_OC.replace('  "start-build "*)', '  "start-build ray-serve-llm")\n'
+                                  '    echo "Error from server (Forbidden): cannot create" >&2; exit 1 ;;\n'
+                                  '  "start-build "*)'))
+    oc.chmod(0o755)
+    targets = [{"namespace": "rhvp-inference", "buildconfig": "ray-serve-llm", "context_dir": "inference-server"},
+               {"namespace": "rhvp-notebook", "buildconfig": "rhvp-notebook", "context_dir": "notebooks"}]
+    proc = subprocess.run([sys.executable, str(REPO / "ansible/rebuild_on_commit.py"), "--repo", str(repo),
+                           "--targets", json.dumps(targets), "--oc", str(oc)],
+                          env={**os.environ, "FAKE_OC_STATE": str(state)}, capture_output=True, text=True,
+                          timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "ERROR rhvp-inference/ray-serve-llm" in proc.stdout and "Forbidden" in proc.stdout
+    assert "STARTED rhvp-notebook/rhvp-notebook" in proc.stdout
+    assert (state / "started.log").read_text().strip() == f"start-build rhvp-notebook -n rhvp-notebook --commit={head} -o name"
 
 
 def test_rebuild_playbook_end_to_end(tmp_path):

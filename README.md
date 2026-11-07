@@ -114,7 +114,8 @@ flowchart TB
 | Default model | `Qwen/Qwen2.5-0.5B-Instruct` at a pinned revision, served as `qwen2.5-0.5b-instruct` | Hugging Face, not gated |
 
 - **Locks.** Python packages are installed from hash-locked files, one per CPU architecture
-  (`inference-server/requirements-x86_64.lock` and `requirements-aarch64.lock`), with wheels only.
+  (`inference-server/requirements-x86_64.lock` and `requirements-aarch64.lock`), with wheels only. A third lock,
+  `requirements-pip.lock`, pins the pip that installs them.
 - **Everything comes from PyPI.** No package index outside PyPI is used, so FlashInfer compiles its GPU kernels on
   the node when the server starts. The image does not include the patches Ray applies in its own `rayproject/ray-llm`
   images.
@@ -142,8 +143,9 @@ not tested on OpenShift by us. CUDA 13 needs NVIDIA driver version 580 or newer.
 - The internal image registry set to `Managed`: the cluster builds both images itself. It starts as `Removed` on
   bare metal and vSphere. To check:
   `oc get configs.imageregistry.operator.openshift.io cluster -o jsonpath='{.spec.managementState}'`
-- A GPU node. On AWS the pattern creates one (see the cost note above). Elsewhere, add a node with an NVIDIA GPU that
-  the NVIDIA GPU Operator supports.
+- A GPU node. On AWS the pattern creates one (see the cost note above), except on clusters installed into existing
+  subnets, where the job cannot copy the subnet: set `gpuMachineSet: none` there and add the GPU node yourself.
+  Elsewhere, add a node with an NVIDIA GPU that the NVIDIA GPU Operator supports.
 - On your workstation:
   - podman 4.3 or newer;
   - git;
