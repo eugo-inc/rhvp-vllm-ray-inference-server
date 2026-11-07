@@ -8,6 +8,10 @@ Secrets for an optional Hugging Face token. It adds a small JupyterLab whose not
 
 **Community sandbox pattern by Eugo — not produced, supported or validated by Red Hat.**
 
+Eugo, which maintains this pattern, runs an HPC platform that rebuilds open-source native and Python packages,
+PyTorch and vLLM among them, from source. This pattern does not use it: it installs stock packages only. More at
+[eugo.io](https://eugo.io/).
+
 **The problem it solves.** A team that wants a private, OpenAI-compatible LLM endpoint on its own OpenShift
 cluster usually assembles it by hand: GPU enablement, a serving runtime, a model cache, a secret for gated models,
 and a way to rebuild the image when the stack changes. This pattern turns all of that into one Git repository.
