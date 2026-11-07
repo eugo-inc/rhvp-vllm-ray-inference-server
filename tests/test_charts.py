@@ -631,6 +631,10 @@ def test_rebuild_playbook_end_to_end(tmp_path):
                 else ["--user", f"{os.getuid()}:{os.getgid()}"])
         # HOME and Ansible's temp folders: writable for an arbitrary UID, as /git/home is
         # in the imperative job.
+        # The clone is made on the host, not inside the container as in the imperative job, so git in the
+        # container can see a different owner and refuse it ("dubious ownership", as on GitHub's runners).
+        # Trust it through command-line-level config, which git honors for safe.directory.
+        cmd += ["-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", "GIT_CONFIG_VALUE_0=*"]
         cmd += ["-e", "HOME=/tmp", "-e", "ANSIBLE_REMOTE_TMP=/tmp/ansible-remote",
                 "-e", "ANSIBLE_LOCAL_TEMP=/tmp/ansible-local",
                 "-e", f"FAKE_OC_STATE={state}", "-e", f"PATH={fakebin}:/usr/local/bin:/usr/bin:/bin",
