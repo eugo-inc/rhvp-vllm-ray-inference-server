@@ -1,0 +1,19 @@
+# The serving-cert annotation makes OpenShift issue the TLS certificate the
+# oauth-proxy serves (Secret rhvp-notebook-tls).
+apiVersion: v1
+kind: Service
+metadata:
+  name: rhvp-notebook
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: rhvp-notebook-tls
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rhvp-notebook
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP

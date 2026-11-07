@@ -1,0 +1,53 @@
+# Metadata for Validated Patterns documentation, QE tooling and the console catalog.
+# The installer reads ocp_versions from this file.
+metadata_version: "1.0"
+name: rhvp-vllm-ray-inference-server
+display_name: vLLM Ray Inference Server
+description: >-
+  Community sandbox pattern by Eugo; not produced or validated by Red Hat. Serves an
+  OpenAI-compatible LLM API with stock vLLM on Ray Serve LLM in one pod, built inside
+  the cluster from stock NVIDIA CUDA UBI 9 and PyPI packages, plus a JupyterLab
+  notebook that times the server.
+pattern_version: "1.0"
+repo_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server
+docs_repo_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server
+issues_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server/issues
+docs_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server#readme
+ci_url: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server/actions
+# can be sandbox, tested or maintained
+tier: sandbox
+owners: eugo
+requirements:
+  hub: # Main cluster
+    compute:
+      platform:
+        aws:
+          replicas: 3
+          type: m5.2xlarge
+    controlPlane:
+      platform:
+        aws:
+          replicas: 3
+          type: m5.xlarge
+
+extra_features:
+  hypershift_support: false
+  spoke_support: false
+
+external_requirements:
+  cluster_sizing_note: >-
+    Plus one GPU worker. With the default global.gpuMachineSet: create, the install
+    adds one AWS g6.2xlarge node (one NVIDIA L4 GPU), which AWS bills while it runs;
+    set global.gpuMachineSet: none in your fork before installing to skip it and bring
+    your own NVIDIA GPU node. The cluster builds the server and notebook images itself,
+    so the internal image registry must be Managed.
+
+variants:
+  - name: prod
+    default: true
+    description: >-
+      Single cluster: inference server, GPU enablement, Vault and External Secrets,
+      and the timing notebook
+
+ocp_versions:
+  minimum: "4.18"

@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rhvp-notebook
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+spec:
+  host: rhvp-notebook-{{ .Release.Namespace }}.{{ .Values.global.localClusterDomain }}
+  to:
+    kind: Service
+    name: rhvp-notebook
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect

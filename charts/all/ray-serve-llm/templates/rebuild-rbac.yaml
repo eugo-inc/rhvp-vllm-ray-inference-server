@@ -1,0 +1,42 @@
+{{- if and .Values.rebuildOnCommit.enabled (include "ray-serve-llm.inClusterBuild" .) }}
+# Lets the imperative job ansible/rebuild-on-commit.yaml read builds and start one
+# (`oc start-build`) in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhvp-rebuild-on-commit
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - build.openshift.io
+    resources:
+      - buildconfigs
+      - builds
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - build.openshift.io
+    resources:
+      - buildconfigs/instantiate
+      - builds/docker
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhvp-rebuild-on-commit
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhvp-rebuild-on-commit
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.rebuildOnCommit.serviceAccount.name }}
+    namespace: {{ .Values.rebuildOnCommit.serviceAccount.namespace }}
+{{- end }}

@@ -1,0 +1,4 @@
+# Stub for local rendering; the Validated Patterns operator injects the real
+# OpenShift version (major.minor) at deploy time.
+global:
+  clusterVersion: "4.20"

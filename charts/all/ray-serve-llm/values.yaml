@@ -1,0 +1,117 @@
+# Stubs for local rendering. At deploy time the Validated Patterns operator injects
+# global.repoURL, global.targetRevision, global.localClusterDomain and
+# global.clusterPlatform, and global.model comes from values-global.yaml.
+global:
+  repoURL: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server
+  targetRevision: main
+  localClusterDomain: apps.example.com
+  clusterPlatform: AWS
+  model:
+    id: qwen2.5-0.5b-instruct
+    source: Qwen/Qwen2.5-0.5B-Instruct
+    revision: ""
+
+# CPU architecture (kubernetes.io/arch) of the node that builds the image and of
+# the GPU node that runs it. The default AWS GPU node (g6.2xlarge) is amd64.
+arch: amd64
+
+image:
+  # A prebuilt server image to run instead of building one in the cluster, for
+  # example on clusters whose internal image registry is Removed. When set, the
+  # chart renders no BuildConfig, no ImageStream and no image trigger.
+  override: ""
+  pullPolicy: IfNotPresent
+
+# In-cluster image build (BuildConfig ray-serve-llm, Docker strategy).
+build:
+  contextDir: inference-server
+  dockerfilePath: Containerfile
+  # Name of a Secret in rhvp-inference with git credentials, for a private fork.
+  sourceSecret: ""
+  # The build unpacks a CUDA devel base image and installs several GB of wheels.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+      ephemeral-storage: 50Gi
+  completionDeadlineSeconds: 10800
+
+# Rendered into ConfigMap ray-serve-llm-config, key llm.yaml.
+server:
+  appName: llm
+  engineKwargs:
+    max_model_len: 8192
+    gpu_memory_utilization: 0.85
+    tensor_parallel_size: 1
+  acceleratorType: null
+  minReplicas: 1
+  maxReplicas: 1
+  objectStoreMemoryGb: 2
+  httpHost: 0.0.0.0
+  httpPort: 8000
+  # GPUs for the pod; keep equal to engineKwargs.tensor_parallel_size.
+  gpuCount: 1
+  # Memory-backed /dev/shm for the Ray object store (objectStoreMemoryGb fits in it).
+  # It counts against the memory limit below.
+  shmSizeLimit: 4Gi
+  # emptyDir for the Triton, vLLM, FlashInfer and XDG compile caches.
+  cacheSizeLimit: 20Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 12Gi
+    limits:
+      memory: 24Gi
+  terminationGracePeriodSeconds: 120
+  probes:
+    # The server writes the ready file only after the model is loaded and the app
+    # is RUNNING. Startup budget: periodSeconds * failureThreshold = 3600 s.
+    startup:
+      periodSeconds: 10
+      failureThreshold: 360
+    readiness:
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 120
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 5
+
+gpu:
+  resourceName: nvidia.com/gpu
+  # Taint key on GPU nodes; the toleration uses operator Exists, so any value and
+  # effect for this key is tolerated.
+  taintKey: nvidia.com/gpu
+
+# PVC for the Hugging Face cache (model weights), kept across pod restarts.
+modelStorage:
+  size: 50Gi
+  # Empty uses the cluster's default StorageClass.
+  storageClassName: ""
+
+# Route to the OpenAI-compatible API. Off by default: the API has no
+# authentication. The notebook talks to the Service, not to a Route.
+route:
+  enabled: false
+  # The OpenShift router's default timeout is 30 s, too short for long completions.
+  timeout: 10m
+
+secretStore:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+# Hugging Face token: Vault path and property written by `make load-secrets`
+# (values-secret.yaml.template, secret hfmodel, field hftoken).
+hfmodel:
+  key: secret/data/hub/hfmodel
+  property: hftoken
+  refreshInterval: 2m0s
+
+# Lets the imperative job ansible/rebuild-on-commit.yaml start builds in this
+# namespace. The ServiceAccount is the clustergroup chart's default imperative one.
+rebuildOnCommit:
+  enabled: true
+  serviceAccount:
+    name: imperative-sa
+    namespace: imperative

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-serve-llm-config
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+data:
+  llm.yaml: |
+    app_name: {{ .Values.server.appName | quote }}
+    model_id: {{ required "global.model.id is required" .Values.global.model.id | quote }}
+    model_source: {{ required "global.model.source is required" .Values.global.model.source | quote }}
+    model_revision: {{ .Values.global.model.revision | default "" | quote }}
+    engine_kwargs:
+      {{- toYaml .Values.server.engineKwargs | nindent 6 }}
+    accelerator_type: {{ if .Values.server.acceleratorType }}{{ .Values.server.acceleratorType | quote }}{{ else }}null{{ end }}
+    min_replicas: {{ .Values.server.minReplicas | int }}
+    max_replicas: {{ .Values.server.maxReplicas | int }}
+    object_store_memory_gb: {{ .Values.server.objectStoreMemoryGb }}
+    http_host: {{ .Values.server.httpHost | quote }}
+    http_port: {{ .Values.server.httpPort | int }}

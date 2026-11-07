@@ -1,0 +1,5 @@
+# Left out of the notebook image (podman/buildah and docker both read this file).
+**/__pycache__
+**/*.pyc
+**/.ipynb_checkpoints
+.pytest_cache

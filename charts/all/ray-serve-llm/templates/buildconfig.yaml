@@ -1,0 +1,40 @@
+{{- if include "ray-serve-llm.inClusterBuild" . }}
+# Builds inference-server/Containerfile from this pattern's own git repository and
+# branch. The ConfigChange trigger starts the first build when Argo CD creates this
+# object; later builds come from ansible/rebuild-on-commit.yaml or `oc start-build`.
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ray-serve-llm
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+spec:
+  runPolicy: SerialLatestOnly
+  completionDeadlineSeconds: {{ .Values.build.completionDeadlineSeconds | int }}
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+  nodeSelector:
+    kubernetes.io/arch: {{ .Values.arch | quote }}
+  resources:
+    {{- toYaml .Values.build.resources | nindent 4 }}
+  source:
+    type: Git
+    git:
+      uri: {{ required "global.repoURL is required" .Values.global.repoURL | quote }}
+      ref: {{ required "global.targetRevision is required" .Values.global.targetRevision | quote }}
+    contextDir: {{ .Values.build.contextDir | quote }}
+    {{- with .Values.build.sourceSecret }}
+    sourceSecret:
+      name: {{ . | quote }}
+    {{- end }}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: {{ .Values.build.dockerfilePath | quote }}
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ray-serve-llm:latest
+  triggers:
+    - type: ConfigChange
+{{- end }}

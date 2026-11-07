@@ -1,0 +1,7 @@
+# Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0 (charts/nvidia-config).
+apiVersion: v2
+name: nvidia-gpu-config
+description: NVIDIA GPU Operator ClusterPolicy that tolerates the nvidia.com/gpu taint
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

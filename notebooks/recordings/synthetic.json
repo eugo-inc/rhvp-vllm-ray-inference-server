@@ -1,0 +1,301 @@
+{
+ "format": "rhvp-replay/1",
+ "metadata": {
+  "synthetic": true,
+  "note": "SYNTHETIC: written by rhvp_bench.replay synthesize to check the notebook's layout. Every time and count in it is made up; it is not a measurement.",
+  "seed": 11,
+  "model_id": "qwen2.5-0.5b-instruct",
+  "model_revision": "",
+  "max_tokens": 32,
+  "api": "completions"
+ },
+ "models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "qwen2.5-0.5b-instruct",
+    "object": "model",
+    "created": 0,
+    "owned_by": "synthetic"
+   }
+  ]
+ },
+ "completion": {
+  "id": "cmpl-synthetic",
+  "object": "text_completion",
+  "created": 0,
+  "model": "qwen2.5-0.5b-instruct",
+  "choices": [
+   {
+    "index": 0,
+    "text": " Hello",
+    "logprobs": null,
+    "finish_reason": "length"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 1,
+   "completion_tokens": 1,
+   "total_tokens": 2
+  }
+ },
+ "pods": [
+  {
+   "metadata": {
+    "name": "ray-serve-llm-synthetic",
+    "namespace": "rhvp-inference",
+    "creationTimestamp": "2026-01-01T00:00:00Z",
+    "labels": {
+     "app.kubernetes.io/name": "ray-serve-llm"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "server",
+      "env": [
+       {
+        "name": "RHVP_CONFIG",
+        "value": "/config/llm.yaml"
+       },
+       {
+        "name": "HF_HOME",
+        "value": "/models/hf"
+       },
+       {
+        "name": "TRITON_CACHE_DIR",
+        "value": "/cache/triton"
+       },
+       {
+        "name": "VLLM_CACHE_ROOT",
+        "value": "/cache/vllm"
+       },
+       {
+        "name": "FLASHINFER_WORKSPACE_BASE",
+        "value": "/cache/flashinfer"
+       },
+       {
+        "name": "XDG_CACHE_HOME",
+        "value": "/cache/xdg"
+       },
+       {
+        "name": "RAY_TMPDIR",
+        "value": "/tmp/r"
+       }
+      ],
+      "volumeMounts": [
+       {
+        "name": "models",
+        "mountPath": "/models"
+       },
+       {
+        "name": "cache",
+        "mountPath": "/cache"
+       },
+       {
+        "name": "ray-tmp",
+        "mountPath": "/tmp/r"
+       },
+       {
+        "name": "dshm",
+        "mountPath": "/dev/shm"
+       },
+       {
+        "name": "config",
+        "mountPath": "/config"
+       }
+      ]
+     }
+    ],
+    "volumes": [
+     {
+      "name": "models",
+      "persistentVolumeClaim": {
+       "claimName": "ray-serve-llm-models"
+      }
+     },
+     {
+      "name": "cache",
+      "emptyDir": {}
+     },
+     {
+      "name": "ray-tmp",
+      "emptyDir": {}
+     },
+     {
+      "name": "dshm",
+      "emptyDir": {
+       "medium": "Memory",
+       "sizeLimit": "4Gi"
+      }
+     },
+     {
+      "name": "config",
+      "configMap": {
+       "name": "ray-serve-llm-config"
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "conditions": [
+     {
+      "type": "PodScheduled",
+      "status": "True",
+      "lastTransitionTime": "2026-01-01T00:00:00Z"
+     },
+     {
+      "type": "Initialized",
+      "status": "True",
+      "lastTransitionTime": "2026-01-01T00:00:00Z"
+     },
+     {
+      "type": "ContainersReady",
+      "status": "True",
+      "lastTransitionTime": "2026-01-01T00:05:00Z"
+     },
+     {
+      "type": "Ready",
+      "status": "True",
+      "lastTransitionTime": "2026-01-01T00:05:00Z"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "name": "server",
+      "ready": true,
+      "restartCount": 0,
+      "state": {
+       "running": {
+        "startedAt": "2026-01-01T00:01:00Z"
+       }
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "streams": [
+  {
+   "writes": [
+    [
+     0.05,
+     "data: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" hollow\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.1,
+     "data: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" draws\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" seven\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" polite\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" hollow\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" ancient\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" keeps\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wagon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" umbrella\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" brave\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" simple\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" shows\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" plants\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.15,
+     "data: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" umbrella\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" village\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" golden\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" marble\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" harvest\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" station\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" fancy\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" below\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" sings\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" orchard\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" lifts\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" timber\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" hollow\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.2,
+     "data: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" visits\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" a\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" plants\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" travels\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" notebook\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" remembers\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-0\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":32,\"total_tokens\":332}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  },
+  {
+   "writes": [
+    [
+     0.06,
+     "data: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" window\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.11,
+     "data: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" distant\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" ladder\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" candle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" bridge\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wagon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" crystal\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" measures\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" lantern\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" seven\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" patient\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" paddle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" gentle\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.16,
+     "data: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" learns\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" anchor\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" calm\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" copper\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" sorts\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" kitten\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wild\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" river\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" writes\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" market\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" narrow\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" visits\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" helmet\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.21,
+     "data: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" velvet\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" carries\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" market\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" inside\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" fabric\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" ocean\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-1\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":32,\"total_tokens\":332}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  },
+  {
+   "writes": [
+    [
+     0.07,
+     "data: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" few\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.12,
+     "data: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" coffee\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" brave\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" jacket\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" lantern\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" basket\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" explores\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" one\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" glacier\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" tomato\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" glacier\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" jungle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" thunder\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.17,
+     "data: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" basket\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" pencil\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" before\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" apple\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" castle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" carpet\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" compass\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" silent\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" summer\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" inside\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" timber\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wizard\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" feather\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.22,
+     "data: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" explores\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" shows\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" anchor\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" seven\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" after\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" granite\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-2\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":32,\"total_tokens\":332}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  },
+  {
+   "writes": [
+    [
+     0.05,
+     "data: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" pillow\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.1,
+     "data: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" library\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" needle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" pepper\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" window\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" velvet\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" few\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" lighthouse\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" chimney\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" dolphin\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" beyond\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" forest\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" garden\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.15,
+     "data: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" candle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" polite\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" tender\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" teapot\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" around\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" draws\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wagon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" golden\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" ancient\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wagon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" through\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" one\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" balcony\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.2,
+     "data: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wizard\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" studies\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" thunder\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" prairie\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" timber\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wizard\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-3\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":32,\"total_tokens\":332}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  },
+  {
+   "writes": [
+    [
+     0.06,
+     "data: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" castle\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.11,
+     "data: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" apple\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" granite\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" learns\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" marble\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" mountain\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" carpet\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" umbrella\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" tiger\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" notices\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" studies\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" holds\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" forest\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.16,
+     "data: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" orchard\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" festival\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" castle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" rapid\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" falcon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" garden\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" two\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" paints\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" parrot\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" kitten\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" thunder\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" feather\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" island\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.21,
+     "data: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" station\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" carpet\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" joins\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" sings\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" curtain\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" window\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-4\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":32,\"total_tokens\":332}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  },
+  {
+   "writes": [
+    [
+     0.07,
+     "data: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\"\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" measures\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.12,
+     "data: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" spider\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" spring\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" remembers\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" humble\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" kitchen\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" keeps\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" sudden\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" holds\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" chimney\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" thunder\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" tunnel\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" shares\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.17,
+     "data: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" letter\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" needle\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" coffee\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" paints\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" dolphin\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" within\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wagon\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" notebook\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" a\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" shows\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" carries\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" anchor\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" before\",\"logprobs\":null,\"finish_reason\":null}]}\n\n"
+    ],
+    [
+     0.22,
+     "data: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" ticket\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" sudden\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" notices\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" valley\",\"logprobs\":null,\"finish_reason\":null}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[{\"index\":0,\"text\":\" wizard\",\"logprobs\":null,\"finish_reason\":\"length\"}]}\n\ndata: {\"id\":\"cmpl-synthetic-5\",\"object\":\"text_completion\",\"created\":0,\"model\":\"qwen2.5-0.5b-instruct\",\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":31,\"total_tokens\":331}}\n\ndata: [DONE]\n\n"
+    ]
+   ]
+  }
+ ]
+}

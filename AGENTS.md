@@ -1,0 +1,520 @@
+# AGENTS.md
+
+Instructions for coding agents (and people) who change or deploy this repository. `CLAUDE.md` imports this file;
+keep this file the only copy of these instructions.
+
+## Read this first: the default install costs money
+
+- On AWS, the default install creates **one billable GPU instance: `g6.2xlarge` with one NVIDIA L4**. An
+  imperative job applies a MachineSet for it, and AWS bills the instance while it runs.
+- To stop that, set `global.gpuMachineSet: none` in `values-global.yaml` **in your fork**, commit and push it,
+  **before** you install. Install from a fork so this value can be changed first.
+- Off AWS, nothing is created; bring your own GPU node.
+- Uninstalling the pattern does **not** delete that MachineSet. Argo CD did not create it, so Argo CD does not
+  remove it. See [Uninstall](#uninstall).
+
+## What this pattern is
+
+`rhvp-vllm-ray-inference-server` is a community sandbox Validated Pattern by Eugo. It is not produced, supported or
+validated by Red Hat. Red Hat OpenShift GitOps (Argo CD), driven by the Validated Patterns Operator, deploys it onto
+one OpenShift cluster:
+
+- **The inference server.** One pod runs a Ray head, Ray Serve and the vLLM engine through Ray Serve LLM
+  (`ray.serve.llm.build_openai_app`). It serves an OpenAI-compatible API on port 8000. The cluster builds the image
+  itself from `inference-server/`, using stock packages only: PyPI wheels on NVIDIA's CUDA UBI 9 image. There is no
+  KubeRay and no OpenShift AI.
+- **GPU enablement.** Node Feature Discovery and the NVIDIA GPU Operator. On AWS, an imperative job also creates
+  one GPU node (see above).
+- **Secrets.** HashiCorp Vault plus the External Secrets Operator carry an optional Hugging Face token.
+- **A notebook.** A small JupyterLab behind OpenShift login. Its notebook times the server under
+  WITHOUT EUGO / WITH EUGO banners.
+
+### Names that must stay in sync
+
+The charts, `inference-server/serve_app.py`, the notebook and these docs all rely on these names. If you change
+one, change it everywhere and run the tests.
+
+| Thing | Name |
+|---|---|
+| Pattern (`global.pattern`) | `rhvp-vllm-ray-inference-server` |
+| Cluster group / variant | `prod` (`variants/prod/values-prod.yaml`) |
+| Server namespace | `rhvp-inference` |
+| Notebook namespace | `rhvp-notebook` |
+| Server Deployment, Service, ImageStream, BuildConfig | `ray-serve-llm` (label `app.kubernetes.io/name=ray-serve-llm`, container `server`) |
+| Server Service port | `8000`, port name `http` |
+| Server config | ConfigMap `ray-serve-llm-config`, key `llm.yaml`, mounted at `/config/llm.yaml` |
+| Model cache | PVC `ray-serve-llm-models`, mounted at `/models` |
+| Hugging Face token | Vault `secret/data/hub/hfmodel`, property `hftoken` → ExternalSecret and Secret `huggingface-secret`, key `hftoken` |
+| Server build | BuildConfig `contextDir: inference-server`, `dockerfilePath: Containerfile` |
+| Notebook build | BuildConfig and ImageStream `rhvp-notebook`, `contextDir: notebooks`, `dockerfilePath: Containerfile` |
+| Notebook ServiceAccount | `rhvp-notebook`, with a Role and RoleBinding in `rhvp-inference` that allow get/list/watch on pods |
+
+## Repo map
+
+```
+AGENTS.md  CLAUDE.md (@AGENTS.md)  README.md  LICENSE (Apache-2.0)  LICENSES/BSD-3-Clause.txt
+pattern-metadata.yaml  .gitignore
+values-global.yaml            pattern name, global.gpuMachineSet, global.model.*, main.variant
+values-secret.yaml.template   secrets file format: hfmodel / hftoken, value "none"
+variants/prod/values-prod.yaml   the cluster group: namespaces, operator subscriptions, Argo CD apps, imperative jobs
+overrides/values-gpu-machineset-create-AWS.yaml   create-gpu-machineset imperative job and its RBAC
+ansible/rebuild-on-commit.yaml   imperative job: start a build when that build's source folder changed
+ansible/rebuild_on_commit.py     the rebuild decision (which BuildConfigs to start), tested in tests/test_charts.py
+charts/all/nfd-config/         NodeFeatureDiscovery instance
+charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint)
+charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Route (off by default), PVC,
+                               ConfigMap, ExternalSecret
+charts/all/notebook/           BuildConfig, ImageStream, Deployment (JupyterLab + oauth-proxy), Service, Route,
+                               ServiceAccount and RBAC
+inference-server/              Containerfile, requirements.in, requirements-x86_64.lock,
+                               requirements-aarch64.lock, serve_app.py, entrypoint.sh, rhvp_status.py
+notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requirements.in, requirements.lock,
+                               make_notebook.py, rhvp_bench/ (words, draw, showing, measure, replay, prompts,
+                               run), prompts.jsonl, recordings/synthetic.json,
+                               stock_vs_eugo_inference.ipynb (generated)
+scripts/                       render-charts.sh, validate-values.sh, local-smoke.sh
+tests/                         test_serve_config.py, test_secrets_template.py, test_charts.py,
+                               test_notebook_rules.py, test_measure.py
+.github/workflows/             lint.yml, jsonschema.yaml, notebook-check.yml
+pattern.sh  Makefile  Makefile-common  ansible.cfg  .claude/skills/pattern-author/  .cursor/skills/pattern-author/
+```
+
+Patternizer manages `pattern.sh`, `Makefile-common`, `ansible.cfg` and both `pattern-author` skill folders. Do not
+edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `Makefile`.
+
+### How the server starts
+
+1. `entrypoint.sh` replaces the base image's NVIDIA entrypoint. It unsets `HF_TOKEN` unless the value starts
+   with `hf_`, then starts `serve_app.py`.
+2. `serve_app.py` reads `/config/llm.yaml` (the path in `RHVP_CONFIG`) and then the environment overrides
+   `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION` and
+   `RHVP_MAX_MODEL_LEN`.
+3. It starts Ray with a 2 GiB object store, starts Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`.
+   `serve.run` returns once the app is RUNNING, which means the model is loaded.
+4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM.
+5. The startup and readiness probes check that ready file. The liveness probe calls `/-/healthz`.
+
+`llm.yaml` (the chart renders it from `values-global.yaml`):
+
+```yaml
+app_name: llm
+model_id: qwen2.5-0.5b-instruct          # global.model.id; the name clients send as "model"
+model_source: Qwen/Qwen2.5-0.5B-Instruct # global.model.source
+model_revision: <global.model.revision, or empty>
+engine_kwargs: {max_model_len: 8192, gpu_memory_utilization: 0.85, tensor_parallel_size: 1}
+accelerator_type: null
+min_replicas: 1
+max_replicas: 1
+object_store_memory_gb: 2
+http_host: 0.0.0.0
+http_port: 8000
+```
+
+Server container environment:
+
+- `RHVP_CONFIG=/config/llm.yaml`
+- `HF_HOME=/models/hf`: model weights on the PVC, kept across restarts.
+- Compile caches on an emptyDir at `/cache`, emptied on every new pod: `TRITON_CACHE_DIR=/cache/triton`,
+  `VLLM_CACHE_ROOT=/cache/vllm`, `FLASHINFER_WORKSPACE_BASE=/cache/flashinfer`, `XDG_CACHE_HOME=/cache/xdg`.
+- `RAY_TMPDIR=/tmp/r` on its own emptyDir. Keep it short: Ray puts Unix sockets under it, and socket paths are
+  limited to 108 bytes.
+- `/dev/shm`: an emptyDir with `medium: Memory`, 4Gi.
+- `HF_TOKEN`: from `secretKeyRef` `huggingface-secret` / `hftoken`, `optional: true`.
+
+Notebook environment (set by the chart, read by `rhvp_bench`):
+
+- `RHVP_ENDPOINT=http://ray-serve-llm.rhvp-inference.svc:8000`
+- `RHVP_MODEL_ID=<global.model.id>`
+- `RHVP_MODEL_REVISION=<global.model.revision>`, set only when the revision is not empty.
+- `RHVP_SERVER_NAMESPACE=rhvp-inference`
+- `RHVP_SERVER_LABEL_SELECTOR=app.kubernetes.io/name=ray-serve-llm`
+- Optional `RHVP_INTERNAL=1` adds an amber INTERNAL strip. It is off by default.
+- Optional `RHVP_REPLAY=<path to a recorded run>` turns on REPLAY mode.
+
+The notebook image bakes in the `notebooks/` folder at `/opt/app-root/notebooks`. Nothing is cloned at runtime.
+When the pod starts, it copies that folder into a writable emptyDir at `/work`. It then runs JupyterLab on
+`127.0.0.1:8888` with `root_dir` `/work`, behind an OpenShift oauth-proxy sidecar. The sidecar listens on port 8443
+and uses a serving certificate; the Route uses `reencrypt` termination.
+
+## How to deploy
+
+The pattern deploys through Red Hat OpenShift GitOps and the Validated Patterns Operator. Argo CD deploys what is
+in **your fork on GitHub**, not the files on your disk: commit and push every change before you install or expect
+it to sync.
+
+### Prerequisites
+
+- OpenShift 4.18 or newer, and cluster-admin access.
+- A StorageClass that provisions volumes dynamically, for the model PVC.
+- The internal image registry set to `Managed`, and the `Build` and `ImageRegistry` cluster capabilities enabled.
+  The cluster builds both images itself. To check:
+  ```sh
+  oc get configs.imageregistry.operator.openshift.io cluster -o jsonpath='{.spec.managementState}'
+  oc get clusterversion version -o jsonpath='{.status.capabilities.enabledCapabilities}'
+  ```
+  On bare metal and vSphere the registry starts as `Removed`; see [Troubleshooting](#troubleshooting).
+- A GPU. On AWS with `global.gpuMachineSet: create`, the pattern creates the node. Anywhere else, add a node with
+  an NVIDIA GPU that the NVIDIA GPU Operator supports. The server requests `nvidia.com/gpu: 1` and tolerates the
+  `nvidia.com/gpu` taint.
+- The CPU type of that GPU node. Both Deployments and both BuildConfigs select nodes with
+  `kubernetes.io/arch: amd64`, from the `arch` value in `charts/all/ray-serve-llm/values.yaml` and
+  `charts/all/notebook/values.yaml`. If your GPU node is arm64, set `arch: arm64` in both files in your fork before
+  you install; otherwise the server pod and the builds never get a node.
+- On your workstation:
+  - podman 4.3 or newer. `pattern.sh` runs everything in a podman container; docker alone is not enough.
+  - git.
+  - `oc`, logged in to the cluster.
+  - If `KUBECONFIG` is set, it must point inside `$HOME`, because only `$HOME` is mounted into the container.
+- A fork of this repository, cloned locally, with your branch pushed and an upstream set. The installer reads the
+  repo URL from the branch's upstream remote, and fails if the branch has no upstream.
+
+### Path 1: command line (recommended)
+
+1. Fork `https://github.com/eugo-inc/rhvp-vllm-ray-inference-server` on GitHub, then clone your fork:
+   ```sh
+   git clone https://github.com/<you>/rhvp-vllm-ray-inference-server.git
+   cd rhvp-vllm-ray-inference-server
+   ```
+2. Edit `values-global.yaml`:
+   - `global.gpuMachineSet`: `create` (the default: one AWS g6.2xlarge with one L4) or `none`.
+   - `global.model.id`: the name clients send as `model`.
+   - `global.model.source`: the Hugging Face repo id.
+   - `global.model.revision`: the Hugging Face commit to pin.
+
+   Then commit and push:
+   ```sh
+   git commit -am "Configure my install"
+   git push            # for a new branch: git push -u origin <branch>
+   ```
+3. Secrets. These are optional: the default model is not gated, and the installer falls back to the repo's
+   template (token `none`). For a gated model, or to avoid picking up a leftover `~/values-secret.yaml` from
+   another pattern, create the pattern's own secrets file:
+   ```sh
+   mkdir -p ~/.config/validated-patterns
+   cp values-secret.yaml.template \
+      ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml
+   ```
+   Put your `hf_...` token in the `hftoken` field's `value`. Never commit a filled-in secrets file;
+   `.gitignore` ignores `values-secret*` except the template.
+4. Log in and install:
+   ```sh
+   oc login --token=<token> --server=<api-url>
+   ./pattern.sh make install
+   ```
+5. What `make install` does, step by step:
+   1. `pattern.sh` starts `quay.io/validatedpatterns/utility-container` with podman, mounts the repo and
+      `$HOME`, and runs `make` inside it.
+   2. `make install` runs the Ansible playbook `rhvp.cluster_utils.install`. In order, it loads bootstrap
+      secrets, deploys the operator, loads secrets, and then waits for every Argo CD application to be Synced and
+      Healthy. The wait is at most 60 tries, 60 seconds apart.
+   3. The operator step checks prerequisites first: cluster access, a StorageClass, the OpenShift version, and the
+      name-length limit. It then renders the `pattern-install` Helm chart
+      (`oci://quay.io/validatedpatterns/pattern-install`) with `values-global.yaml` plus your branch's upstream
+      URL and branch name, and applies the result.
+   4. That chart subscribes the cluster to the **Validated Patterns Operator** (`patterns-operator`, from
+      `community-operators`). It also creates the **Pattern** custom resource: variant `prod`, Git target = your
+      fork and branch.
+   5. The operator installs **Red Hat OpenShift GitOps** and creates the Argo CD instance **`vp-gitops`** (in
+      namespace `vp-gitops`). It then creates the app-of-apps: the **clustergroup** Helm chart (version `0.9.*`
+      from charts.validatedpatterns.io), with `values-global.yaml` and `variants/prod/values-prod.yaml` from your
+      fork.
+   6. The clustergroup chart creates:
+      - the namespaces and OperatorGroups;
+      - the operator Subscriptions: External Secrets, NFD and the NVIDIA GPU Operator;
+      - one Argo CD Application per app: `vault`, `openshift-external-secrets`, `nfd-config`,
+        `nvidia-gpu-config`, `ray-serve-llm` and `notebook`;
+      - the imperative CronJob, which runs two jobs: `create-gpu-machineset` (the playbook
+        `rhvp.cluster_utils.create_machineset`) on AWS when `gpuMachineSet: create`, and `rebuild-on-commit`.
+   7. The apps then come up. The BuildConfigs build the server and notebook images inside the cluster. The server
+      pod waits for a GPU node, downloads the model to its PVC, and turns Ready once the model is loaded.
+6. `./pattern.sh make load-secrets` loads the secrets file again. Run it after you edit that file;
+   `make install` already loaded it once. The secret travels from Vault (`secret/data/hub/hfmodel`, property
+   `hftoken`) through ExternalSecret `huggingface-secret` to the Secret `huggingface-secret`. The server reads
+   `HF_TOKEN` only when its container starts, so delete the pod to pick up a new token:
+   `oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n rhvp-inference`.
+7. `./pattern.sh make argo-healthcheck` checks again that every Argo CD application is Synced and Healthy. Use
+   it after an install that timed out.
+
+Secrets file search order. The first file found wins:
+
+1. `$VALUES_SECRET`
+2. `~/.config/hybrid-cloud-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml`
+3. `~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml`
+4. `~/values-secret-rhvp-vllm-ray-inference-server.yaml`
+5. `~/values-secret.yaml`
+6. the repo's `values-secret.yaml.template`
+
+The template's `hftoken` value must stay a non-empty string (`"none"`). With `null`, the secrets loader aborts.
+
+### Path 2: OpenShift web console
+
+1. Go to **OperatorHub**, search for "Validated Patterns" and install the **Validated Patterns Operator**. It is a
+   community operator, so accept the community-operator notice.
+2. Go to **Installed Operators → Validated Patterns Operator → Pattern → Create instance**.
+3. Fill in the form:
+   - Name: `rhvp-vllm-ray-inference-server`
+   - **Cluster Group Name**: `prod`
+   - Git Config → **Target Repo**: your fork's URL
+   - Target Revision: your branch
+4. Click **Create**.
+5. Load secrets afterwards. The console path loads none. Do this even for the default, ungated model: until
+   `secret/data/hub/hfmodel` exists, ExternalSecret `huggingface-secret` is not Ready and Argo CD shows the
+   `ray-serve-llm` app as Degraded. The server pod still starts, because the token is optional. Two ways:
+   - From a clone of your fork, run `./pattern.sh make load-secrets`.
+   - In the Vault UI, in the KV engine `secret`, create path `hub/hfmodel` with key `hftoken` (value `none`, or
+     your token). The Vault root token is in Secret `vaultkeys` in namespace `imperative`.
+
+### Path 3: private forks
+
+Argo CD needs credentials to read a private fork:
+
+1. Create an Argo CD repository Secret. It carries the label `argocd.argoproj.io/secret-type: repository` and
+   your SSH key or token. You can create it through `bootstrap_secrets` in your secrets file.
+2. Install with that Secret:
+   ```sh
+   ./pattern.sh make TOKEN_SECRET=<secret-name> TOKEN_NAMESPACE=<secret-namespace> install
+   ```
+3. See https://validatedpatterns.io/learn/private-repos/ for the Secret format.
+
+That token covers Argo CD only. The in-cluster BuildConfigs (`ray-serve-llm`, `rhvp-notebook`) also clone the
+repo from `global.repoURL`, and they do not use that Secret. For a private fork, give each build its own git
+credentials:
+
+1. Create a source secret in each build's namespace, for example with a GitHub token:
+   ```sh
+   oc create secret generic rhvp-git -n rhvp-inference --type=kubernetes.io/basic-auth \
+     --from-literal=username=<you> --from-literal=password=<token>
+   oc create secret generic rhvp-git -n rhvp-notebook --type=kubernetes.io/basic-auth \
+     --from-literal=username=<you> --from-literal=password=<token>
+   ```
+2. Set `build.sourceSecret: rhvp-git` in `charts/all/ray-serve-llm/values.yaml` and
+   `charts/all/notebook/values.yaml`, then push.
+
+Or keep the fork public, or set `image.override` to a prebuilt image.
+
+### Updating a running install
+
+- **Config and charts.** Push to your branch. Argo CD syncs automatically (automated sync, with retries).
+- **Model or engine settings.** Changing `global.model.*` changes ConfigMap `ray-serve-llm-config`. Its checksum
+  annotation then restarts the server pod, which downloads the new model. The Deployment uses `Recreate`, so the
+  server is down until the new pod is Ready.
+- **Images.** A BuildConfig's ConfigChange trigger fires only when the BuildConfig is created, so a push alone
+  does not rebuild an image. There are two ways to rebuild:
+  - **Automatic.** The `rebuild-on-commit` imperative job (`ansible/rebuild-on-commit.yaml`) runs every 10
+    minutes, for both `ray-serve-llm` and `rhvp-notebook`. It starts a build only when that build's folder
+    (`inference-server/` or `notebooks/`) changed between the last successful build's commit and the head of the
+    target branch. A failed build is not retried automatically. The full rule list is at the top of
+    `ansible/rebuild_on_commit.py`.
+  - **By hand:**
+    ```sh
+    oc start-build ray-serve-llm -n rhvp-inference --follow
+    oc start-build rhvp-notebook -n rhvp-notebook --follow
+    ```
+
+  A finished build updates the ImageStream. The image trigger annotation then rolls the Deployment.
+
+## Before changing structure, study how existing patterns do it
+
+This pattern copies its structure from these sources. Read the matching one before you add an operator, an app, a
+GPU knob, a build or a new serving mode:
+
+- **The template.** https://github.com/validatedpatterns/multicloud-gitops
+  - `values-global.yaml`
+  - `variants/`: `variants/standalone/values-standalone.yaml` is the single-cluster shape.
+  - `Makefile-common`
+- **GPU enablement.** https://github.com/validatedpatterns-sandbox/ai-quickstart-rag
+  - `overrides/values-gpu.yaml`: the NFD and GPU Operator namespaces, subscriptions and apps.
+  - `overrides/values-gpu-AWS.yaml`: the `rhvp.cluster_utils.create_machineset` job and its `clusterRoleYaml`.
+  - `charts/nvidia-config`: a ClusterPolicy that tolerates `nvidia.com/gpu`.
+- **vLLM and the Hugging Face token.** https://github.com/validatedpatterns/rag-llm-gitops
+  - `charts/all/vllm-inference-service`: vLLM on KServe, and the `hf_` token check.
+  - `values-secret.yaml.template`: the `hfmodel` secret.
+- **In-cluster builds under Argo CD.** https://github.com/validatedpatterns-sandbox/qna-chat-amd
+  - `charts/all/llm/templates/llm-buildconfig.yaml`: a BuildConfig with `dockerfilePath`.
+  - `values-hub.yaml`: `ignoreDifferences` for image-triggered Deployments and BuildConfig `.spec.paused`.
+- **A future RayService variant through the KubeRay operator.**
+  https://github.com/kuberay-project/kuberay/blob/master/ray-operator/config/samples/ray-service.llm-serve.yaml
+  This is `ray.serve.llm:build_openai_app` as a RayService. The repo moved there from `ray-project/kuberay`.
+- **The framework itself.** The pattern-author skill in `.claude/skills/pattern-author/` (`SKILL.md`,
+  `reference.md`) covers the clustergroup values schema, the values-file order, sharedValueFiles and imperative
+  jobs. `.cursor/skills/pattern-author/` holds the same skill.
+
+Framework facts that catch people out:
+
+- Namespaces are maps, and maps merge across values files. Lists replace each other: a values file that sets
+  `clusterGroup.imperative.jobs` replaces the whole job list from earlier files.
+- A per-app `syncPolicy` replaces the chart's default (`automated: {}` plus `retry`) completely, so restate
+  both.
+- Missing `sharedValueFiles` are skipped. That is how `gpuMachineSet: none`, or any platform other than AWS,
+  turns the MachineSet job off.
+- Keep app keys equal to chart folder names.
+
+## Local development loop
+
+Install the Python tools:
+
+```sh
+python3.12 -m pip install pytest pyyaml jsonschema nbformat nbclient nbconvert ipykernel httpx
+```
+
+Then run these, all from the repo root:
+
+| Command | What it does | Where it runs |
+|---|---|---|
+| `scripts/render-charts.sh` | renders every local chart and the clustergroup chart with the values the operator injects | needs docker or podman; uses the utility container |
+| `scripts/validate-values.sh` | schema-checks the merged values (global, then `prod`, then each override) and the secrets template | anywhere |
+| `python3.12 -m pytest -q tests/` | runs the unit tests | anywhere; the chart tests in `tests/test_charts.py` are skipped without docker or podman and access to charts.validatedpatterns.io |
+| `python3.12 notebooks/make_notebook.py --check` | regenerates the notebook and fails if it differs from the committed file | anywhere |
+| `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
+
+## Bumping Ray and vLLM
+
+Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins exactly one vLLM: Ray 2.60.0 pins
+`vllm[audio]==0.29.0`, which pins `torch==2.13.0`. Never bump vLLM alone.
+
+1. Read `python/setup.py` at the new Ray tag (`https://github.com/ray-project/ray/blob/ray-<version>/python/setup.py`)
+   for the vLLM pin. Then read that vLLM's requirements for its torch pin, and that torch's `cuda-toolkit` pin.
+2. Edit `inference-server/requirements.in`: set `ray[llm]==<version>`. Set `cuda-toolkit[nvcc,cccl]` to torch's
+   CUDA toolkit version.
+3. If the CUDA version changed, move the `FROM` in `inference-server/Containerfile` to the matching
+   `nvcr.io/nvidia/cuda:<cuda>-devel-ubi9` image, pinned by digest.
+4. Regenerate both locks from `inference-server/` (the command is also in each lock file's header):
+   ```sh
+   uv pip compile requirements.in --python-version 3.12 --python-platform x86_64-manylinux_2_34 \
+     --only-binary :all: --generate-hashes -o requirements-x86_64.lock
+   uv pip compile requirements.in --python-version 3.12 --python-platform aarch64-manylinux_2_34 \
+     --only-binary :all: --generate-hashes -o requirements-aarch64.lock
+   ```
+5. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook. A test checks the label
+   against the lock file. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
+6. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
+
+## Rules
+
+1. **Stock packages only.** Allowed sources:
+   - PyPI wheels;
+   - public NVIDIA and Red Hat UBI base images;
+   - Red Hat and certified operators;
+   - Validated Patterns charts.
+
+   Never add Eugo packages, Eugo images or Eugo registries, and never add a private package index.
+2. **Comparison wording.** Use exactly this rule:
+
+   A WITH EUGO result appears only when it was measured in the same run as WITHOUT EUGO, on the same hardware, with the same requests and server settings; otherwise the card reads "No measured result is shown for this comparison."
+
+   - Results are given in seconds and percent.
+   - The WITH EUGO side exists only on the startup and time-to-first-token sections. The decode and throughput
+     sections are stock-only.
+3. **Notebook.** `notebooks/stock_vs_eugo_inference.ipynb` is generated by `notebooks/make_notebook.py` and is
+   committed without outputs. Never hand-edit the `.ipynb`: change `make_notebook.py` or `rhvp_bench/`,
+   regenerate, and run `--check`.
+4. **Telemetry stays off.** Keep these settings in the server image: `RAY_USAGE_STATS_ENABLED=0`,
+   `VLLM_NO_USAGE_STATS=1`, `DO_NOT_TRACK=1`, `RAYLLM_ENABLE_REQUEST_PROMPT_LOGS=0`.
+5. **Installer name limit.** `len(global.pattern) + 2 * len(variant)` must be under 47. Today it is
+   30 + 2 * 4 = 38, so a longer variant name such as `standalone` would fail.
+6. **Secrets.** Never commit real secret values.
+7. **Keep the probes.** Readiness and startup check the ready file. Do not replace them with an HTTP check (see
+   Troubleshooting).
+8. **Keep `strategy: Recreate`** on the server Deployment.
+9. **Imperative jobs must be idempotent.** They run every 10 minutes.
+10. **License headers.** Server files that carry the Eugo BSD-3-Clause header keep it. Do not name private
+    repositories in any file.
+
+## Troubleshooting
+
+- **Server crashes with `PermissionError` while writing a file, or the entrypoint exits with "... is not
+  writable by uid ...".**
+  - Why: OpenShift runs the container as an arbitrary UID in group 0. The image's virtualenv is read-only. Only
+    `/opt/app-root/home`, `/cache`, `/models` and `/tmp/r` are writable by group 0. The chart mounts emptyDirs at
+    `/cache` and `/tmp/r`, and the PVC at `/models`.
+  - Fix: point any new tool's cache at `/cache/<tool>` through its environment variable. For any new image folder
+    that must be writable, run `chgrp 0` and `chmod g=u` in the same `RUN` that creates it.
+- **Ray warns that it is using `/tmp` instead of `/dev/shm`, or the pod is OOMKilled.**
+  - Why: Ray's object store lives in `/dev/shm`. The chart mounts a 4Gi memory-backed emptyDir there, and
+    `object_store_memory_gb: 2` keeps the store inside it. A memory-backed emptyDir counts against the pod's
+    memory limit.
+  - Fix: if you raise either size, raise the `/dev/shm` `sizeLimit` and the memory limit with it.
+- **Connections to the Service are refused while Ray reports the app as RUNNING.**
+  - Why: Ray Serve's HTTP proxy listens on localhost by default. `serve_app.py` calls
+    `serve.start(http_options={"host": "0.0.0.0", "port": 8000})` with `http_host` and `http_port` from
+    `llm.yaml`.
+  - Fix: keep `http_host: 0.0.0.0`.
+- **The pod turned Ready before the model was loaded, and requests hang.**
+  - Why: `/v1/models` and `/-/healthz` both answer before the model is loaded.
+  - Fix: the readiness and startup probes must check the ready file `/tmp/r/rhvp-ready`. `serve_app.py` writes
+    it only after `serve.run` returns with the app RUNNING. Use `/-/healthz` for liveness only.
+- **FlashInfer errors about `nvcc`, or every pod start takes a long time.**
+  - Why: FlashInfer compiles GPU kernels just in time with `nvcc`. The base is NVIDIA's CUDA *devel* UBI 9 image,
+    which ships `nvcc`; `CUDA_HOME=/usr/local/cuda`; and the locks pin `cuda-toolkit[nvcc,cccl]` to the same CUDA
+    version. The compile caches live in the `/cache` emptyDir, so every new pod compiles the kernels again.
+  - Fix: do not switch to a `-runtime` or `-base` image.
+- **A request through a Route fails with 504 or times out.**
+  - Why: the OpenShift router times out after 30 seconds by default. The optional server Route sets
+    `haproxy.router.openshift.io/timeout: 10m`.
+  - Note: the notebook talks to the Service directly, not through a Route.
+- **After an update, the new server pod stays Pending, or the Deployment reports `ProgressDeadlineExceeded`.**
+  - Why: a rolling update would need a second GPU and the same single-node (ReadWriteOnce) PVC. With one GPU it
+    deadlocks.
+  - Fix: keep `strategy: Recreate`, and expect the server to be down during each rollout.
+- **The build fails to push, or no build ever runs.**
+  - Why: the internal image registry must be `Managed`. On bare metal and vSphere it starts as `Removed`, because
+    there is no shared object storage. The `Build` capability must also be enabled.
+  - Fix: give the registry storage and set it to `Managed`. Or set `image.override` in both charts to prebuilt
+    images that you host; the charts then render no BuildConfig and no image trigger. Without the registry, also
+    set `oauthProxy.image` in `charts/all/notebook/values.yaml` to a Red Hat image such as
+    `registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19`, because the default proxy image is pulled
+    through the internal registry.
+- **The image did not change after a push, or the first build failed.**
+  - Why: ConfigChange triggers fire only when the BuildConfig is created. `rebuild-on-commit` starts a new build
+    only after a push changes the build's folder, and it never retries a failed build on its own.
+  - Fix: read the build log with `oc logs -f bc/ray-serve-llm -n rhvp-inference`, fix the cause, then start the
+    build by hand: `oc start-build ray-serve-llm -n rhvp-inference --follow` (for the notebook:
+    `oc start-build rhvp-notebook -n rhvp-notebook --follow`).
+- **The `ray-serve-llm` Argo CD app shows OutOfSync.**
+  - Why: the image trigger rewrites the Deployment's container image to a digest. The app entry in
+    `variants/prod/values-prod.yaml` handles this with `ignoreDifferences` on
+    `.spec.template.spec.containers[].image` (Deployment) and `.spec.paused` (BuildConfig), plus
+    `RespectIgnoreDifferences=true`.
+  - Fix: if you add another image-triggered resource, add the same rules.
+- **`make install` fails after about an hour, with apps not Healthy.**
+  - Why: the installer waits at most 60 minutes, and a first install can take longer. Everything before the wait
+    has already run: the pattern is installed and the secrets are loaded.
+  - Fix: watch progress with `oc get builds -n rhvp-inference` and `oc get pods -n rhvp-inference`, then run
+    `./pattern.sh make argo-healthcheck`. To skip the wait on a later install, run
+    `VP_SKIP_ARGO_HEALTHCHECK=true ./pattern.sh make install`, then run `make argo-healthcheck` once things
+    settle.
+- **The server pod stays Pending with "Insufficient nvidia.com/gpu".**
+  - Why: no node advertises `nvidia.com/gpu` yet. The chain is: the MachineSet job (AWS) → the node joins → NFD
+    labels it → the GPU Operator installs the driver and device plugin. The ClusterPolicy must tolerate the
+    `nvidia.com/gpu` taint. Argo CD sync waves do not order apps in this framework; apps retry instead.
+  - Check:
+    ```sh
+    oc get nodes -l nvidia.com/gpu.present=true
+    oc get pods -n nvidia-gpu-operator
+    oc describe node <gpu-node> | grep nvidia.com/gpu
+    ```
+- **A gated model fails to download with 401 or 403.**
+  - Why: the token is missing or not loaded. The entrypoint drops `HF_TOKEN` unless it starts with `hf_`.
+  - Fix: put your `hf_` token in the secrets file, run `./pattern.sh make load-secrets`, wait for the Secret to
+    refresh, then delete the server pod.
+
+## GPU support
+
+The server image is built for the GPU architectures in vLLM's release build list
+(https://github.com/vllm-project/vllm/blob/v0.29.0/.buildkite/release-pipeline.yaml); not tested on OpenShift by us.
+The default AWS node has one NVIDIA L4.
+
+## Uninstall
+
+- `./pattern.sh make uninstall` is marked experimental by the framework
+  (https://validatedpatterns.io/blog/2026-02-16-pattern-uninstall/). It deletes the Pattern resource, and the
+  operator then removes the apps. Find the Pattern with `oc get patterns -A`.
+- The Validated Patterns Operator, OpenShift GitOps and operator CRDs stay installed.
+- Delete the GPU MachineSet yourself, after the pattern is gone or after `gpuMachineSet: none` has synced;
+  otherwise the job may create it again:
+  ```sh
+  oc get machinesets -n openshift-machine-api \
+    -o custom-columns=NAME:.metadata.name,TYPE:.spec.template.spec.providerSpec.value.instanceType
+  oc delete machineset <name-of-the-g6.2xlarge-machineset> -n openshift-machine-api
+  ```
+- Check `oc get pv` for a leftover volume from claim `rhvp-inference/ray-serve-llm-models`.

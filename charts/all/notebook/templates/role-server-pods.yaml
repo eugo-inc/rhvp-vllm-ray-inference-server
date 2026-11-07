@@ -1,0 +1,34 @@
+# Read access to pods in the server namespace, for the notebook's server start
+# section (pod conditions).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhvp-notebook-read-pods
+  namespace: {{ .Values.notebook.serverNamespace }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhvp-notebook-read-pods
+  namespace: {{ .Values.notebook.serverNamespace }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhvp-notebook-read-pods
+subjects:
+  - kind: ServiceAccount
+    name: rhvp-notebook
+    namespace: {{ .Release.Namespace }}

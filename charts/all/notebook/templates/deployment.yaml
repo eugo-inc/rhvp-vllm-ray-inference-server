@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rhvp-notebook
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+  {{- if include "notebook.inClusterBuild" . }}
+  annotations:
+    # Rolls the Deployment to each image a finished build pushes to the ImageStream.
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"rhvp-notebook:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"notebook\")].image"}]'
+  {{- end }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  # The first start waits for the in-cluster build of the notebook image.
+  progressDeadlineSeconds: 3600
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rhvp-notebook
+  template:
+    metadata:
+      labels:
+        {{- include "notebook.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: rhvp-notebook
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/arch: {{ .Values.arch | quote }}
+      containers:
+        # The image's entrypoint (notebooks/entrypoint.sh) copies the baked-in
+        # notebooks into /work and runs JupyterLab on 127.0.0.1:8888 with root_dir
+        # /work, so nothing outside this pod reaches it; the oauth-proxy container
+        # below is the only way in, and Jupyter's own token is off. The command is
+        # set here so the base image's CMD is never passed to it as arguments.
+        - name: notebook
+          image: {{ include "notebook.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /opt/app-root/notebooks/entrypoint.sh
+          env:
+            - name: RHVP_ENDPOINT
+              value: {{ .Values.notebook.endpoint | quote }}
+            - name: RHVP_MODEL_ID
+              value: {{ required "global.model.id is required" .Values.global.model.id | quote }}
+            {{- with .Values.global.model.revision }}
+            - name: RHVP_MODEL_REVISION
+              value: {{ . | quote }}
+            {{- end }}
+            - name: RHVP_SERVER_NAMESPACE
+              value: {{ .Values.notebook.serverNamespace | quote }}
+            - name: RHVP_SERVER_LABEL_SELECTOR
+              value: {{ .Values.notebook.serverLabelSelector | quote }}
+            {{- if .Values.notebook.internal }}
+            - name: RHVP_INTERNAL
+              value: "1"
+            {{- end }}
+            {{- with .Values.notebook.replay }}
+            - name: RHVP_REPLAY
+              value: {{ . | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.notebook.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          # The kubelet cannot reach 127.0.0.1 inside the pod, so check the port
+          # from inside the container.
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - exec 3<>/dev/tcp/127.0.0.1/8888
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+        - name: oauth-proxy
+          image: {{ .Values.oauthProxy.image | quote }}
+          imagePullPolicy: {{ .Values.oauthProxy.pullPolicy }}
+          args:
+            - --provider=openshift
+            - --openshift-service-account=rhvp-notebook
+            - --https-address=:8443
+            - --http-address=
+            - --upstream=http://127.0.0.1:8888
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/proxy/secrets/session_secret
+            - --cookie-secure=true
+            - '--openshift-sar={"namespace":"{{ .Release.Namespace }}","resource":"services","resourceName":"rhvp-notebook","verb":"update"}'
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.oauthProxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: proxy-cookie
+              mountPath: /etc/proxy/secrets
+              readOnly: true
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: {{ .Values.notebook.workSizeLimit }}
+        - name: tmp
+          emptyDir: {}
+        - name: proxy-tls
+          secret:
+            secretName: rhvp-notebook-tls
+        - name: proxy-cookie
+          secret:
+            secretName: rhvp-notebook-proxy

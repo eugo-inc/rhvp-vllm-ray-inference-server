@@ -1,0 +1,79 @@
+# Stubs for local rendering. At deploy time the Validated Patterns operator injects
+# global.repoURL, global.targetRevision and global.localClusterDomain, and
+# global.model comes from values-global.yaml.
+global:
+  repoURL: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server
+  targetRevision: main
+  localClusterDomain: apps.example.com
+  clusterPlatform: AWS
+  model:
+    id: qwen2.5-0.5b-instruct
+    revision: ""
+
+# CPU architecture (kubernetes.io/arch) of the node that builds and runs the image.
+arch: amd64
+
+image:
+  # A prebuilt notebook image to run instead of building one in the cluster. When
+  # set, the chart renders no BuildConfig, no ImageStream and no image trigger.
+  override: ""
+  pullPolicy: IfNotPresent
+
+# In-cluster image build (BuildConfig rhvp-notebook, Docker strategy). The image
+# bakes in the notebooks/ folder at /opt/app-root/notebooks.
+build:
+  contextDir: notebooks
+  dockerfilePath: Containerfile
+  # Name of a Secret in rhvp-notebook with git credentials, for a private fork.
+  sourceSecret: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      ephemeral-storage: 10Gi
+  completionDeadlineSeconds: 3600
+
+notebook:
+  # In-cluster Service of the inference server (no Route in between).
+  endpoint: http://ray-serve-llm.rhvp-inference.svc:8000
+  serverNamespace: rhvp-inference
+  serverLabelSelector: app.kubernetes.io/name=ray-serve-llm
+  # true sets RHVP_INTERNAL=1 (adds the amber INTERNAL strip).
+  internal: false
+  # Path to a recorded run inside the image; non-empty sets RHVP_REPLAY (REPLAY mode).
+  replay: ""
+  # Size of the writable /work folder the notebooks are copied into at start.
+  workSizeLimit: 2Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# OpenShift OAuth proxy in front of JupyterLab. Only users who may update the
+# Service rhvp-notebook in namespace rhvp-notebook get in (namespace editors and
+# admins, cluster admins).
+oauthProxy:
+  # The cluster's own oauth-proxy image: the ImageStream openshift/oauth-proxy,
+  # tag v4.4, that every OpenShift 4 cluster carries (cluster-samples-operator,
+  # manifests/08-openshift-imagestreams.yaml; the tag resolves to the oauth-proxy
+  # image of the installed OpenShift release). It is pulled through the internal
+  # image registry. Without that registry, use a Red Hat image instead, for example
+  # registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.19
+  image: image-registry.openshift-image-registry.svc:5000/openshift/oauth-proxy:v4.4
+  pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# Lets the imperative job ansible/rebuild-on-commit.yaml start builds in this
+# namespace. The ServiceAccount is the clustergroup chart's default imperative one.
+rebuildOnCommit:
+  enabled: true
+  serviceAccount:
+    name: imperative-sa
+    namespace: imperative

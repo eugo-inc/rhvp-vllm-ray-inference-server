@@ -1,0 +1,112 @@
+# Inference server image: Ray Serve LLM (Ray 2.60.0) with the vLLM 0.29.0
+# engine and PyTorch 2.13.0, all from PyPI, on NVIDIA's CUDA 13.0.3 UBI 9 image.
+#
+# The cluster builds it with BuildConfig ray-serve-llm (contextDir
+# inference-server, dockerfilePath Containerfile). To build it by hand from the
+# repository root:
+#
+#   podman build -t rhvp-server:dev inference-server
+#   docker build -t rhvp-server:dev inference-server
+#
+# The base is the CUDA *devel* flavour on purpose: it ships nvcc, which
+# FlashInfer (used by vLLM's sampler) needs to compile its GPU kernels the first
+# time they run, and its CUDA 13.0.3 matches the CUDA libraries that PyTorch
+# 2.13.0 pins. The base stays exactly as pinned (no `dnf update`), so a rebuild
+# from the same commit starts from the same base. The digest is a multi-arch
+# index (amd64 and arm64); docker.io/nvidia/cuda:13.0.3-devel-ubi9 has the same.
+FROM nvcr.io/nvidia/cuda:13.0.3-devel-ubi9@sha256:c99ab53f9d1e0ba4b5817014ac398aafec516042b73e09d74fac4d2598f8f5fb
+
+LABEL name="rhvp-vllm-ray-inference-server" \
+      summary="OpenAI-compatible LLM server: Ray Serve LLM with the vLLM engine" \
+      description="Ray 2.60.0, vLLM 0.29.0 and PyTorch 2.13.0 from PyPI on NVIDIA's CUDA 13.0.3 UBI 9 image. Community sandbox pattern by Eugo; not produced or validated by Red Hat." \
+      io.k8s.display-name="Ray Serve LLM inference server" \
+      io.k8s.description="Ray 2.60.0, vLLM 0.29.0 and PyTorch 2.13.0 from PyPI on NVIDIA's CUDA 13.0.3 UBI 9 image." \
+      io.openshift.expose-services="8000:http" \
+      io.openshift.tags="llm,vllm,ray,inference" \
+      vendor="Eugo" \
+      maintainer="Eugo"
+
+USER 0
+
+# System packages, all from the public UBI 9 repositories (no subscription):
+# - python3.12, python3.12-devel: the interpreter, and Python.h for the small
+#   C launcher Triton compiles with gcc the first time it runs.
+# - gcc, gcc-c++: the C and C++ compilers Triton looks for (and the host
+#   compiler for nvcc).
+# - numactl, numactl-libs, libibverbs: the NUMA tool and library and the RDMA
+#   verbs library, which vLLM 0.29.0's own image also installs.
+# - git-core, procps-ng (ps, top), which: everyday tools inside the pod.
+RUN dnf -y install --setopt=install_weak_deps=False --nodocs \
+        python3.12 python3.12-devel gcc gcc-c++ numactl numactl-libs \
+        libibverbs git-core procps-ng which \
+ && dnf clean all \
+ && rm -rf /var/cache/dnf /var/cache/yum
+
+# CUDA_HOME: FlashInfer finds nvcc here.
+# HOME, USER, LOGNAME: OpenShift runs the container as an arbitrary UID with no
+#   /etc/passwd entry; these give libraries a writable home and a user name.
+# RAY_TMPDIR: short on purpose; Ray puts Unix sockets under it and socket paths
+#   are limited to 108 bytes. The ready file is $RAY_TMPDIR/rhvp-ready.
+# HF_HOME: model weights (a PVC in the cluster). The compile caches go under
+#   /cache (an emptyDir in the cluster, so every new pod starts cold).
+# The last four lines keep usage telemetry and request-prompt logging off.
+ENV APP_ROOT=/opt/app-root \
+    VIRTUAL_ENV=/opt/app-root/venv \
+    PATH=/opt/app-root/venv/bin:${PATH} \
+    CUDA_HOME=/usr/local/cuda \
+    HOME=/opt/app-root/home \
+    USER=rhvp \
+    LOGNAME=rhvp \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    RHVP_CONFIG=/config/llm.yaml \
+    RAY_TMPDIR=/tmp/r \
+    HF_HOME=/models/hf \
+    TRITON_CACHE_DIR=/cache/triton \
+    VLLM_CACHE_ROOT=/cache/vllm \
+    FLASHINFER_WORKSPACE_BASE=/cache/flashinfer \
+    XDG_CACHE_HOME=/cache/xdg \
+    RAY_USAGE_STATS_ENABLED=0 \
+    VLLM_NO_USAGE_STATS=1 \
+    DO_NOT_TRACK=1 \
+    RAYLLM_ENABLE_REQUEST_PROMPT_LOGS=0
+
+COPY requirements.in requirements-x86_64.lock requirements-aarch64.lock /opt/app-root/src/
+
+# One layer: virtualenv, wheels, byte-compiling and permissions. Changing file
+# permissions in a later RUN would store the whole virtualenv a second time.
+# - Only wheels, and only the hashes in the lock for this CPU architecture
+#   (uname -m is x86_64 or aarch64): a missing wheel fails the build instead
+#   of compiling from source.
+# - pip byte-compiles what it installs; compileall then covers anything left,
+#   and a vendored file that does not compile is not fatal.
+# - The virtualenv stays read-only (owned by root). Only the home folder, the
+#   cache and model folders and RAY_TMPDIR are writable by group 0, the group
+#   OpenShift gives the arbitrary UID.
+RUN set -eux; \
+    lock="/opt/app-root/src/requirements-$(uname -m).lock"; \
+    test -f "$lock"; \
+    python3.12 -m venv /opt/app-root/venv; \
+    /opt/app-root/venv/bin/pip install --no-cache-dir --only-binary :all: --require-hashes -r "$lock"; \
+    /opt/app-root/venv/bin/python -m compileall -q -j 0 /opt/app-root/venv > /dev/null \
+        || echo "compileall: some vendored files did not compile; pip already compiled the rest"; \
+    mkdir -p /opt/app-root/home /cache/triton /cache/vllm /cache/flashinfer /cache/xdg \
+             /tmp/r /models/hf /config; \
+    chgrp -R 0 /opt/app-root/home /cache /tmp/r /models; \
+    chmod -R g=u /opt/app-root/home /cache /tmp/r /models
+
+COPY serve_app.py rhvp_status.py entrypoint.sh /opt/app-root/src/
+
+RUN set -eux; \
+    chmod 0755 /opt/app-root/src/entrypoint.sh; \
+    chmod 0644 /opt/app-root/src/serve_app.py /opt/app-root/src/rhvp_status.py; \
+    /opt/app-root/venv/bin/python -m compileall -q /opt/app-root/src; \
+    /opt/app-root/venv/bin/python -c "from importlib.metadata import version as v; print(*(p + ' ' + v(p) for p in ('ray', 'vllm', 'torch')))"
+
+WORKDIR /opt/app-root/src
+USER 1001
+EXPOSE 8000
+
+# Replaces the base image's /opt/nvidia/nvidia_entrypoint.sh.
+ENTRYPOINT ["/opt/app-root/src/entrypoint.sh"]
+CMD []

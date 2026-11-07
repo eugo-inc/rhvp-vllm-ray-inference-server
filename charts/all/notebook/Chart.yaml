@@ -1,0 +1,11 @@
+apiVersion: v2
+name: notebook
+description: >-
+  JupyterLab with the stock vLLM timing notebook, behind OpenShift login (oauth-proxy),
+  with its image built in the cluster from this repository
+keywords:
+  - pattern
+  - jupyter
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

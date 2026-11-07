@@ -1,0 +1,53 @@
+---
+name: Lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Relaxed yamllint rules. Helm templates are Go templates, not YAML, so they are skipped.
+  YAMLLINT_CONFIG: |
+    extends: relaxed
+    ignore: |
+      .git/
+      charts/*/*/templates/
+    rules:
+      line-length: disable
+
+jobs:
+  lint:
+    name: YAML, shell, Python and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install lint and test tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install yamllint pytest pyyaml jsonschema httpx
+
+      - name: yamllint
+        run: yamllint -d "$YAMLLINT_CONFIG" . values-secret.yaml.template
+
+      - name: shellcheck (pattern.sh is managed by patternizer and skipped)
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          git ls-files -z -- '*.sh' ':!:pattern.sh' | xargs -0 -r shellcheck
+
+      - name: Python byte-compile
+        run: git ls-files -z -- '*.py' | xargs -0 -r python -m py_compile
+
+      - name: Unit tests
+        run: python -m pytest -q tests/test_serve_config.py tests/test_secrets_template.py tests/test_charts.py

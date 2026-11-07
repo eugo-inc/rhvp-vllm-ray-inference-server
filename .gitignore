@@ -19,3 +19,6 @@ __pycache__/
 .claude/data/
 .claude/settings.local.json
 .claude/plans/
+# Generated chart renders and local smoke-test logs (logs can name local hardware)
+.render/
+.smoke/

@@ -1,25 +1,123 @@
 clusterGroup:
   name: prod
+
+  # Maps, not lists: maps merge across values files, lists replace each other.
+  # An empty entry gets an OperatorGroup that targets only its own namespace,
+  # which is what the NFD and NVIDIA GPU operators support.
   namespaces:
-    external-secrets:
+    vault:
     external-secrets-operator:
       operatorGroup: true
       targetNamespaces: []
-    rhvp-vllm-ray-inference-server:
-    vault:
+    external-secrets:
+    openshift-nfd:
+    nvidia-gpu-operator:
+    rhvp-inference:
+    rhvp-notebook:
+
   subscriptions:
     eso:
       name: openshift-external-secrets-operator
       namespace: external-secrets-operator
       channel: stable-v1
+    nfd:
+      name: nfd
+      namespace: openshift-nfd
+      channel: stable
+    nvidia:
+      name: gpu-operator-certified
+      namespace: nvidia-gpu-operator
+      source: certified-operators
+      channel: stable
+
+  # Added to every application and to the cluster group itself. A file that does
+  # not exist is skipped. Only overrides/values-gpu-machineset-create-AWS.yaml
+  # exists, so the GPU machine job runs only with global.gpuMachineSet: create
+  # on AWS.
+  sharedValueFiles:
+    - '/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml'
+
+  # Application keys equal the chart folder names under charts/all/.
   applications:
-    openshift-external-secrets:
-      name: openshift-external-secrets
-      namespace: external-secrets
-      chart: openshift-external-secrets
-      chartVersion: 0.0.*
     vault:
       name: vault
       namespace: vault
       chart: hashicorp-vault
       chartVersion: 0.1.*
+    openshift-external-secrets:
+      name: openshift-external-secrets
+      namespace: external-secrets
+      chart: openshift-external-secrets
+      chartVersion: 0.0.*
+    nfd-config:
+      name: nfd-config
+      namespace: openshift-nfd
+      path: charts/all/nfd-config
+      ignoreDifferences:
+        - group: nfd.openshift.io
+          kind: NodeFeatureDiscovery
+          jqPathExpressions:
+            - '.spec.customConfig'
+            - '.spec.topologyupdater'
+    nvidia-gpu-config:
+      name: nvidia-gpu-config
+      namespace: nvidia-gpu-operator
+      path: charts/all/nvidia-gpu-config
+    ray-serve-llm:
+      name: ray-serve-llm
+      namespace: rhvp-inference
+      path: charts/all/ray-serve-llm
+      # The image trigger rewrites the container image to the digest of each
+      # finished build, so Argo CD must not compare or reset it.
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jqPathExpressions:
+            - '.spec.template.spec.containers[].image'
+        - group: build.openshift.io
+          kind: BuildConfig
+          jqPathExpressions:
+            - '.spec.paused'
+      # A per-application syncPolicy replaces the chart default entirely, so
+      # automated and retry are restated here.
+      syncPolicy:
+        automated: {}
+        retry:
+          limit: 20
+        syncOptions:
+          - RespectIgnoreDifferences=true
+    notebook:
+      name: notebook
+      namespace: rhvp-notebook
+      path: charts/all/notebook
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jqPathExpressions:
+            - '.spec.template.spec.containers[].image'
+        - group: build.openshift.io
+          kind: BuildConfig
+          jqPathExpressions:
+            - '.spec.paused'
+        # The oauth-proxy cookie secret is generated once, when the Secret is
+        # first created; later renders must not replace it.
+        - kind: Secret
+          name: rhvp-notebook-proxy
+          namespace: rhvp-notebook
+          jsonPointers:
+            - /data/session_secret
+      syncPolicy:
+        automated: {}
+        retry:
+          limit: 20
+        syncOptions:
+          - RespectIgnoreDifferences=true
+
+  imperative:
+    # A list: a later values file that sets jobs replaces this whole list.
+    # overrides/values-gpu-machineset-create-AWS.yaml therefore restates the
+    # rebuild-on-commit job below; keep the two in step.
+    jobs:
+      - name: rebuild-on-commit
+        playbook: ansible/rebuild-on-commit.yaml
+        timeout: 300

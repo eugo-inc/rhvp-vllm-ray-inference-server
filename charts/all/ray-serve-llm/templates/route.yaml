@@ -1,0 +1,22 @@
+{{- if .Values.route.enabled }}
+# The API behind this Route has no authentication.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ray-serve-llm
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+  annotations:
+    haproxy.router.openshift.io/timeout: {{ .Values.route.timeout | quote }}
+spec:
+  host: ray-serve-llm-{{ .Release.Namespace }}.{{ .Values.global.localClusterDomain }}
+  to:
+    kind: Service
+    name: ray-serve-llm
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

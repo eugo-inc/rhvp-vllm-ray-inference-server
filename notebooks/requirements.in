@@ -1,0 +1,11 @@
+# Top-level Python packages for the notebook image. Every other package is resolved from these lines into
+# requirements.lock, hash-locked, for both CPU types (x86_64 and aarch64), wheels only:
+#
+#   uv pip compile requirements.in --universal --python-version 3.12 \
+#       --only-binary :all: --generate-hashes -o requirements.lock
+#
+# The Containerfile installs requirements.lock with --only-binary :all: --require-hashes.
+jupyterlab==4.6.4
+ipykernel==7.4.0
+nbformat==5.11.1
+httpx==0.28.1

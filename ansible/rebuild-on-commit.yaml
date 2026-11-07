@@ -1,0 +1,43 @@
+---
+# Imperative job "rebuild-on-commit" (clusterGroup.imperative.jobs in
+# variants/prod/values-prod.yaml, restated in overrides/values-gpu-machineset-create-AWS.yaml).
+#
+# A BuildConfig's ConfigChange trigger fires only when the BuildConfig is created, so a
+# git push alone never rebuilds the server or notebook image. This job does: every 10
+# minutes the Validated Patterns imperative CronJob runs it inside a shallow clone of the
+# pattern repository at the pattern's target revision, and it starts a build when that
+# commit changed a build's folder since the last successful build. It never waits for a
+# build and never retries a failed build of the same folder; rebuild_on_commit.py lists
+# every rule.
+#
+# Permissions: the charts give the imperative ServiceAccount (imperative/imperative-sa) a
+# Role in rhvp-inference and rhvp-notebook to read builds and start one
+# (charts/all/*/templates/rebuild-rbac.yaml).
+- name: Start image builds for new commits
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    rhvp_rebuild_targets:
+      - namespace: rhvp-inference
+        buildconfig: ray-serve-llm
+        context_dir: inference-server
+      - namespace: rhvp-notebook
+        buildconfig: rhvp-notebook
+        context_dir: notebooks
+  tasks:
+    - name: Start a build where the checked-out commit changed the build folder
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/rebuild_on_commit.py"
+          - --repo
+          - "{{ playbook_dir | dirname }}"
+          - --targets
+          - "{{ rhvp_rebuild_targets | to_json }}"
+      register: rhvp_rebuild
+      changed_when: "'STARTED ' in rhvp_rebuild.stdout"
+
+    - name: Report what was decided
+      ansible.builtin.debug:
+        var: rhvp_rebuild.stdout_lines

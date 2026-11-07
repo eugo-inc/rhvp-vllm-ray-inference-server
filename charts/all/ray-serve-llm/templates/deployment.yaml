@@ -1,0 +1,152 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-serve-llm
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+  {{- if include "ray-serve-llm.inClusterBuild" . }}
+  annotations:
+    # Rolls the Deployment to each image a finished build pushes to the ImageStream.
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"ray-serve-llm:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"server\")].image"}]'
+  {{- end }}
+spec:
+  replicas: 1
+  # One GPU and a ReadWriteOnce volume: a rolling update would need a second GPU and
+  # the same volume at once, and would never finish.
+  strategy:
+    type: Recreate
+  # A first start may wait for the GPU node, the in-cluster build, the image pull
+  # and the model download.
+  progressDeadlineSeconds: 7200
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-serve-llm
+  template:
+    metadata:
+      labels:
+        {{- include "ray-serve-llm.labels" . | nindent 8 }}
+      annotations:
+        # Restarts the pod when llm.yaml changes; the server reads it only at start.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      # Lets the pause container reap Ray's orphaned child processes.
+      shareProcessNamespace: true
+      terminationGracePeriodSeconds: {{ .Values.server.terminationGracePeriodSeconds | int }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/arch: {{ .Values.arch | quote }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: In
+                    values:
+                      - "true"
+      tolerations:
+        - key: {{ .Values.gpu.taintKey | quote }}
+          operator: Exists
+      containers:
+        - name: server
+          image: {{ include "ray-serve-llm.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.httpPort | int }}
+              protocol: TCP
+          env:
+            - name: RHVP_CONFIG
+              value: /config/llm.yaml
+            - name: HF_HOME
+              value: /models/hf
+            - name: TRITON_CACHE_DIR
+              value: /cache/triton
+            - name: VLLM_CACHE_ROOT
+              value: /cache/vllm
+            - name: FLASHINFER_WORKSPACE_BASE
+              value: /cache/flashinfer
+            - name: XDG_CACHE_HOME
+              value: /cache/xdg
+            - name: RAY_TMPDIR
+              value: /tmp/r
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-secret
+                  key: hftoken
+                  optional: true
+          resources:
+            requests:
+              {{- toYaml .Values.server.resources.requests | nindent 14 }}
+              {{ .Values.gpu.resourceName }}: {{ .Values.server.gpuCount | int }}
+            limits:
+              {{- toYaml .Values.server.resources.limits | nindent 14 }}
+              {{ .Values.gpu.resourceName }}: {{ .Values.server.gpuCount | int }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            exec:
+              command:
+                - test
+                - -f
+                - /tmp/r/rhvp-ready
+            periodSeconds: {{ .Values.server.probes.startup.periodSeconds | int }}
+            failureThreshold: {{ .Values.server.probes.startup.failureThreshold | int }}
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - test
+                - -f
+                - /tmp/r/rhvp-ready
+            periodSeconds: {{ .Values.server.probes.readiness.periodSeconds | int }}
+            failureThreshold: {{ .Values.server.probes.readiness.failureThreshold | int }}
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthz
+              port: http
+            initialDelaySeconds: {{ .Values.server.probes.liveness.initialDelaySeconds | int }}
+            periodSeconds: {{ .Values.server.probes.liveness.periodSeconds | int }}
+            timeoutSeconds: {{ .Values.server.probes.liveness.timeoutSeconds | int }}
+            failureThreshold: {{ .Values.server.probes.liveness.failureThreshold | int }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: models
+              mountPath: /models
+            - name: cache
+              mountPath: /cache
+            - name: ray-tmp
+              mountPath: /tmp/r
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: config
+          configMap:
+            name: ray-serve-llm-config
+            items:
+              - key: llm.yaml
+                path: llm.yaml
+        - name: models
+          persistentVolumeClaim:
+            claimName: ray-serve-llm-models
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.server.cacheSizeLimit }}
+        - name: ray-tmp
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.server.shmSizeLimit }}

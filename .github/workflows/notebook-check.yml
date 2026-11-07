@@ -1,0 +1,40 @@
+---
+# The sample notebook: the committed notebook, prompt set and synthetic recording must be what
+# notebooks/make_notebook.py writes, and the notebook's rules and measurement tests must pass. The rule tests also run
+# the whole notebook headless in REPLAY mode against the stand-in server, so no GPU is needed.
+name: Notebook check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  notebook:
+    name: Notebook generated, rules and REPLAY run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the test tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest==9.2.0 nbformat==5.11.1 nbclient==0.11.0 nbconvert==7.17.2 \
+            ipykernel==7.4.0 httpx==0.28.1
+
+      - name: The committed notebook is what make_notebook.py writes
+        run: python notebooks/make_notebook.py --check
+
+      - name: Notebook rules and measurement tests
+        run: python -m pytest -q tests/test_notebook_rules.py tests/test_measure.py

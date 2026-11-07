@@ -1,0 +1,36 @@
+# The notebook image: JupyterLab, with this folder (the sample notebook, rhvp_bench, the prompt set and the
+# recordings) baked in at /opt/app-root/notebooks. Nothing is cloned at runtime.
+#
+# The cluster builds it with the rhvp-notebook BuildConfig (contextDir: notebooks, dockerfilePath: Containerfile).
+# When the pod starts, entrypoint.sh copies the baked-in folder into the writable /work and runs JupyterLab on
+# 127.0.0.1:8888, behind the pod's OpenShift oauth-proxy sidecar.
+FROM registry.access.redhat.com/ubi9/python-312@sha256:19e1e927138b40454858f297884c2c4e2f13f5ba95b3f55faea174d3cbb57067
+
+# Every package pinned with its hashes (requirements.lock, made from requirements.in); wheels only, so a missing
+# wheel fails the build instead of compiling from source. Installed as the image's own user 1001 into the base
+# image's virtualenv at /opt/app-root.
+COPY --chown=1001:0 requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r /tmp/requirements.lock \
+ && rm -f /tmp/requirements.lock
+
+# The baked-in folder is read-only; /work and HOME are writable by group 0, the group OpenShift runs an
+# arbitrary UID in.
+USER 0
+COPY . /opt/app-root/notebooks
+RUN chown -R 1001:0 /opt/app-root/notebooks \
+ && chmod -R u=rwX,g=rX,o=rX /opt/app-root/notebooks \
+ && chmod 0755 /opt/app-root/notebooks/entrypoint.sh \
+ && mkdir -p /work \
+ && chown 1001:0 /work \
+ && chmod 0775 /work \
+ && fix-permissions /opt/app-root/src -P
+
+ENV RHVP_NOTEBOOKS=/opt/app-root/notebooks \
+    RHVP_WORK=/work \
+    JUPYTER_RUNTIME_DIR=/tmp/jupyter-runtime
+USER 1001
+WORKDIR /work
+# No EXPOSE: JupyterLab listens on 127.0.0.1:8888 inside the pod; only the oauth-proxy sidecar's port is served.
+# Replaces the base image's s2i entrypoint (container-entrypoint) and its usage CMD.
+ENTRYPOINT ["/opt/app-root/notebooks/entrypoint.sh"]
+CMD []

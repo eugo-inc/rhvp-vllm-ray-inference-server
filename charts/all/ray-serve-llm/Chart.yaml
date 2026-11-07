@@ -1,0 +1,12 @@
+apiVersion: v2
+name: ray-serve-llm
+description: >-
+  OpenAI-compatible LLM server: stock vLLM on Ray Serve LLM in one pod, with its image
+  built in the cluster from this repository
+keywords:
+  - pattern
+  - vllm
+  - ray
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,26 @@
+# Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0
+# (charts/nfd/templates/config.yaml). Added: the SkipDryRunOnMissingResource sync
+# option, so Argo CD can sync this before the NFD operator has installed its CRD.
+apiVersion: nfd.openshift.io/v1
+kind: NodeFeatureDiscovery
+metadata:
+  name: nfd-instance
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  operand:
+    image: >-
+      registry.redhat.io/openshift4/ose-node-feature-discovery{{ ternary "-rhel9" "" (semverCompare ">=4.15.0" .Values.global.clusterVersion) }}:v{{ .Values.global.clusterVersion }}
+    servicePort: 12000
+  workerConfig:
+    configData: |
+      core:
+        sleepInterval: 60s
+      sources:
+        pci:
+          deviceClassWhitelist:
+            - "0200"
+            - "03"
+            - "12"
+          deviceLabelFields:
+            - "vendor"

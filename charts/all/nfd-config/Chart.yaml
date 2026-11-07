@@ -1,0 +1,7 @@
+# Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0 (charts/nfd).
+apiVersion: v2
+name: nfd-config
+description: Node Feature Discovery instance that labels GPU nodes for the NVIDIA GPU Operator
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

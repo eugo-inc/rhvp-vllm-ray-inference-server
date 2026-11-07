@@ -1,0 +1,61 @@
+# Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0
+# (overrides/values-gpu-AWS.yaml).
+#
+# Included through clusterGroup.sharedValueFiles in variants/prod/values-prod.yaml
+# only when global.gpuMachineSet is "create" and the cluster platform is AWS.
+#
+# What it does: an imperative job (rhvp.cluster_utils.create_machineset) applies one
+# MachineSet with one g6.2xlarge worker (one NVIDIA L4 GPU), tainted
+# nvidia.com/gpu=true:NoSchedule and labelled node-role.kubernetes.io/nvidia-gpu.
+# AWS bills that instance by the hour while it runs.
+#
+# The job copies the first MachineSet the API lists in openshift-machine-api (its
+# availability zone, subnet, AMI and security groups) and re-applies the result every
+# 10 minutes. While this file is included, scaling that MachineSet to 0 or deleting it
+# is undone on the next run. To remove the GPU machine: set global.gpuMachineSet: none,
+# push, wait for the sync, then delete the MachineSet named
+# <infrastructure-name>-nvidia-gpu-<zone> in openshift-machine-api.
+#
+# clusterGroup.imperative.jobs is a list, and a list in a later values file replaces
+# the earlier one. This file therefore restates every imperative job of the prod
+# variant, the GPU machine first. Keep it in step with variants/prod/values-prod.yaml.
+clusterGroup:
+  imperative:
+    jobs:
+      - name: create-gpu-machineset
+        playbook: rhvp.cluster_utils.create_machineset
+        verbosity: -vvv
+        extravars:
+          - max_machineset_count=1
+          - machineset_replicas=1
+          - ensure_two_machine_minimum=false
+          - machineset_name=nvidia-gpu
+          - machineset_labels=
+          - machineset_instance_type=g6.2xlarge
+          - 'machineset_taints=[{"effect":"NoSchedule","key":"nvidia.com/gpu","value":"true"}]'
+          - 'machineset_node_labels={"node-role.kubernetes.io/nvidia-gpu":""}'
+          - machineset_api_version=machine.openshift.io/v1beta1
+      - name: rebuild-on-commit
+        playbook: ansible/rebuild-on-commit.yaml
+        timeout: 300
+    # Replaces the imperative ServiceAccount's default read-only ClusterRole; the
+    # last rule keeps read access to everything.
+    clusterRoleYaml:
+      - apiGroups:
+          - "*"
+        resources:
+          - machinesets
+          - persistentvolumeclaims
+          - datavolumes
+          - dataimportcrons
+          - datasources
+        verbs:
+          - "*"
+      - apiGroups:
+          - "*"
+        resources:
+          - "*"
+        verbs:
+          - get
+          - list
+          - watch

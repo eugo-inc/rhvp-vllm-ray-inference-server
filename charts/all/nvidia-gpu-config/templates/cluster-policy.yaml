@@ -1,0 +1,95 @@
+# Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0
+# (charts/nvidia-config/templates/config.yaml). Added: the SkipDryRunOnMissingResource
+# sync option, so Argo CD can sync this before the GPU Operator has installed its CRD.
+# daemonsets.tolerations matches the taint the GPU MachineSet puts on its node
+# (overrides/values-gpu-machineset-create-AWS.yaml); without it the driver and device
+# plugin never run there.
+apiVersion: nvidia.com/v1
+kind: ClusterPolicy
+metadata:
+  name: nvidia-gpu-cluster-policy
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+  namespace: nvidia-gpu-operator
+spec:
+  vgpuDeviceManager:
+    enabled: true
+  migManager:
+    enabled: true
+  operator:
+    defaultRuntime: crio
+    initContainer: {}
+    runtimeClass: nvidia
+    use_ocp_driver_toolkit: true
+  dcgm:
+    enabled: true
+  gfd:
+    enabled: true
+  dcgmExporter:
+    config:
+      name: ''
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  driver:
+    certConfig:
+      name: ''
+    enabled: true
+    kernelModuleConfig:
+      name: ''
+    licensingConfig:
+      configMapName: ''
+      nlsEnabled: false
+    upgradePolicy:
+      autoUpgrade: true
+      drain:
+        deleteEmptyDir: false
+        enable: false
+        force: false
+        timeoutSeconds: 300
+      maxParallelUpgrades: 1
+      maxUnavailable: 25%
+      podDeletion:
+        deleteEmptyDir: false
+        force: false
+        timeoutSeconds: 300
+      waitForCompletion:
+        timeoutSeconds: 0
+    virtualTopology:
+      config: ''
+  devicePlugin:
+    config:
+      default: ''
+      name: ''
+    enabled: true
+  mig:
+    strategy: single
+  sandboxDevicePlugin:
+    enabled: true
+  validator:
+    plugin:
+      env:
+        - name: WITH_WORKLOAD
+          value: 'false'
+  nodeStatusExporter:
+    enabled: true
+  daemonsets:
+    rollingUpdate:
+      maxUnavailable: '1'
+    tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        value: 'true'
+    updateStrategy: RollingUpdate
+  sandboxWorkloads:
+    defaultWorkload: container
+    enabled: false
+  gds:
+    enabled: false
+  vgpuManager:
+    enabled: false
+  vfioManager:
+    enabled: true
+  toolkit:
+    enabled: true
+    installDir: /usr/local/nvidia

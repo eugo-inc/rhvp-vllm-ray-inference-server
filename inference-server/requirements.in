@@ -1,0 +1,29 @@
+# Top-level Python requirements for the server image. Everything else is
+# resolved from these two lines into one hash-locked file per CPU architecture:
+#
+#   uv pip compile requirements.in --python-version 3.12 \
+#       --python-platform x86_64-manylinux_2_34 \
+#       --only-binary :all: --generate-hashes -o requirements-x86_64.lock
+#   uv pip compile requirements.in --python-version 3.12 \
+#       --python-platform aarch64-manylinux_2_34 \
+#       --only-binary :all: --generate-hashes -o requirements-aarch64.lock
+#
+# Both locks target glibc 2.34 (manylinux_2_34), the glibc of the UBI 9 base
+# image. Two wheels need it: tilelang 0.1.12 ships its aarch64 wheel only as
+# manylinux_2_34, and llguidance 1.7.x ships its x86_64 wheel only as
+# manylinux_2_31, so an older (manylinux_2_28) target finds no wheel for them.
+# The Containerfile installs with --only-binary :all: --require-hashes, so a
+# missing wheel fails the build instead of compiling from source.
+
+# Ray Serve LLM. The `llm` extra pins vLLM exactly: Ray 2.60.0 pins
+# vllm[audio]==0.29.0, which pins torch==2.13.0. Ray therefore decides the
+# vLLM and PyTorch versions; bump Ray and vLLM together, never one alone.
+ray[llm]==2.60.0
+
+# PyTorch 2.13.0 pins its CUDA libraries through cuda-toolkit 13.0.3 but does
+# not ask for nvcc or the CCCL headers. A vLLM dependency asks for both with
+# no version, so without this line the resolver picks the newest ones
+# (nvcc 13.5.x and CCCL 13.3.x when the locks were made). Pinning the toolkit
+# meta-package keeps the pip nvcc and CCCL on CUDA 13.0.3, the same release
+# as PyTorch's CUDA libraries and as the base image.
+cuda-toolkit[nvcc,cccl]==13.0.3

@@ -7,6 +7,26 @@ global:
     installPlanApproval: Automatic
     syncPolicy: Automatic
     useCSV: false
+
+  # GPU machine. One of:
+  #   create - on AWS, the install adds one GPU worker: a g6.2xlarge with one
+  #            NVIDIA L4 GPU (overrides/values-gpu-machineset-create-AWS.yaml).
+  #            AWS bills that instance by the hour for as long as it runs.
+  #   none   - the install adds no machine; bring your own GPU worker node.
+  # On platforms other than AWS no machine is added, whatever this says.
+  # Change it in your fork BEFORE you install. Switching to "none" later stops
+  # the job but does not delete a machine that was already created.
+  gpuMachineSet: create
+
+  # The model the server loads from Hugging Face.
+  model:
+    # Name clients put in the "model" field of OpenAI-style requests.
+    id: qwen2.5-0.5b-instruct
+    # Hugging Face repository the weights are downloaded from.
+    source: Qwen/Qwen2.5-0.5B-Instruct
+    # Hugging Face commit of that repository; empty means its newest commit.
+    revision: 7ae557604adf67be50417f59c2c2f167def9a775
+
 main:
   variant: prod
   multiSourceConfig:
