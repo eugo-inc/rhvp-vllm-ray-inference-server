@@ -7,3 +7,15 @@ pattern-vault.init
 vault.init
 super-linter.log
 common/pattern-vault.init
+
+# Track the secrets *template*; real secrets files stay ignored by the rule above
+!values-secret.yaml.template
+
+# Local tooling and notebook state
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/data/
+.claude/settings.local.json
+.claude/plans/
