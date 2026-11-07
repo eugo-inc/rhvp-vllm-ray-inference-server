@@ -1,0 +1,14 @@
+global:
+  pattern: rhvp-vllm-ray-inference-server
+  singleArgoCD: true
+  secretLoader:
+    disabled: false
+  options:
+    installPlanApproval: Automatic
+    syncPolicy: Automatic
+    useCSV: false
+main:
+  variant: prod
+  multiSourceConfig:
+    enabled: true
+    clusterGroupChartVersion: 0.9.*
