@@ -71,10 +71,12 @@ ENV APP_ROOT=/opt/app-root \
     DO_NOT_TRACK=1 \
     RAYLLM_ENABLE_REQUEST_PROMPT_LOGS=0
 
-COPY requirements.in requirements-x86_64.lock requirements-aarch64.lock /opt/app-root/src/
+COPY requirements.in requirements-pip.lock requirements-x86_64.lock requirements-aarch64.lock /opt/app-root/src/
 
 # One layer: virtualenv, wheels, byte-compiling and permissions. Changing file
 # permissions in a later RUN would store the whole virtualenv a second time.
+# - pip is first replaced by the hash-pinned pip in requirements-pip.lock; the
+#   venv's own pip mishandles dependencies asked for with an extra in hash mode.
 # - Only wheels, and only the hashes in the lock for this CPU architecture
 #   (uname -m is x86_64 or aarch64): a missing wheel fails the build instead
 #   of compiling from source.
@@ -87,6 +89,8 @@ RUN set -eux; \
     lock="/opt/app-root/src/requirements-$(uname -m).lock"; \
     test -f "$lock"; \
     python3.12 -m venv /opt/app-root/venv; \
+    /opt/app-root/venv/bin/pip install --no-cache-dir --only-binary :all: --require-hashes \
+        -r /opt/app-root/src/requirements-pip.lock; \
     /opt/app-root/venv/bin/pip install --no-cache-dir --only-binary :all: --require-hashes -r "$lock"; \
     /opt/app-root/venv/bin/python -m compileall -q -j 0 /opt/app-root/venv > /dev/null \
         || echo "compileall: some vendored files did not compile; pip already compiled the rest"; \

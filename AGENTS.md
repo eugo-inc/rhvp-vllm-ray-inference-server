@@ -66,8 +66,9 @@ charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Ro
                                ConfigMap, ExternalSecret
 charts/all/notebook/           BuildConfig, ImageStream, Deployment (JupyterLab + oauth-proxy), Service, Route,
                                ServiceAccount and RBAC
-inference-server/              Containerfile, requirements.in, requirements-x86_64.lock,
-                               requirements-aarch64.lock, serve_app.py, entrypoint.sh, rhvp_status.py
+inference-server/              Containerfile, requirements.in, requirements-pip.lock (pip itself),
+                               requirements-x86_64.lock, requirements-aarch64.lock, serve_app.py, entrypoint.sh,
+                               rhvp_status.py
 notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requirements.in, requirements.lock,
                                make_notebook.py, rhvp_bench/ (words, draw, showing, measure, replay, prompts,
                                run), prompts.jsonl, recordings/synthetic.json,
@@ -385,9 +386,11 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
    uv pip compile requirements.in --python-version 3.12 --python-platform aarch64-manylinux_2_34 \
      --only-binary :all: --generate-hashes -o requirements-aarch64.lock
    ```
-5. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook. A test checks the label
+5. If the install step fails in hash mode, check `inference-server/requirements-pip.lock`: the image installs that
+   pip first, and an older pip can reject a dependency that is asked for with an extra.
+6. Update the `BASELINE` label in `notebooks/rhvp_bench/words.py`, then regenerate the notebook. A test checks the label
    against the lock file. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
-6. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
+7. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
 
 ## Rules
 

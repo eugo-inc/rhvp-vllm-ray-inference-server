@@ -556,6 +556,18 @@ def test_containerfile_install_and_runtime_settings():
             assert (SERVER_DIR / src).is_file(), src
 
 
+def test_pip_is_hash_pinned_and_installed_before_the_lock():
+    text = (SERVER_DIR / "requirements-pip.lock").read_text()
+    pins = re.findall(r"^pip==(\S+) \\\n\s+--hash=sha256:[0-9a-f]{64}$", text, re.M)
+    assert len(pins) == 1, "requirements-pip.lock must pin exactly one pip, with its hash"
+    major = int(pins[0].split(".")[0])
+    # Checked against the full lock with pip 26.2.2; the venv's own pip 23.2.1 rejects a hash-locked dependency
+    # that is asked for with an extra (nvidia-cutlass-dsl[cu13]) as unpinned.
+    assert major >= 26, "use a pip that has been checked against the full lock"
+    first = CONTAINERFILE.index("-r /opt/app-root/src/requirements-pip.lock")
+    assert first < CONTAINERFILE.index('-r "$lock"')
+
+
 def test_entrypoint_contract():
     assert ENTRYPOINT.startswith("#!/usr/bin/env bash\n")
     assert "set -euo pipefail" in ENTRYPOINT

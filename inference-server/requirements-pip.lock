@@ -1,0 +1,7 @@
+# pip itself, installed into the virtualenv before the main lock.
+# The pip that python3.12 -m venv brings on UBI 9 (23.2.1) rejects a hash-locked
+# dependency that is asked for with an extra, such as nvidia-cutlass-dsl[cu13],
+# as unpinned. This newer pip installs the full lock as written.
+# pip 26.2.2, py3-none-any wheel from PyPI:
+pip==26.2.2 \
+    --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70
