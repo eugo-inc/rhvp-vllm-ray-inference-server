@@ -125,6 +125,7 @@ WORKDIR /opt/app-root/src
 USER 1001
 EXPOSE 8000
 
-# Replaces the base image's /opt/nvidia/nvidia_entrypoint.sh.
+# Replaces the base image's /opt/nvidia/nvidia_entrypoint.sh. Setting ENTRYPOINT also clears the base image's CMD.
+# Do not add `CMD []`: OpenShift's in-cluster builder records it as ["/bin/sh","-c","null"], which the entrypoint
+# would pass to serve_app.py as arguments.
 ENTRYPOINT ["/opt/app-root/src/entrypoint.sh"]
-CMD []

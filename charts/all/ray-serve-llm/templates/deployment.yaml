@@ -54,6 +54,9 @@ spec:
       containers:
         - name: server
           image: {{ include "ray-serve-llm.image" . | quote }}
+          # Set here so the image's default CMD is never used: OpenShift's builder can record one the server
+          # rejects (see inference-server/Containerfile).
+          command: ["/opt/app-root/src/entrypoint.sh"]
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

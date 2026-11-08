@@ -117,6 +117,10 @@ def test_server_image_and_trigger(server):
     deploy = one(server, "Deployment", "ray-serve-llm")
     c = container(deploy, "server")
     assert c["image"] == "image-registry.openshift-image-registry.svc:5000/rhvp-inference/ray-serve-llm:latest"
+    # The pod names the entrypoint itself, so an image CMD mangled by the builder is never passed to the server.
+    containerfile = (REPO / "inference-server/Containerfile").read_text()
+    assert f'ENTRYPOINT {json.dumps(c["command"])}' in containerfile
+    assert c["command"] == ["/opt/app-root/src/entrypoint.sh"] and "args" not in c
     [trigger] = json.loads(deploy["metadata"]["annotations"]["image.openshift.io/triggers"])
     assert trigger["from"] == {"kind": "ImageStreamTag", "name": "ray-serve-llm:latest"}
     assert trigger["fieldPath"] == 'spec.template.spec.containers[?(@.name=="server")].image'
@@ -297,6 +301,7 @@ def test_notebook_jupyter_on_loopback(notebook):
     assert "git clone" not in script
     containerfile = (REPO / "notebooks/Containerfile").read_text()
     assert "COPY . /opt/app-root/notebooks" in containerfile
+    assert not re.search(r"^CMD\b", containerfile, re.M)  # OpenShift's builder mangles `CMD []`
     assert "ports" not in c  # Jupyter is reachable only through the proxy
     mounts = {m["mountPath"] for m in c["volumeMounts"]}
     assert "/work" in mounts

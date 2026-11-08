@@ -57,6 +57,6 @@ ENV RHVP_NOTEBOOKS=/opt/app-root/notebooks \
 USER 1001
 WORKDIR /work
 # No EXPOSE: JupyterLab listens on 127.0.0.1:8888 inside the pod; only the oauth-proxy sidecar's port is served.
-# Replaces the base image's s2i entrypoint (container-entrypoint) and its usage CMD.
+# Replaces the base image's s2i entrypoint (container-entrypoint); setting ENTRYPOINT also clears its usage CMD.
+# No `CMD []`: OpenShift's in-cluster builder records it as ["/bin/sh","-c","null"].
 ENTRYPOINT ["/opt/app-root/notebooks/entrypoint.sh"]
-CMD []

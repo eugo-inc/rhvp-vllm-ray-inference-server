@@ -566,6 +566,8 @@ def test_containerfile_install_and_runtime_settings():
     assert re.search(r"^USER 1001$", CONTAINERFILE, re.M)
     assert re.search(r"^EXPOSE 8000$", CONTAINERFILE, re.M)
     assert 'ENTRYPOINT ["/opt/app-root/src/entrypoint.sh"]' in CONTAINERFILE
+    # OpenShift's builder turns an empty `CMD []` into ["/bin/sh","-c","null"]; the server then exits on bad arguments.
+    assert not re.search(r"^CMD\b", CONTAINERFILE, re.M)
     # No BuildKit-only syntax: OpenShift builds run buildah.
     assert "RUN <<" not in CONTAINERFILE and "--chmod" not in CONTAINERFILE
     # Each COPY source exists in the build context.
