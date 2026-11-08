@@ -146,7 +146,9 @@ NVIDIA CUDA 13.0.3 UBI 9 image".
 
 GPU support: built for the GPU architectures in vLLM's release build list
 ([v0.29.0 release pipeline](https://github.com/vllm-project/vllm/blob/v0.29.0/.buildkite/release-pipeline.yaml));
-not tested on OpenShift by us. CUDA 13 needs NVIDIA driver version 580 or newer.
+on OpenShift we have tested only the NVIDIA L4 (see
+[What this pattern was verified against](#what-this-pattern-was-verified-against)). CUDA 13 needs NVIDIA driver
+version 580 or newer.
 
 ## Prerequisites
 
@@ -211,7 +213,7 @@ The first install does a lot of work, in roughly this order:
 2. On AWS, the MachineSet job creates the GPU node. The GPU Operator then installs the NVIDIA driver on it.
 3. The cluster builds the server image from `inference-server/Containerfile`. This is a large build: it pulls a
    multi-gigabyte CUDA development image and installs several gigabytes of wheels, so the build node needs plenty of
-   free ephemeral storage.
+   free ephemeral storage. On an m5.2xlarge node it took 17 to 18 minutes.
 4. The server pod stays Pending until a node advertises `nvidia.com/gpu`.
 5. On its first start, the server downloads the model into the PVC `ray-serve-llm-models`, where it stays across
    restarts. vLLM and FlashInfer also compile GPU kernels. Those caches are not kept, so every new server pod compiles
@@ -219,8 +221,9 @@ The first install does a lot of work, in roughly this order:
 6. The pod turns Ready only once the model is loaded.
 
 `./pattern.sh make install` waits at most 60 minutes for every Argo CD application to be Synced and Healthy, and
-reports a failure if they are not. A first install can outlast that wait. The failure undoes nothing: the pattern is
-already installed and its secrets loaded. To recover:
+reports a failure if they are not. On a new AWS cluster it finished in 30 minutes, but a first install elsewhere
+can outlast that wait. The failure undoes nothing: the pattern is already installed and its secrets loaded. To
+recover:
 
 ```sh
 oc get builds -n rhvp-inference                  # is the image build still running, or did it fail?
@@ -351,12 +354,37 @@ software this pattern deploys, and their use does not imply endorsement.
 
 ## What this pattern was verified against
 
-- **Checked:**
-  - The charts were rendered with Helm and schema-checked against the clustergroup chart's values schema.
-  - The secrets template was checked against the Validated Patterns secrets schema.
-  - The aarch64 server image was built and served locally with docker on one NVIDIA GPU, running as an arbitrary
-    UID in group 0: the model loaded, a chat request was answered, and SIGTERM stopped the server cleanly.
-- **Not yet checked: an install on a live OpenShift cluster.** That means none of these has run: the GitOps install,
-  the in-cluster image builds, the GPU Operator setup, the MachineSet job, and the notebook pod behind oauth-proxy.
-- **Not built:** the x86_64 image, which the default AWS GPU node uses. Its lock resolves: a pip dry run for
-  x86_64 found every pinned wheel with a matching hash.
+- **A fresh install on AWS** (November 2026): a new installer-provisioned compact cluster, not changed after the
+  installer ran: OpenShift 4.22.18, x86_64, region us-east-1, three m5.2xlarge nodes that are both control plane and
+  workers. The pattern was installed from `main` at commit `1a781d1` with the default settings in
+  `values-global.yaml`.
+  - `./pattern.sh make install` installed the Validated Patterns Operator 0.0.82, Red Hat OpenShift GitOps 1.21.7,
+    the External Secrets Operator 1.2.1, Node Feature Discovery 4.22 and the NVIDIA GPU Operator 26.7.2. It finished
+    in 30 minutes, inside its 60-minute wait, with all seven Argo CD applications (the six apps plus the clustergroup
+    app `rhvp-vllm-ray-inference-server-prod`) Synced and Healthy.
+  - The pattern's MachineSet job created the g6.2xlarge node with one NVIDIA L4, and the GPU Operator made it
+    advertise `nvidia.com/gpu: 1`.
+  - The cluster built both images itself: the x86_64 server image in about 18 minutes, the notebook image in under 2.
+  - The server downloaded the model, turned Ready without a restart, and answered `GET /v1/models` and a chat
+    completion through its Service. The notebook pod ran behind oauth-proxy.
+  - The sample notebook ran headless inside the notebook pod against the live server, with no errors. All four
+    sections produced results, the first one read from the server pod's Kubernetes status, and both WITH EUGO cards
+    read "No measured result is shown for this comparison."
+- **The AWS install before it found a bug** that the earlier checks did not: OpenShift's in-cluster builder records
+  an empty `CMD []` as `/bin/sh -c null`, so the server received those words as arguments and exited. Docker builds
+  do not do this, and on OpenShift Local the server pod never started, for lack of a GPU. Both Containerfiles and the
+  server chart were fixed, and the tests now check for it. On that cluster, after the fix was pushed, the rebuild job
+  rebuilt both images by itself, and the server came up on the rebuilt image.
+- **An install on OpenShift Local** (OpenShift 4.22.14, arm64, no GPU), from a test branch that set `arch: arm64` in
+  both charts: the operators, Vault and External Secrets, both in-cluster image builds (the arm64 server image in
+  about 14 minutes) and the notebook pod behind its OpenShift login came up. Without a GPU the server pod stayed
+  Pending, so nothing was served.
+- **The aarch64 server image with docker on one NVIDIA GPU**, running as an arbitrary UID in group 0: the model
+  loaded, a chat request was answered, and SIGTERM stopped the server cleanly.
+- **On every change** (the tests in `tests/` and the CI workflows): the charts are rendered with Helm and
+  schema-checked against the clustergroup chart's values schema, and the secrets template is checked against the
+  Validated Patterns secrets schema.
+- **Not checked:** OpenShift versions before 4.22; a gated model with a real Hugging Face token; the optional server
+  Route; changing the model; `image.override`; an arm64 GPU node on OpenShift; other clouds and bare metal; GPUs
+  other than the L4 (see [GPU support](AGENTS.md#gpu-support)); the web-console install; private forks;
+  `./pattern.sh make uninstall`.

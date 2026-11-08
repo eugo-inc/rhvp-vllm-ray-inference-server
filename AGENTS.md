@@ -536,6 +536,19 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     oc get pods -n nvidia-gpu-operator
     oc describe node <gpu-node> | grep nvidia.com/gpu
     ```
+- **Right after the install, ClusterSecretStore `vault-backend` reports "Vault is sealed" (code 503) or a 403,
+  and ExternalSecret `huggingface-secret` reports `ClusterSecretStore "vault-backend" is not ready`.**
+  - Why: the External Secrets Operator checks the store as soon as it exists, and Vault starts sealed. The
+    framework's own `unsealvault-cronjob` (namespace `imperative`, every 5 minutes; separate from the pattern's
+    imperative CronJob, which runs every 10) unseals Vault and sets up the Kubernetes login the store uses;
+    `make install` waits for that, then loads the secrets. Until then the `openshift-external-secrets` and
+    `ray-serve-llm` apps can show Degraded.
+  - Fix: on the command-line install, none; it clears once the unseal job has run and `make install` has loaded the
+    secrets. On the two live AWS installs the store turned Valid within 5 minutes of its first error, and the
+    Secret was created within 7 minutes after that. If the store is still not Valid after 10 minutes, or the Secret
+    is still missing after 15, check `oc get clustersecretstore vault-backend` and `oc get jobs -n imperative`. On
+    the web-console install the store turns Valid by itself, but ExternalSecret `huggingface-secret` stays not Ready
+    until you load the secrets ([Path 2](#path-2-openshift-web-console), step 5).
 - **A gated model fails to download with 401 or 403.**
   - Why: the token is missing or not loaded. The entrypoint drops `HF_TOKEN` unless it starts with `hf_`.
   - Fix: put your `hf_` token in the secrets file, run `./pattern.sh make load-secrets`, wait for the Secret to
@@ -544,8 +557,8 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
 ## GPU support
 
 The server image is built for the GPU architectures in vLLM's release build list
-(https://github.com/vllm-project/vllm/blob/v0.29.0/.buildkite/release-pipeline.yaml); not tested on OpenShift by us.
-The default AWS node has one NVIDIA L4.
+(https://github.com/vllm-project/vllm/blob/v0.29.0/.buildkite/release-pipeline.yaml). On OpenShift we have tested only
+the NVIDIA L4 on the default AWS node (README, "What this pattern was verified against").
 
 ## Uninstall
 
