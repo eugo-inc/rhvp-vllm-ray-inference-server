@@ -206,11 +206,14 @@ version 580 or newer.
 updates and image rebuilds work.
 
 **Installed under the old name?** This pattern was named `rhvp-vllm-ray-inference-server` until November 2026. An
-install made under that name keeps working. To move it to the new name, uninstall it with
-`PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`, rename your secrets file from
+install made under that name keeps working. Merging the rename into its branch rebuilds both images and restarts the
+server and notebook pods, more than once, so download notebook work first. To move it to the new name, uninstall it
+with `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`, rename your secrets file from
 `values-secret-rhvp-vllm-ray-inference-server.yaml` to `values-secret-vllm-ray-inference-server.yaml`, then install
-again. Until you move it, see [AGENTS.md](AGENTS.md#updating-a-running-install) before you run other `make`
-targets on it.
+again. Until you move it, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `make` target you run on it.
+Without it, `load-secrets` can load the repo's template instead of your file and replace your token in Vault with
+`none`, and `install` creates a second Pattern next to the old one. [AGENTS.md](AGENTS.md#updating-a-running-install) has the details, including the one
+target that ignores `PATTERN_NAME`.
 
 ## What to expect on the first install
 

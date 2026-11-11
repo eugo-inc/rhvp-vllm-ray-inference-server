@@ -327,10 +327,24 @@ needs extra steps; see Troubleshooting.
   A finished build updates the ImageStream. The image trigger annotation then rolls the Deployment.
 - **Installs made under the old name.** Until November 2026 this pattern was named
   `rhvp-vllm-ray-inference-server`. An install made under that name keeps working, and its Pattern resource and
-  clustergroup app keep that name. The installer takes the pattern name from `PATTERN_NAME` when it is set, and from
-  `global.pattern` otherwise, and finds the Pattern resource and the secrets file by that name. So once your fork
-  has the new `global.pattern`, run `./pattern.sh make` targets such as `load-secrets` on the old install with
-  `PATTERN_NAME=rhvp-vllm-ray-inference-server` until you move it. To move it to the new name:
+  clustergroup app keep that name.
+  - Merging the rename into your install's branch restarts both pods. Argo CD applies the new
+    `app.kubernetes.io/part-of` label, which rolls the server and notebook Deployments; the server is down until its
+    new pod is Ready. The rename also changes both build folders, so `rebuild-on-commit` then rebuilds both images
+    (the server image takes about 18 minutes), and each new image rolls its Deployment again. The notebook pod loses
+    your edits each time it restarts, so download notebook work first.
+  - The installer takes the pattern name from `PATTERN_NAME` when it is set, and from `global.pattern` otherwise,
+    and finds the Pattern resource and the secrets file by that name. So once your fork has the new
+    `global.pattern`, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `./pattern.sh make` target you run
+    on the old install, until you move it. Without it, nothing warns you:
+    - `load-secrets` no longer finds a secrets file named for the old name. It loads `~/values-secret.yaml` if
+      that exists, and the repo's template otherwise, and replaces a real token in Vault with that file's value
+      (`none`, from the template).
+    - `install` creates a second Pattern resource, `vllm-ray-inference-server`, next to the old one.
+  - `display-secrets-info` is the exception: it always takes the name from `global.pattern` and ignores
+    `PATTERN_NAME`. For it, set `VALUES_SECRET` to your old secrets file's path instead.
+
+  To move the install to the new name:
   1. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
      (see [Uninstall](#uninstall)).
   2. Rename your secrets file, if you have one:
