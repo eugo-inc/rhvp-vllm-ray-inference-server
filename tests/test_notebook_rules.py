@@ -192,8 +192,11 @@ def test_every_theme_variable_style_is_written_twice():
 
 def test_the_required_sentences():
     assert words.TITLE == "vLLM + Ray Serve inference server: timings"
-    assert words.SINGLE_RUN == "A single run can come out either way."
-    assert words.ONE_MEASUREMENT == "One measurement, no p-value."
+    assert words.DRAW_MOVES == "These figures move from run to run."
+    assert words.ONE_MEASUREMENT == "One measurement."
+    # The hedges of the removed two-sided comparison stay gone: one server is measured, nothing is compared.
+    assert not hasattr(words, "SINGLE_RUN")
+    assert not any(term in text for text in word_strings() for term in ("either way", "p-value", "percent"))
     assert words.STREAM_GROUPS_NOTE == "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
     assert words.BASELINE == ("Stock vLLM 0.29.0 · Ray 2.60.0 · PyTorch 2.13.0 from PyPI · Python 3.12 · NVIDIA CUDA "
                               "13.0.3 UBI 9 image")
@@ -384,12 +387,12 @@ def test_replay_run_shows_one_result_per_section_and_no_side_banner(replayed):
 def test_replay_run_results_carry_the_required_lines(replayed):
     nb, body = replayed
     assert words.REPLAY_STRIP in body
-    assert words.SINGLE_RUN in body
+    assert words.DRAW_MOVES in body
     for number, cell in _sections(nb):
         if cell.cell_type != "code" or number is None:
             continue
         shown = _visible(_cell_outputs(cell))
-        assert words.REPLAY_STRIP in shown and words.SINGLE_RUN in shown, cell.id
+        assert words.REPLAY_STRIP in shown and words.DRAW_MOVES in shown, cell.id
         assert f"{words.IN_THIS_REPLAY} · " in shown, cell.id
         if number == 1:
             assert words.ONE_MEASUREMENT in shown and "Empty when the pod started:" in shown
@@ -455,6 +458,6 @@ def test_live_mode_labels_results_in_this_run_and_never_shows_the_endpoint(monke
     assert words.REPLAY_STRIP not in everything and words.INTERNAL_STRIP not in everything
     results = [text for text in shown if f"{words.IN_THIS_RUN} · " in text]
     assert len(results) == 3
-    assert all(words.SINGLE_RUN in text and words.STREAM_GROUPS_NOTE in text for text in results)
+    assert all(words.DRAW_MOVES in text and words.STREAM_GROUPS_NOTE in text for text in results)
     assert not VENDOR.search(everything)
     assert not ADDRESS.search(everything)

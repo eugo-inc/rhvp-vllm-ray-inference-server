@@ -2,20 +2,19 @@
 """Every sentence and label the notebook shows, as constants.
 
 Nothing on screen is built from a host name, a URL, an image name or a file path: every label is written here by
-hand, and run figures are filled into these templates. Results are given in seconds, tokens per second and percent;
-never as a ratio. No sentence here gives a cause for a result.
+hand, and run figures are filled into these templates. Results are given in seconds and tokens per second, never
+as a ratio. No sentence here gives a cause for a result.
 """
 
 #: The software the server runs: the image built from inference-server/ (a test checks it against the pins in
 #: inference-server/requirements.in, the two lock files and the Containerfile).
 BASELINE = "Stock vLLM 0.29.0 · Ray 2.60.0 · PyTorch 2.13.0 from PyPI · Python 3.12 · NVIDIA CUDA 13.0.3 UBI 9 image"
 
-#: Every live result is labelled with the run it comes from, and followed by the draw line.
+#: Every live result is labelled with the run it comes from, and followed by DRAW_MOVES.
 IN_THIS_RUN = "In this run"
 IN_THIS_REPLAY = "In this replay"
-SINGLE_RUN = "A single run can come out either way."
 DRAW_MOVES = "These figures move from run to run."
-ONE_MEASUREMENT = "One measurement, no p-value."
+ONE_MEASUREMENT = "One measurement."
 STREAM_GROUPS_NOTE = "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
 
 #: The amber strips above a result.
