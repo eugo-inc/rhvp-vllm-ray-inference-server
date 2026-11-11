@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The sample notebook's rules: generated and unchanged, no outputs, the banner layout, the WITH EUGO side, the wording
+"""The sample notebook's rules: generated and unchanged, no outputs, the layout, the stock server only, the wording
 rules, the baseline label, and a headless REPLAY run that renders it.
 
 Run with: python -m pytest -q tests/test_notebook_rules.py
@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOKS = ROOT / "notebooks"
-NOTEBOOK = NOTEBOOKS / "stock_vs_eugo_inference.ipynb"
+NOTEBOOK = NOTEBOOKS / "inference_timings.ipynb"
 MAKE = NOTEBOOKS / "make_notebook.py"
 SERVER = ROOT / "inference-server"
 sys.path.insert(0, str(NOTEBOOKS))
@@ -33,6 +33,9 @@ RATIO = re.compile(r"×|\b\d+(?:\.\d+)?\s?x\b|\bx\s+(?:faster|slower)\b|\btimes\
 #: GPU and machine names that never appear in this repository's notebook, written as character classes so that this
 #: file does not contain them either.
 HARDWARE = re.compile(r"sm_?1[2]|G[B]\s?10|D[G]X", re.IGNORECASE)
+#: The maintainer's company name: the notebook times the stock server only and never names it. Written as a character
+#: class so that this file does not contain it either.
+VENDOR = re.compile(r"e[u]go", re.IGNORECASE)
 ADDRESS = re.compile(r"https?://|\.svc\b|\blocalhost\b|\b\d{1,3}(?:\.\d{1,3}){3}\b|:\d{4,5}\b", re.IGNORECASE)
 TAGS = re.compile(r"<[^>]+>")
 
@@ -133,12 +136,11 @@ def test_title_and_readiness_cells_come_first():
     nb = _notebook()
     title, ready = nb.cells[0], nb.cells[1]
     assert title.cell_type == "markdown" and title.source.startswith(f"# {words.TITLE}")
-    assert words.TITLE_BANNER in title.source.splitlines()
     assert ready.cell_type == "code" and showing.READY_CALL in ready.source
     assert not re.search(r"^## ", ready.source, re.MULTILINE)
 
 
-def test_sections_in_order_each_side_a_banner_heading_then_a_short_code_cell():
+def test_sections_in_order_each_a_heading_then_one_short_code_cell():
     nb = _notebook()
     headings = [cell.source.splitlines()[0] for cell in nb.cells
                 if cell.cell_type == "markdown" and cell.source.startswith("## ")]
@@ -149,49 +151,35 @@ def test_sections_in_order_each_side_a_banner_heading_then_a_short_code_cell():
         "## 4 · Throughput at 1, 8 and 32 concurrent streams",
     ]
     cells = nb.cells
-    for index, cell in enumerate(cells):
-        if cell.cell_type == "markdown" and cell.source in words.SIDE_HEADING.values():
-            following = cells[index + 1]
-            assert following.cell_type == "code"
-            assert len(following.source.splitlines()) <= 3
+    assert len(cells) == 2 + 2 * len(headings)
     for number, cell in _sections(nb):
         if number is not None and cell.cell_type == "markdown" and cell.source.startswith(f"## {number} "):
-            index = cells.index(cell)
-            assert cells[index + 1].source == words.SIDE_HEADING[words.WITHOUT]
-            assert cells[index + 2].source == showing.SECTION_CALL[number]
+            following = cells[cells.index(cell) + 1]
+            assert following.cell_type == "code" and following.source == showing.SECTION_CALL[number]
+    sections = [number for number, cell in _sections(nb) if number is not None]
+    assert sections == [1, 1, 2, 2, 3, 3, 4, 4]
 
 
-def test_with_eugo_only_in_sections_1_and_2_and_only_the_neutral_call():
-    with_cells = [(number, cell) for number, cell in _sections(_notebook())
-                  if cell.cell_type == "markdown" and cell.source == words.SIDE_HEADING[words.WITH]]
-    assert [number for number, _ in with_cells] == [1, 2]
-    code = [(number, cell) for number, cell in _sections(_notebook()) if cell.cell_type == "code"]
-    calls = [number for number, cell in code if showing.WITH_EUGO_CALL in cell.source]
-    assert calls == [1, 2]
-    assert all(cell.source == showing.WITH_EUGO_CALL for number, cell in code if showing.WITH_EUGO_CALL in cell.source)
+def test_the_vendor_check_trips_on_planted_controls():
+    for planted in ("WITHOUT E" + "UGO", "outside E" + "ugo.", "run.with_e" + "ugo()", "stock_vs_e" + "ugo"):
+        assert VENDOR.search(planted), planted
+    assert not VENDOR.search(words.INTRO)
 
 
-def test_with_eugo_displays_the_banner_and_exactly_the_neutral_line(monkeypatch):
-    from rhvp_bench import run
-
-    shown = []
-    monkeypatch.setattr(draw, "show", lambda *parts: shown.append("".join(parts)))
-    run.with_eugo()
-    assert len(shown) == 1
-    assert _visible(shown[0]) == f"{words.WITH} {words.NO_MEASURED}"
-    assert draw.COLOUR[words.WITH] in shown[0]
-
-
-def test_result_cards_are_never_drawn_in_the_with_eugo_colour():
-    card = draw.result_card("label", "1.0", "s", ["a note"])
-    assert draw.COLOUR[words.WITHOUT] in card and draw.COLOUR[words.WITH] not in card
-    with pytest.raises(ValueError):
-        draw.side_banner("SOMETHING ELSE")
+def test_the_notebook_times_the_stock_server_only():
+    """No vendor name in any text the notebook shows or in the files it is made from (the image's Containerfile
+    names the maintainer, and is not part of the notebook), and no side banner to put one in."""
+    for text in word_strings() + [cell.source for cell in _notebook().cells]:
+        assert not VENDOR.search(text), text
+    for path in sorted(NOTEBOOKS.rglob("*")):
+        if path.is_file() and path.name != "Containerfile" and "__pycache__" not in path.parts:
+            assert not VENDOR.search(path.read_text(encoding="utf-8")), path.relative_to(ROOT)
+    assert not hasattr(draw, "side_banner")
 
 
 def test_every_theme_variable_style_is_written_twice():
-    for markup in (draw.side_banner(words.WITHOUT), draw.notice(words.NO_MEASURED), draw.strip("REPLAY"),
-                   draw.result_card("l", "1", "s", ["n"]), draw.quiet_line("x")):
+    for markup in (draw.notice("a message"), draw.strip("REPLAY"), draw.result_card("l", "1", "s", ["n"]),
+                   draw.quiet_line("x")):
         for style in re.findall(r'style="([^"]*)"', markup):
             rules = [r for r in style.split(";") if r]
             for at, rule in enumerate(rules):
@@ -203,15 +191,13 @@ def test_every_theme_variable_style_is_written_twice():
 # ---- wording ----
 
 def test_the_required_sentences():
-    assert words.WITHOUT == "WITHOUT EUGO" and words.WITH == "WITH EUGO"
-    assert words.NO_MEASURED == "No measured result is shown for this comparison."
+    assert words.TITLE == "vLLM + Ray Serve inference server: timings"
     assert words.SINGLE_RUN == "A single run can come out either way."
     assert words.ONE_MEASUREMENT == "One measurement, no p-value."
     assert words.STREAM_GROUPS_NOTE == "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
     assert words.BASELINE == ("Stock vLLM 0.29.0 · Ray 2.60.0 · PyTorch 2.13.0 from PyPI · Python 3.12 · NVIDIA CUDA "
                               "13.0.3 UBI 9 image")
     assert words.IN_THIS_RUN == "In this run"
-    assert draw.COLOUR == {words.WITHOUT: "#F04242", words.WITH: "#A142FF"}
 
 
 def test_the_cause_check_trips_on_planted_controls():
@@ -243,7 +229,7 @@ def test_the_readme_section_check_trips_on_planted_controls():
 
 def test_no_cause_words_or_ratios_in_the_readme_notebook_section():
     section = _readme_notebook_section((ROOT / "README.md").read_text(encoding="utf-8"))
-    assert words.NO_MEASURED in section
+    assert f"`{NOTEBOOK.name}`" in section
     assert not CAUSE.search(section), CAUSE.search(section)
     assert not RATIO.search(section), RATIO.search(section)
 
@@ -383,29 +369,16 @@ def test_replay_run_has_no_errors_or_printed_text(replayed):
             assert output.output_type in ("display_data", "update_display_data"), (cell.id, output)
 
 
-def test_replay_run_shows_both_side_banners(replayed):
+def test_replay_run_shows_one_result_per_section_and_no_side_banner(replayed):
     nb, body = replayed
+    cards = {1: 1, 2: 1, 3: 1, 4: 3}  # section 4: one card per number of streams
     for number, cell in _sections(nb):
         if cell.cell_type != "code" or number is None:
             continue
-        first = cell.outputs[0]["data"]["text/html"]
-        side = words.WITH if cell.source == showing.WITH_EUGO_CALL else words.WITHOUT
-        banner = re.match(r'<div data-rhvp="side-banner"[^>]*>([^<]*)</div>', first)
-        assert banner and banner.group(1) == side, cell.id
-    assert body.count('data-rhvp="side-banner"') == 6
-    for label in (words.WITHOUT, words.WITH):
-        assert f"{draw.COLOUR[label]};" in body
-
-
-def test_replay_run_with_eugo_cells_show_exactly_the_neutral_line(replayed):
-    nb, body = replayed
-    with_cells = [cell for cell in nb.cells if cell.cell_type == "code" and cell.source == showing.WITH_EUGO_CALL]
-    assert len(with_cells) == 2
-    for cell in with_cells:
-        assert _visible(_cell_outputs(cell)) == f"{words.WITH} {words.NO_MEASURED}"
-    every_output = "".join(_cell_outputs(cell) for cell in nb.cells)
-    assert every_output.count(words.NO_MEASURED) == 2
-    assert body.count(words.NO_MEASURED) == 2
+        assert _cell_outputs(cell).count('data-rhvp="result-card"') == cards[number], cell.id
+    assert body.count('data-rhvp="result-card"') == sum(cards.values())
+    assert 'data-rhvp="side-banner"' not in body
+    assert f"{draw.ACCENT};" in body
 
 
 def test_replay_run_results_carry_the_required_lines(replayed):
@@ -413,7 +386,7 @@ def test_replay_run_results_carry_the_required_lines(replayed):
     assert words.REPLAY_STRIP in body
     assert words.SINGLE_RUN in body
     for number, cell in _sections(nb):
-        if cell.cell_type != "code" or number is None or cell.source == showing.WITH_EUGO_CALL:
+        if cell.cell_type != "code" or number is None:
             continue
         shown = _visible(_cell_outputs(cell))
         assert words.REPLAY_STRIP in shown and words.SINGLE_RUN in shown, cell.id
@@ -434,6 +407,7 @@ def test_replay_run_outputs_obey_the_wording_rules(replayed):
         assert not CAUSE.search(shown), cell.id
         assert not RATIO.search(shown), cell.id
         assert not HARDWARE.search(shown), cell.id
+        assert not VENDOR.search(shown), cell.id
 
 
 # ---- live mode, against the stand-in server given as the endpoint ----
@@ -474,7 +448,6 @@ def test_live_mode_labels_results_in_this_run_and_never_shows_the_endpoint(monke
         run.first_token(requests=3, warmup=1)
         run.decode(streams=2, warmup=1)
         run.throughput(levels=(1, 2), warmup=1)
-        run.with_eugo()
     shown = [_visible(markup) for markup in screen]
     everything = " ".join(shown)
     assert words.STARTUP_NOT_IN_CLUSTER in everything
@@ -483,5 +456,5 @@ def test_live_mode_labels_results_in_this_run_and_never_shows_the_endpoint(monke
     results = [text for text in shown if f"{words.IN_THIS_RUN} · " in text]
     assert len(results) == 3
     assert all(words.SINGLE_RUN in text and words.STREAM_GROUPS_NOTE in text for text in results)
-    assert everything.count(words.NO_MEASURED) == 1
+    assert not VENDOR.search(everything)
     assert not ADDRESS.search(everything)

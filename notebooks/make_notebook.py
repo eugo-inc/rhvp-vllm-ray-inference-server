@@ -22,7 +22,7 @@ sys.path.insert(0, str(HERE))
 
 from rhvp_bench import prompts, replay, showing  # noqa: E402 (the folder is put on the path just above)
 
-NOTEBOOK = HERE / "stock_vs_eugo_inference.ipynb"
+NOTEBOOK = HERE / "inference_timings.ipynb"
 NBFORMAT, NBFORMAT_MINOR = 4, 5
 METADATA = {
     "kernelspec": {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"},

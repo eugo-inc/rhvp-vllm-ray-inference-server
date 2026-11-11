@@ -3,19 +3,12 @@
 
 Nothing on screen is built from a host name, a URL, an image name or a file path: every label is written here by
 hand, and run figures are filled into these templates. Results are given in seconds, tokens per second and percent;
-never as a ratio. No sentence here says why one side differs from the other.
+never as a ratio. No sentence here gives a cause for a result.
 """
 
-WITHOUT = "WITHOUT EUGO"
-WITH = "WITH EUGO"
-
-#: The software the WITHOUT EUGO side runs: the server image built from inference-server/ (a test checks it against
-#: the pins in inference-server/requirements.in, the two lock files and the Containerfile).
+#: The software the server runs: the image built from inference-server/ (a test checks it against the pins in
+#: inference-server/requirements.in, the two lock files and the Containerfile).
 BASELINE = "Stock vLLM 0.29.0 · Ray 2.60.0 · PyTorch 2.13.0 from PyPI · Python 3.12 · NVIDIA CUDA 13.0.3 UBI 9 image"
-
-#: Shown on the WITH EUGO side, and nowhere else, whatever the circumstances: it says nothing about why and promises
-#: nothing.
-NO_MEASURED = "No measured result is shown for this comparison."
 
 #: Every live result is labelled with the run it comes from, and followed by the draw line.
 IN_THIS_RUN = "In this run"
@@ -26,21 +19,17 @@ ONE_MEASUREMENT = "One measurement, no p-value."
 STREAM_GROUPS_NOTE = "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
 
 #: The amber strips above a result.
-INTERNAL_STRIP = ("INTERNAL: run on a shared machine, for checking only. Not a result to show outside Eugo.")
+INTERNAL_STRIP = ("INTERNAL: run on a shared machine, for checking only. Not a result to publish.")
 REPLAY_STRIP = ("REPLAY: no request reaches a real server. The results below replay a recorded run, only to check "
                 "the layout; they are not measurements.")
 STRIP = {"INTERNAL": INTERNAL_STRIP, "REPLAY": REPLAY_STRIP}
 
 # ---- the notebook's markdown cells (showing.py) ----
 
-TITLE = "Stock vLLM inference server: WITHOUT EUGO and WITH EUGO"
-#: A markdown-level banner line, so the two sides show even where styles are stripped (GitHub's notebook view).
-TITLE_BANNER = "# 🟥 WITHOUT EUGO · 🟪 WITH EUGO"
+TITLE = "vLLM + Ray Serve inference server: timings"
 INTRO = ("This notebook times the inference server this pattern installs: stock vLLM served by Ray Serve LLM, built "
          "only from stock packages. It talks to the server inside the cluster through its OpenAI-compatible API. "
-         "Each section measures the WITHOUT EUGO side live. Sections 1 and 2 also have a WITH EUGO side. A WITH EUGO "
-         "result appears only when it was measured in the same run as WITHOUT EUGO, on the same hardware, with the "
-         "same requests and server settings.")
+         "Each section measures the server live.")
 INTRO_HOW = ("Run the cells from the top. The first cell waits until the server answers a one-token completion. To "
              "check the layout without a GPU, start JupyterLab with RHVP_REPLAY set to a recording from the "
              "recordings folder.")
@@ -59,12 +48,10 @@ SECTION_TEXT = {
         "at a time. Every request starts with a fresh random tag, and vLLM's prefix cache (on by default) has nothing "
         "to reuse."),
     3: ("How fast one stream generates text once it has started: the tokens after the first group of streamed "
-        "tokens, divided by the time from the first generated text to the last. Requests are sent one at a time. This "
-        "section has no WITH EUGO side."),
+        "tokens, divided by the time from the first generated text to the last. Requests are sent one at a time."),
     4: ("All generated tokens per second, with 1, 8 and 32 streams running at the same time, every stream generating "
-        "the same number of tokens. This section has no WITH EUGO side."),
+        "the same number of tokens."),
 }
-SIDE_HEADING = {WITHOUT: "### 🟥 WITHOUT EUGO", WITH: "### 🟪 WITH EUGO"}
 
 # ---- the readiness cell ----
 

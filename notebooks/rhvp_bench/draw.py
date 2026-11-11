@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The notebook's HTML: the big side banners, the result cards, the neutral notice and the amber strips.
+"""The notebook's HTML: the result cards, the neutral notice and the amber strips.
 
 Every function returns markup as a string; `show()` displays it. Every style that uses a JupyterLab theme variable
 is written twice, the plain colour first: a saved notebook's outputs open "untrusted", and JupyterLab then drops the
@@ -12,10 +12,8 @@ import re
 
 from . import words
 
-#: WITHOUT EUGO in red, WITH EUGO in the Eugo violet.
-COLOUR = {words.WITHOUT: "#F04242", words.WITH: "#A142FF"}
-#: The same colours as a light background tint for the side banners.
-TINT = {words.WITHOUT: "rgba(240,66,66,.09)", words.WITH: "rgba(161,66,255,.09)"}
+#: The result cards' accent: their label and top border.
+ACCENT = "#2F6FDB"
 AMBER = "#B26B00"
 FONT = "var(--jp-ui-font-family, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif)"
 INK = "var(--jp-ui-font-color0, #1b1b1f)"
@@ -45,19 +43,6 @@ def _text(value: object) -> str:
     return html.escape(str(value))
 
 
-def side_banner(label: str) -> str:
-    """The full-width banner that opens each side: WITHOUT EUGO in red or WITH EUGO in violet, and nothing else."""
-    if label not in COLOUR:
-        raise ValueError(f"a side banner is drawn only for {words.WITHOUT} or {words.WITH}")
-    colour = COLOUR[label]
-    return doubled(
-        f'<div data-rhvp="side-banner" style="font-family:{FONT};box-sizing:border-box;width:100%;'
-        f'margin:14px 0 10px;padding:18px 26px;border:3px solid {colour};border-left-width:14px;border-radius:10px;'
-        f'background:{TINT[label]};color:{colour};font-size:32px;font-weight:800;letter-spacing:.14em;'
-        f'line-height:1.2">{_text(label)}</div>'
-    )
-
-
 def strip(kind: str) -> str:
     """The one-line amber strip above a result: "INTERNAL" or "REPLAY"."""
     text = words.STRIP[kind]
@@ -69,9 +54,8 @@ def strip(kind: str) -> str:
 
 
 def result_card(label: str, value: str, unit: str, notes: list[str] | tuple[str, ...] = ()) -> str:
-    """One WITHOUT EUGO result: its label, the big figure with its unit, then the notes. Only the WITHOUT EUGO side
-    ever has a result card."""
-    colour = COLOUR[words.WITHOUT]
+    """One result: its label, the big figure with its unit, then the notes."""
+    colour = ACCENT
     lines = "".join(f"<div>{_text(note)}</div>" for note in notes)
     return doubled(
         f'<div data-rhvp="result-card" style="font-family:{FONT};flex:1;min-width:240px;max-width:{WIDTH};'
@@ -96,7 +80,7 @@ def card_row(cards: list[str], notes: list[str] | tuple[str, ...] = ()) -> str:
 
 
 def notice(text: str, lines: list[str] | tuple[str, ...] = ()) -> str:
-    """A neutral grey box: the WITH EUGO side's one line, or a plain message in place of a result."""
+    """A neutral grey box: a plain message in place of a result."""
     extra = "".join(f'<div style="font-size:13px;line-height:1.6;color:{MUTED}">{_text(n)}</div>' for n in lines)
     return doubled(
         f'<div data-rhvp="notice" style="font-family:{FONT};max-width:{WIDTH};box-sizing:border-box;margin:8px 0;'

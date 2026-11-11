@@ -124,7 +124,6 @@ def ready(timeout_minutes: float = 60) -> None:
 
 def startup() -> None:
     """The server pod's latest start, from being placed on a node to Ready, from its Kubernetes conditions."""
-    draw.show(draw.side_banner(words.WITHOUT))
     s = _session_or_notice()
     if s is None:
         return
@@ -157,13 +156,6 @@ def startup() -> None:
     notes += [words.STARTUP_SECONDS, words.ONE_MEASUREMENT, words.SINGLE_RUN, words.DRAW_MOVES]
     draw.show(*s.strips(), draw.result_card(s.label(words.STARTUP_LABEL), _whole(start.to_ready_s), words.SECONDS,
                                             notes))
-
-
-# ---- the WITH EUGO side (sections 1 and 2) ----
-
-def with_eugo() -> None:
-    """The WITH EUGO side: its banner and the neutral line, nothing else."""
-    draw.show(draw.side_banner(words.WITH), draw.notice(words.NO_MEASURED))
 
 
 # ---- sections 2 to 4 ----
@@ -214,7 +206,6 @@ def _nothing_counted(s: Session, handle, t: measure.Tally) -> None:
 
 def first_token(requests: int = 16, warmup: int = 4) -> None:
     """Time to first token over `requests` requests sent one at a time, after `warmup` requests not counted."""
-    draw.show(draw.side_banner(words.WITHOUT))
     s = _session_or_notice()
     if s is None:
         return
@@ -238,7 +229,6 @@ def first_token(requests: int = 16, warmup: int = 4) -> None:
 
 def decode(streams: int = 4, warmup: int = 2) -> None:
     """Decode speed of one stream at a time, over `streams` requests, after `warmup` requests not counted."""
-    draw.show(draw.side_banner(words.WITHOUT))
     s = _session_or_notice()
     if s is None:
         return
@@ -265,7 +255,6 @@ def decode(streams: int = 4, warmup: int = 2) -> None:
 
 def throughput(levels: tuple[int, ...] = (1, 8, 32), warmup: int = 2) -> None:
     """All generated tokens per second with each number of streams in `levels` running at once."""
-    draw.show(draw.side_banner(words.WITHOUT))
     s = _session_or_notice()
     if s is None:
         return
