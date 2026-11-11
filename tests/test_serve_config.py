@@ -498,7 +498,7 @@ def test_image_labels_name_the_locked_versions():
     # The base image's own build labels are replaced, not inherited.
     for name in ("build-date", "vcs-ref", "release", "org.opencontainers.image.revision", "cpe"):
         assert labels[name] == "", name
-    assert labels["com.redhat.component"] == "rhvp-vllm-ray-inference-server"
+    assert labels["com.redhat.component"] == "vllm-ray-inference-server"
 
 
 def test_both_locks_pin_the_same_versions():

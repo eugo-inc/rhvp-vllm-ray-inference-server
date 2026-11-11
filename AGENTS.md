@@ -15,7 +15,7 @@ keep this file the only copy of these instructions.
 
 ## What this pattern is
 
-`rhvp-vllm-ray-inference-server` is a community sandbox Validated Pattern by Eugo. It is not produced, supported or
+`vllm-ray-inference-server` is a community sandbox Validated Pattern by Eugo. It is not produced, supported or
 validated by Red Hat. Red Hat OpenShift GitOps (Argo CD), driven by the Validated Patterns Operator, deploys it onto
 one OpenShift cluster:
 
@@ -36,7 +36,8 @@ one, change it everywhere and run the tests.
 
 | Thing | Name |
 |---|---|
-| Pattern (`global.pattern`) | `rhvp-vllm-ray-inference-server` |
+| Pattern (`global.pattern`) | `vllm-ray-inference-server`; also `name` in `pattern-metadata.yaml`, the `app.kubernetes.io/part-of` label in both charts, both Containerfiles' labels, and the secrets file name |
+| GitHub repository | `https://github.com/eugo-inc/vllm-ray-inference-server`: `pattern-metadata.yaml`, the `global.repoURL` stubs in both charts' `values.yaml`, `scripts/render-charts.sh` and both Containerfiles' labels |
 | Cluster group / variant | `prod` (`variants/prod/values-prod.yaml`) |
 | Server namespace | `rhvp-inference` |
 | Notebook namespace | `rhvp-notebook` |
@@ -178,10 +179,10 @@ it to sync.
 
 ### Path 1: command line (recommended)
 
-1. Fork `https://github.com/eugo-inc/rhvp-vllm-ray-inference-server` on GitHub, then clone your fork:
+1. Fork `https://github.com/eugo-inc/vllm-ray-inference-server` on GitHub, then clone your fork:
    ```sh
-   git clone https://github.com/<you>/rhvp-vllm-ray-inference-server.git
-   cd rhvp-vllm-ray-inference-server
+   git clone https://github.com/<you>/vllm-ray-inference-server.git
+   cd vllm-ray-inference-server
    ```
 2. Edit `values-global.yaml`:
    - `global.gpuMachineSet`: `create` (the default: one AWS g6.2xlarge with one L4) or `none`.
@@ -200,7 +201,7 @@ it to sync.
    ```sh
    mkdir -p ~/.config/validated-patterns
    cp values-secret.yaml.template \
-      ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml
+      ~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml
    ```
    Put your `hf_...` token in the `hftoken` field's `value`. Never commit a filled-in secrets file;
    `.gitignore` ignores `values-secret*` except the template.
@@ -246,9 +247,9 @@ it to sync.
 Secrets file search order. The first file found wins:
 
 1. `$VALUES_SECRET`
-2. `~/.config/hybrid-cloud-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml`
-3. `~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml`
-4. `~/values-secret-rhvp-vllm-ray-inference-server.yaml`
+2. `~/.config/hybrid-cloud-patterns/values-secret-vllm-ray-inference-server.yaml`
+3. `~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml`
+4. `~/values-secret-vllm-ray-inference-server.yaml`
 5. `~/values-secret.yaml`
 6. the repo's `values-secret.yaml.template`
 
@@ -260,7 +261,7 @@ The template's `hftoken` value must stay a non-empty string (`"none"`). With `nu
    community operator, so accept the community-operator notice.
 2. Go to **Installed Operators → Validated Patterns Operator → Pattern → Create instance**.
 3. Fill in the form:
-   - Name: `rhvp-vllm-ray-inference-server`
+   - Name: `vllm-ray-inference-server`
    - **Cluster Group Name**: `prod`
    - Git Config → **Target Repo**: your fork's URL
    - Target Revision: your branch
@@ -325,6 +326,20 @@ needs extra steps; see Troubleshooting.
     ```
 
   A finished build updates the ImageStream. The image trigger annotation then rolls the Deployment.
+- **Installs made under the old name.** Until November 2026 this pattern was named
+  `rhvp-vllm-ray-inference-server`. An install made under that name keeps working, and its Pattern resource and
+  clustergroup app keep that name. The installer takes the pattern name from `PATTERN_NAME` when it is set, and from
+  `global.pattern` otherwise, and finds the Pattern resource and the secrets file by that name. So once your fork
+  has the new `global.pattern`, run `./pattern.sh make` targets such as `load-secrets` on the old install with
+  `PATTERN_NAME=rhvp-vllm-ray-inference-server` until you move it. To move it to the new name:
+  1. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
+     (see [Uninstall](#uninstall)).
+  2. Rename your secrets file, if you have one:
+     ```sh
+     mv ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml \
+        ~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml
+     ```
+  3. Install again: `./pattern.sh make install`.
 
 ## Before changing structure, study how existing patterns do it
 
@@ -427,7 +442,7 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
 4. **Telemetry stays off.** Keep these settings in the server image: `RAY_USAGE_STATS_ENABLED=0`,
    `VLLM_NO_USAGE_STATS=1`, `DO_NOT_TRACK=1`, `RAYLLM_ENABLE_REQUEST_PROMPT_LOGS=0`.
 5. **Installer name limit.** `len(global.pattern) + 2 * len(variant)` must be under 47. Today it is
-   30 + 2 * 4 = 38, so a longer variant name such as `standalone` would fail.
+   25 + 2 * 4 = 33, so a variant name of up to 10 characters, such as `standalone` (25 + 2 * 10 = 45), still fits.
 6. **Secrets.** Never commit real secret values.
 7. **Keep the probes.** Readiness and startup check the ready file. Do not replace them with an HTTP check (see
    Troubleshooting).

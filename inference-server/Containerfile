@@ -20,7 +20,7 @@ FROM nvcr.io/nvidia/cuda:13.0.3-devel-ubi9@sha256:c99ab53f9d1e0ba4b5817014ac398a
 # component, version, date and commit). The ones below replace them so the
 # image does not claim to be that build; the base's license terms label stays,
 # since its layers keep their terms.
-LABEL name="rhvp-vllm-ray-inference-server" \
+LABEL name="vllm-ray-inference-server" \
       summary="OpenAI-compatible LLM server: Ray Serve LLM with the vLLM engine" \
       description="Ray 2.60.0, vLLM 0.29.0 and PyTorch 2.13.0 from PyPI on NVIDIA's CUDA 13.0.3 UBI 9 image. Community sandbox pattern by Eugo; not produced or validated by Red Hat." \
       io.k8s.display-name="Ray Serve LLM inference server" \
@@ -29,9 +29,9 @@ LABEL name="rhvp-vllm-ray-inference-server" \
       io.openshift.tags="llm,vllm,ray,inference" \
       vendor="Eugo" \
       maintainer="Eugo" \
-      url="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
-      org.opencontainers.image.source="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
-      com.redhat.component="rhvp-vllm-ray-inference-server" \
+      url="https://github.com/eugo-inc/vllm-ray-inference-server" \
+      org.opencontainers.image.source="https://github.com/eugo-inc/vllm-ray-inference-server" \
+      com.redhat.component="vllm-ray-inference-server" \
       version="ray2.60.0-vllm0.29.0" \
       release="" \
       build-date="" \

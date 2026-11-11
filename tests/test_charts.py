@@ -234,7 +234,7 @@ def test_server_build(server):
     bc = one(server, "BuildConfig", "ray-serve-llm")["spec"]
     assert bc["strategy"] == {"type": "Docker", "dockerStrategy": {"dockerfilePath": "Containerfile"}}
     assert bc["source"]["contextDir"] == "inference-server"
-    assert bc["source"]["git"] == {"uri": "https://github.com/eugo-inc/rhvp-vllm-ray-inference-server", "ref": "main"}
+    assert bc["source"]["git"] == {"uri": "https://github.com/eugo-inc/vllm-ray-inference-server", "ref": "main"}
     assert bc["triggers"] == [{"type": "ConfigChange"}]
     assert bc["runPolicy"] == "SerialLatestOnly"
     assert bc["resources"]["requests"]["ephemeral-storage"] == "50Gi"
@@ -476,7 +476,10 @@ def test_operators(cg):
     assert groups["nvidia-gpu-operator"] == {"targetNamespaces": ["nvidia-gpu-operator"]}
     namespaces = {d["metadata"]["name"] for d in cg["default"] if d["kind"] == "Namespace"}
     assert {"rhvp-inference", "rhvp-notebook", "openshift-nfd", "nvidia-gpu-operator"} <= namespaces
-    assert "rhvp-vllm-ray-inference-server" not in namespaces
+    # The clustergroup chart creates no namespace named after the pattern itself.
+    pattern = GLOBAL["global"]["pattern"]
+    assert pattern == "vllm-ray-inference-server"
+    assert not any(ns == pattern or ns.startswith(f"{pattern}-") for ns in namespaces), sorted(namespaces)
 
 
 # ---- rebuild-on-commit decisions (no cluster: pure function) -------------------------------

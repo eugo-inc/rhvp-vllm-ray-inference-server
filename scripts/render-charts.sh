@@ -56,7 +56,7 @@ fi
 cd "${REPO_ROOT}"
 export HELM_CACHE_HOME=/tmp/helm/cache HELM_CONFIG_HOME=/tmp/helm/config HELM_DATA_HOME=/tmp/helm/data
 
-REPO_URL="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server"
+REPO_URL="https://github.com/eugo-inc/vllm-ray-inference-server"
 VARIANT="$(yq -r '.main.variant' values-global.yaml)"
 PATTERN="$(yq -r '.global.pattern' values-global.yaml)"
 VARIANT_FILE="variants/${VARIANT}/values-${VARIANT}.yaml"

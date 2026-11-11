@@ -1,7 +1,7 @@
 {{/* Common labels. */}}
 {{- define "notebook.labels" -}}
 app.kubernetes.io/name: rhvp-notebook
-app.kubernetes.io/part-of: rhvp-vllm-ray-inference-server
+app.kubernetes.io/part-of: vllm-ray-inference-server
 {{- end }}
 
 {{/* True when the image is built in the cluster (no image.override). */}}

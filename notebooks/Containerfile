@@ -9,9 +9,9 @@ FROM registry.access.redhat.com/ubi9/python-312@sha256:19e1e927138b40454858f2978
 # The base image's own labels describe Red Hat's Python 3.12 build (its component, version, date, commit and s2i
 # usage). These replace them so the image does not claim to be that build; the base's license terms label stays.
 LABEL name="rhvp-notebook" \
-      summary="JupyterLab with the rhvp-vllm-ray-inference-server sample notebook" \
+      summary="JupyterLab with the vllm-ray-inference-server sample notebook" \
       description="JupyterLab and the sample notebook that times the pattern's Ray Serve LLM server. Community sandbox pattern by Eugo; not produced or validated by Red Hat." \
-      io.k8s.display-name="rhvp-vllm-ray-inference-server notebook" \
+      io.k8s.display-name="vllm-ray-inference-server notebook" \
       io.k8s.description="JupyterLab and the sample notebook that times the pattern's Ray Serve LLM server." \
       io.openshift.tags="jupyter,notebook,llm" \
       io.openshift.expose-services="" \
@@ -21,8 +21,8 @@ LABEL name="rhvp-notebook" \
       io.buildpacks.stack.id="" \
       vendor="Eugo" \
       maintainer="Eugo" \
-      url="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
-      org.opencontainers.image.source="https://github.com/eugo-inc/rhvp-vllm-ray-inference-server" \
+      url="https://github.com/eugo-inc/vllm-ray-inference-server" \
+      org.opencontainers.image.source="https://github.com/eugo-inc/vllm-ray-inference-server" \
       com.redhat.component="rhvp-notebook" \
       version="1" \
       release="" \

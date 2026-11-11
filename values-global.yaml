@@ -1,5 +1,5 @@
 global:
-  pattern: rhvp-vllm-ray-inference-server
+  pattern: vllm-ray-inference-server
   singleArgoCD: true
   secretLoader:
     disabled: false

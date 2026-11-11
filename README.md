@@ -171,8 +171,8 @@ version 580 or newer.
 
 1. Fork this repository on GitHub, then clone your fork:
    ```sh
-   git clone https://github.com/<you>/rhvp-vllm-ray-inference-server.git
-   cd rhvp-vllm-ray-inference-server
+   git clone https://github.com/<you>/vllm-ray-inference-server.git
+   cd vllm-ray-inference-server
    ```
 2. Edit `values-global.yaml`:
    - `global.gpuMachineSet`: `create` (one AWS g6.2xlarge) or `none`.
@@ -188,7 +188,7 @@ version 580 or newer.
    ```sh
    mkdir -p ~/.config/validated-patterns
    cp values-secret.yaml.template \
-      ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml
+      ~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml
    ```
 4. Log in and install:
    ```sh
@@ -204,6 +204,13 @@ version 580 or newer.
 
 [AGENTS.md](AGENTS.md#how-to-deploy) also covers the web-console install, private forks, reloading secrets, and how
 updates and image rebuilds work.
+
+**Installed under the old name?** This pattern was named `rhvp-vllm-ray-inference-server` until November 2026. An
+install made under that name keeps working. To move it to the new name, uninstall it with
+`PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`, rename your secrets file from
+`values-secret-rhvp-vllm-ray-inference-server.yaml` to `values-secret-vllm-ray-inference-server.yaml`, then install
+again. Until you move it, see [AGENTS.md](AGENTS.md#updating-a-running-install) before you run other `make`
+targets on it.
 
 ## What to expect on the first install
 
@@ -335,7 +342,7 @@ The model has to fit in the GPU's memory alongside the engine settings in the `r
 ## Support
 
 Support is community best effort, through
-[GitHub issues](https://github.com/eugo-inc/rhvp-vllm-ray-inference-server/issues). No response time is promised.
+[GitHub issues](https://github.com/eugo-inc/vllm-ray-inference-server/issues). No response time is promised.
 Red Hat does not support this pattern.
 
 ## License
@@ -353,6 +360,9 @@ Corporation. Other names are trademarks of their respective owners. They are use
 software this pattern deploys, and their use does not imply endorsement.
 
 ## What this pattern was verified against
+
+The installs below ran before the pattern was renamed, under its old name `rhvp-vllm-ray-inference-server`, which
+shows below where the installer used it.
 
 - **A fresh install on AWS** (November 2026): a new installer-provisioned compact cluster, not changed after the
   installer ran: OpenShift 4.22.18, x86_64, region us-east-1, three m5.2xlarge nodes that are both control plane and

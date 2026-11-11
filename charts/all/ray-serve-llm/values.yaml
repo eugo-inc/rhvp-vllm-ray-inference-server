@@ -2,7 +2,7 @@
 # global.repoURL, global.targetRevision, global.localClusterDomain and
 # global.clusterPlatform, and global.model comes from values-global.yaml.
 global:
-  repoURL: https://github.com/eugo-inc/rhvp-vllm-ray-inference-server
+  repoURL: https://github.com/eugo-inc/vllm-ray-inference-server
   targetRevision: main
   localClusterDomain: apps.example.com
   clusterPlatform: AWS
