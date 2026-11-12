@@ -343,7 +343,8 @@ class Runner:
                 if not error.timed_out:
                     raise
                 # GuideLLM v0.8.1 now and then stops making progress at the end of a level (seen once in about
-                # twenty runs against a stand-in server). One more try, against the same server, is recorded on the round.
+                # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
+                # round.
                 record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
                 if (out_dir / "guidellm.log").exists():
                     (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")

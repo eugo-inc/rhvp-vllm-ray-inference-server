@@ -68,6 +68,9 @@ SIDE_LINE = "A = {a} · B = {b}"
 VERDICT_HEADERS = ("Metric", "A median", "B median", "B/A median [interval]", "Pairs", "p, corrected", "Verdict")
 SECONDARY_HEADERS = ("Metric", "A median", "B median", "B/A median [interval]", "Pairs", "p, not corrected",
                      "Verdict")
+SECONDARY_MARK = "descriptive"
+SECONDARY_NOTE = ("A verdict marked descriptive belongs to a secondary metric: its p-value is not corrected for the "
+                  "number of metrics, so it describes this run and is not a finding.")
 PRIMARY_TITLE = "Primary metrics"
 SECONDARY_TITLE = "Secondary metrics: descriptive only, not corrected for the number of metrics"
 FLOOR_NOTE = ("With {pairs} pairs and {family} primary metrics the smallest p-value the correction can give is "

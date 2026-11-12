@@ -401,10 +401,18 @@ oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
 5. Open `compare_images.ipynb` in the notebook to see the results.
 
 To run again, change `runName` or any other value under `global.compare`. A changed config is a new run. A run whose
-results are complete is never run again. Wait for a run to finish before you push a new one, or delete its Job
-first: two runs at once take turns on the GPU and slow each other down. Setting `enabled: false` deletes nothing,
-because the apps sync without pruning. Delete old Jobs, the `image-compare-config-*` and `compare-*` ConfigMaps and
-the PVC `image-compare-results` yourself when you no longer need them.
+results are complete is never run again.
+
+Run one comparison at a time. Before you push a new run, wait for the current one to finish, or delete its Job:
+two runs at once share the GPU, and the first to end scales the live server back up while the other is still
+measuring.
+
+A run that ends partial (some rounds failed, or it was stopped) exits 1, so its Job reads `Failed` and Argo CD shows
+the `notebook` app as Degraded until you delete that Job. The results of the rounds that finished are kept.
+
+Setting `enabled: false` deletes nothing, because the apps sync without pruning. Delete old Jobs, the
+`image-compare-config-*` and `compare-*` ConfigMaps and the PVC `image-compare-results` yourself when you no longer
+need them.
 
 ### What a run does
 
@@ -504,9 +512,12 @@ images, not on vLLM versions inside one image. To compare this pattern's server 
 
 ### What has not been checked
 
-- No comparison has run on OpenShift with a GPU yet. The OpenShift path is checked by rendering the charts and by
-  unit tests against a simulated Kubernetes API; the whole run has been tried only with docker, against GuideLLM's
-  mock server.
+- No comparison has run on OpenShift with a GPU yet. The runner's Job, with the chart's RBAC, has run on a plain
+  Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the
+  status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
+  `STOPPED`, deleted the side and brought the server back within seconds. That says nothing about OpenShift's
+  restricted security context, the internal registry, the cluster's monitoring or Argo CD. The whole run has also
+  been tried with docker (`scripts/compare-local.sh`), against the same mock server.
 - Energy from DCGM has not been read on a cluster. Its parsing is tested against recorded answer shapes, under both
   the old and the new DCGM exporter metric names.
 - The length of a run, and so of the server's outage, is an estimate.

@@ -1383,6 +1383,10 @@
         "results_file": {
           "type": "string",
           "description": "The results file's path under the results root."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "When this status was written (UTC)."
         }
       }
     }

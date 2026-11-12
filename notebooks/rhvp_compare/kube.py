@@ -137,7 +137,8 @@ class Kube:
                    f"scale {deployment} to {replicas}", content=json.dumps({"spec": {"replicas": replicas}}),
                    headers={"Content-Type": "application/merge-patch+json"})
 
-    def put_configmap(self, namespace: str, name: str, labels: Mapping[str, str], data: Mapping[str, str | None]) -> None:
+    def put_configmap(self, namespace: str, name: str, labels: Mapping[str, str],
+                      data: Mapping[str, str | None]) -> None:
         """Create the ConfigMap, or merge `data` into it (a None value removes that key)."""
         patched = self._call("PATCH", f"/api/v1/namespaces/{namespace}/configmaps/{name}", f"update ConfigMap {name}",
                              ok_missing=True, content=json.dumps({"data": dict(data)}),

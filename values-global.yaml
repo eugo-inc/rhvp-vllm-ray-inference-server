@@ -47,8 +47,10 @@ global:
   #   - the notebook compare_images.ipynb shows the results.
   # Any change below starts a new run (a new Job); a finished run is not run
   # again. Change it only after the current run has finished, or delete the
-  # running Job first: two runs at once take turns on the GPU and slow each
-  # other down. Setting enabled back to false deletes nothing.
+  # running Job first: two runs at once share the GPU, and the first to end
+  # brings the live server back while the other is still measuring. A partial
+  # run's Job reads Failed (the notebook app shows Degraded until you delete
+  # it). Setting enabled back to false deletes nothing.
   compare:
     enabled: false
     # Lower-case letters, digits, "-" or "."; at most 40 characters.

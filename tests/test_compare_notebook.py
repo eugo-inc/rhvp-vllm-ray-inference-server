@@ -111,6 +111,9 @@ def test_replay_run(tmp_path):
     assert "inter-token latency, median, 8 concurrent" in verdicts and "FASTER" in verdicts and "TIE" in verdicts
     assert re.search(r"0\.\d{3} \[0\.\d{3}, 0\.\d{3}\]", verdicts)
     assert "loading the weights" in _visible(shown["s2-show"])
+    # Secondary verdicts (time to ready; tokens per joule below the top level) are marked descriptive.
+    assert words.SECONDARY_NOTE in _visible(shown["s2-show"]) and words.SECONDARY_NOTE in _visible(shown["s3-show"])
+    assert words.SECONDARY_TITLE in verdicts
     assert "DCGM" in _visible(shown["s3-show"]) and "MORE_EFFICIENT" in _visible(shown["s3-show"])
     provenance = _visible(shown["s4-show"])
     assert "registry.example/inference-server@sha256:" in provenance and "A/A pairs" in provenance

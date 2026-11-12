@@ -15,7 +15,7 @@ Standard library only.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from collections.abc import Mapping
 
 STATUS_SCHEMA = "rhvp-image-compare-status/1"
@@ -51,7 +51,7 @@ def pairs(results: Mapping) -> tuple[int, int]:
     return sum(1 for pair in planned if seen.get(pair, 0) >= 2), len(planned)
 
 
-def eta_seconds(results: Mapping, now: float) -> int | None:
+def eta_seconds(results: Mapping) -> int | None:
     """Seconds left while the run goes: the mean length of the rounds so far times the rounds still to run. None
     once the run has ended, and before the first round has finished."""
     if (results.get("run") or {}).get("status") != "running":
@@ -87,9 +87,10 @@ def status(results: Mapping, now: float) -> dict:
         "total_pairs": total,
         "rounds_done": len(rounds),
         "rounds_total": len(results["plan"]["rounds"]),
-        "rounds_failed": [{"index": r["index"], "side": r["side"], "kind": r["kind"], "error_code": r.get("error_code")}
-                          for r in rounds if r.get("status") != "ok"],
-        "eta_seconds": eta_seconds(results, now),
+        "rounds_failed": [{"index": r["index"], "side": r["side"], "kind": r["kind"],
+                           "error_code": r.get("error_code")} for r in rounds if r.get("status") != "ok"],
+        "eta_seconds": eta_seconds(results),
+        "updated_at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "started_at": run.get("started_at"),
         "finished_at": run.get("finished_at"),
         "sides": {s["key"]: {"name": s["name"], "image": s["image"]} for s in results["plan"]["sides"]},
@@ -121,7 +122,8 @@ def termination(results: Mapping) -> str:
         if len(text.encode("utf-8")) <= TERMINATION_LIMIT:
             return text
         data.pop(drop)
-    return compact({"run_id": str(run.get("id"))[:200], "status": run.get("status"), "error_code": run.get("error_code")})
+    return compact({"run_id": str(run.get("id"))[:200], "status": run.get("status"),
+                    "error_code": run.get("error_code")})
 
 
 def plan_invalid(message: str) -> dict:

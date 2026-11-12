@@ -90,6 +90,15 @@ def chip(verdict: str) -> str:
             f'border-left:3px solid {colour};padding-left:6px">{_t(verdict)}</span>')
 
 
+def verdict_cell(row: dict) -> str:
+    """The verdict chip, marked "descriptive" for a secondary metric (its p-value is not corrected)."""
+    cell = chip(row.get("verdict", "INCONCLUSIVE"))
+    if row.get("role") == "secondary":
+        cell += (f' <span data-rhvp="role" style="font-size:11px;color:{draw.MUTED}">'
+                 f'{_t(words.SECONDARY_MARK)}</span>')
+    return cell
+
+
 def table(headers: tuple[str, ...], rows: list[list[str]], raw_last: bool = False) -> str:
     """A plain table. Cells are escaped, except the last column's when `raw_last` (verdict chips)."""
     head = "".join(f'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid {draw.BORDER};'
@@ -233,8 +242,10 @@ def startup(run: str | None = None) -> None:
                                                                          words.STARTUP_FIRST)):
             row = rows.get(metric) or {}
             table_rows.append([label, _num(row.get("a_median"), "s"), _num(row.get("b_median"), "s"),
-                               _ratio(row) if row else words.NO_FIGURE, chip(row.get("verdict", "INCONCLUSIVE"))])
+                               _ratio(row) if row else words.NO_FIGURE, verdict_cell(row)])
         parts.append(table(words.STARTUP_HEADERS, table_rows, raw_last=True))
+        if any(rows.get(m, {}).get("role") == "secondary" for m in ("startup.ready_s", "startup.first_answer_s")):
+            parts.append(line(words.SECONDARY_NOTE))
         phases: dict[str, dict] = {}
         for side in ("A", "B"):
             for r in _scored(results, side):
@@ -274,8 +285,11 @@ def energy(run: str | None = None) -> None:
                 table_rows.append([str(c), _num(row.get("a_median"), "tokens/J"), _num(row.get("b_median"),
                                                                                        "tokens/J"),
                                    _ratio(row) if row else words.NO_FIGURE, _num(power["A"], "W"),
-                                   _num(power["B"], "W"), chip(row.get("verdict", "INCONCLUSIVE"))])
+                                   _num(power["B"], "W"), verdict_cell(row)])
             parts.append(table(words.ENERGY_HEADERS, table_rows, raw_last=True))
+            if any((rows.get(f"c{c}.tokens_per_joule") or {}).get("role") == "secondary"
+                   for c in plan["load"]["concurrencies"]):
+                parts.append(line(words.SECONDARY_NOTE))
             parts.append(line(words.ENERGY_LINE.format(
                 source=words.ENERGY_SOURCE.get(plan["energy"]["source"], plan["energy"]["source"]),
                 label=plan["energy"]["label"])))

@@ -23,7 +23,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
-from rhvp_compare import __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, summary  # noqa: E402
+from rhvp_compare import (  # noqa: E402
+    __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, summary)
 
 FIXTURES = ROOT / "tests" / "fixtures"
 SCHEMA = json.loads((ROOT / "notebooks" / "rhvp_compare" / "results.schema.json").read_text())

@@ -178,8 +178,10 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   `stats.py`.
 - Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
 
-Not checked yet: a run on OpenShift with a GPU, DCGM energy on a cluster, and the length of a run (an estimate of 2
-to 3 hours with the defaults).
+Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
+to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). Not checked
+yet: a run on OpenShift with a GPU (restricted SCC, internal registry, Argo CD), DCGM energy on a cluster, and the
+length of a run (an estimate of 2 to 3 hours with the defaults).
 
 ## How to deploy
 

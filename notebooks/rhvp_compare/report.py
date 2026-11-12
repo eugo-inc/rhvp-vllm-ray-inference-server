@@ -82,7 +82,8 @@ def markdown(results: Mapping) -> str:
         chosen = [row for row in rows if row.get("role", "primary") == role]
         if not chosen:
             continue
-        lines += ["", f"{title}:", "", f"| Metric | A median | B median | B/A median [CI] | pairs | {p_head} | Verdict |",
+        lines += ["", f"{title}:", "",
+                  f"| Metric | A median | B median | B/A median [CI] | pairs | {p_head} | Verdict |",
                   "|---|---|---|---|---|---|---|"]
         for row in chosen:
             p_value = row.get("p_adjusted") if role == "primary" else row.get("p_value")

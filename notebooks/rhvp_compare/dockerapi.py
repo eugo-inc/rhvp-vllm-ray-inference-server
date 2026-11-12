@@ -150,7 +150,8 @@ class Docker:
 
 
 def repository(ref: str) -> str:
-    """An image reference without its tag and digest: registry.example/ns/name:tag@sha256:... -> registry.example/ns/name."""
+    """An image reference without its tag and digest: registry.example/ns/name:tag@sha256:... becomes
+    registry.example/ns/name."""
     name = ref.split("@", 1)[0]
     return name.rsplit(":", 1)[0] if ":" in name.rsplit("/", 1)[-1] else name
 
@@ -241,8 +242,9 @@ class DockerBackend:
     def describe(self) -> dict:
         info = self.docker.info()
         return {"node": {"arch": info.get("Architecture"), "os_image": info.get("OperatingSystem"),
-                         "kernel": info.get("KernelVersion"), "container_runtime": f"docker {info.get('ServerVersion')}",
-                         "cpus": info.get("NCPU"), "memory_bytes": info.get("MemTotal"), "instance_type": None}}
+                         "kernel": info.get("KernelVersion"),
+                         "container_runtime": f"docker {info.get('ServerVersion')}", "cpus": info.get("NCPU"),
+                         "memory_bytes": info.get("MemTotal"), "instance_type": None}}
 
     def cleanup(self) -> None:
         for cid in self.docker.by_label(self.run_id) if self.run_id else []:

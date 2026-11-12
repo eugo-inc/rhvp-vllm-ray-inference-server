@@ -331,8 +331,9 @@ def _side_backend(secret: str | None = None, server_replicas: int | None = None,
 
     client = kube.Kube(base_url="https://api.example:6443", token="t", verify=False,
                        transport=httpx.MockTransport(handler))
-    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb", "RHVP_COMPARE_SIDE_RESOURCES": json.dumps(
-        {"requests": {"cpu": "2", "memory": "12Gi"}, "limits": {"memory": "24Gi"}})}
+    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb",
+           "RHVP_COMPARE_SIDE_RESOURCES": json.dumps({"requests": {"cpu": "2", "memory": "12Gi"},
+                                                      "limits": {"memory": "24Gi"}})}
     return kube.KubeBackend(kube=client, env=env, sleep=lambda s: None), calls
 
 
