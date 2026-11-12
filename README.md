@@ -27,7 +27,7 @@ no OpenShift AI subscription.
 - **Pinned where it can be.** Every Python package is locked by hash and installed from wheels only. The server has
   one lock per CPU architecture; the notebook has one lock for both. The server's and the notebook's base images are
   pinned by digest, and the default model by its Hugging Face commit. Some things are not pinned, among them the system packages that `dnf`
-  adds to the server image, the operator versions (stable channels, updated automatically) and the patch versions
+  adds to the server image, the operator versions (the pattern's own operator subscriptions follow stable channels and update automatically) and the patch versions
   of the Validated Patterns charts. So two builds from one commit install the same Python packages, but their
   system packages can differ.
 - **Measured.** The notebook times the server in your cluster: pod start to Ready, time to first token,
