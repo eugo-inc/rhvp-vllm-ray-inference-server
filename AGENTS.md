@@ -352,17 +352,22 @@ needs extra steps; see Troubleshooting.
   - `display-secrets-info` is the exception: it always takes the name from `global.pattern` and ignores
     `PATTERN_NAME`. For it, set `VALUES_SECRET` to your old secrets file's path instead.
 
-  To move the install to the new name:
+  To move the install to the new name, uninstall it first and merge the rename after:
   1. Download any notebook work you want to keep.
   2. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
      (see [Uninstall](#uninstall)).
-  3. Once the uninstall has finished, check for the old namespaces and delete them (see "Old namespaces" below).
-  4. Rename your secrets file, if you have one:
+  3. Once the uninstall has finished, merge the rename into your branch, if you have not already, and push it. Step
+     6 takes the pattern name from `global.pattern` in your clone, and Argo CD deploys from your fork, so the rename
+     must be in both. Merging only after the uninstall keeps the old install from syncing the rename and starting a
+     second server in the new namespaces. This order follows from the charts and the installer; it has not been
+     tried on a cluster.
+  4. Check for the old namespaces and delete them (see "Old namespaces" below).
+  5. Rename your secrets file, if you have one:
      ```sh
      mv ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml \
         ~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml
      ```
-  5. Install again: `./pattern.sh make install`. The new install creates `vllm-inference` and `vllm-notebook`,
+  6. Install again: `./pattern.sh make install`. The new install creates `vllm-inference` and `vllm-notebook`,
      builds both images, and downloads the model again into a new PVC, `vllm-inference/ray-serve-llm-models`.
 
   Old namespaces. Neither path is sure to delete `rhvp-inference` and `rhvp-notebook`. A merge never does. The

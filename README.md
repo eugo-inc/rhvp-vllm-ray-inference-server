@@ -209,21 +209,26 @@ updates and image rebuilds work.
 and its namespaces were `rhvp-inference` and `rhvp-notebook`; they are now `vllm-inference` and `vllm-notebook`. An
 install made under the old name keeps working. Merging the rename into its branch does not delete the old
 namespaces: Argo CD builds and starts a second server and notebook in the new ones, and the old server keeps its
-GPU, so with one GPU the new server waits until you delete the old namespaces. To move the install to the new name
-instead:
+GPU, so with one GPU the new server waits until you delete the old namespaces. To move the install to the new name,
+uninstall it first and merge the rename after:
 
 1. Download any notebook work you want to keep.
 2. Uninstall it with `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`.
-3. Once the uninstall has finished, check for the old namespaces and the old model's claim. Delete what is left;
-   this deletes the downloaded model. Then check `oc get pv`, as in [Uninstall](#uninstall), step 3.
+3. Once the uninstall has finished, merge the rename into your branch, if you have not already, and push it. The
+   install in step 6 takes the pattern name from your clone and deploys from your fork, so it needs the rename in
+   both. Merging only after the uninstall keeps the old install from syncing the rename and starting a second
+   server. This order follows from the charts and the installer; it has not been tried on a cluster.
+4. Check for the old namespaces and the old model's claim. Delete what is left; this deletes the downloaded model.
    ```sh
    oc get namespace rhvp-inference rhvp-notebook
    oc get pvc -n rhvp-inference
    oc delete namespace rhvp-inference rhvp-notebook
    ```
-4. Rename your secrets file from `values-secret-rhvp-vllm-ray-inference-server.yaml` to
+   Then check `oc get pv` for a volume whose claim was `rhvp-inference/ray-serve-llm-models`. A volume with the
+   reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`.
+5. Rename your secrets file from `values-secret-rhvp-vllm-ray-inference-server.yaml` to
    `values-secret-vllm-ray-inference-server.yaml`.
-5. Install again with `./pattern.sh make install`. The new install builds both images and downloads the model again.
+6. Install again with `./pattern.sh make install`. The new install builds both images and downloads the model again.
 
 Until you move it, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `make` target you run on it.
 Without it, `load-secrets` can load the repo's template instead of your file and replace your token in Vault with
