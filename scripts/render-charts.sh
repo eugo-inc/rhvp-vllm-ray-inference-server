@@ -22,7 +22,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UTILITY_IMAGE="${UTILITY_IMAGE:-quay.io/validatedpatterns/utility-container@sha256:cdac62c3746f65d69f05b71fd99a347f7dbdf345776c56d9a6893adb1e9aa040}"
+# The utility container's v1.0.5 release, pinned by digest. Pin a release tag's digest, not latest's: quay
+# deletes a latest digest once latest is rebuilt (the earlier pin vanished that way in November 2026).
+UTILITY_IMAGE="${UTILITY_IMAGE:-quay.io/validatedpatterns/utility-container@sha256:556083f92b08642868ca64ade6cf9553295bd394f7a54d5e10ca12d143907214}"
 CLUSTERGROUP_CHART_VERSION="${CLUSTERGROUP_CHART_VERSION:-0.9.58}"
 RENDER_DIR="${RENDER_DIR:-.render}"
 case "${RENDER_DIR}" in

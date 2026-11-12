@@ -23,9 +23,10 @@ import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+# Same pin as scripts/render-charts.sh: the v1.0.5 release digest (a latest digest is deleted on rebuild).
 UTILITY_IMAGE = (
     "quay.io/validatedpatterns/utility-container@sha256:"
-    "cdac62c3746f65d69f05b71fd99a347f7dbdf345776c56d9a6893adb1e9aa040"
+    "556083f92b08642868ca64ade6cf9553295bd394f7a54d5e10ca12d143907214"
 )
 GLOBAL = yaml.safe_load((REPO / "values-global.yaml").read_text())
 READY_FILE = ["test", "-f", "/tmp/r/rhvp-ready"]
