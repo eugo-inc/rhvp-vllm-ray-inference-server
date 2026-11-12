@@ -12,12 +12,36 @@ Eugo, which maintains this pattern, runs an HPC platform that rebuilds open-sour
 PyTorch and vLLM among them, from source. This pattern does not use it: it installs stock packages only. More at
 [eugo.io](https://eugo.io/).
 
-**The problem it solves.** A team that wants a private, OpenAI-compatible LLM endpoint on its own OpenShift
-cluster usually assembles it by hand: GPU enablement, a serving runtime, a model cache, a secret for gated models,
-and a way to rebuild the image when the stack changes. This pattern turns all of that into one Git repository.
-Fork it, set the model, push, and the cluster converges to a running endpoint. Every Python package is pinned by
-hash and the base image by digest, so a rebuild installs the same stack, and every change is a reviewable commit.
-It uses upstream open-source components only (vLLM, Ray Serve, PyPI wheels on NVIDIA's CUDA UBI 9 image).
+**The problem it solves.** This pattern does not replace Red Hat's AI products, such as Red Hat OpenShift AI, and it
+does not plug into them. It is a small, community-maintained reference point: stock vLLM on Ray Serve, built from
+known versions and measured the same way each time, so you can see what the upstream stack does on your GPU. It needs
+no OpenShift AI subscription.
+
+- **One repository.** Your fork describes the GPU enablement (Node Feature Discovery and the NVIDIA GPU Operator),
+  the server, its model cache, Vault and External Secrets for an optional Hugging Face token, and a timing notebook.
+  You run `./pattern.sh make install` once. After that, Argo CD syncs each commit on your branch, with two limits:
+  it does not delete objects that a commit removes, and it does not change the image of the running server or
+  notebook. Images come from builds in the cluster. A rebuild job checks your branch every 10 minutes. It starts a
+  build when the server's or the notebook's folder changed and no build of that image is already running. It does
+  not retry a failed build.
+- **Pinned where it can be.** Every Python package is locked by hash and installed from wheels only. The server has
+  one lock per CPU architecture; the notebook has one lock for both. The server's and the notebook's base images are
+  pinned by digest, and the default model by its Hugging Face commit. Some things are not pinned, among them the system packages that `dnf`
+  adds to the server image, the operator versions (stable channels, updated automatically) and the patch versions
+  of the Validated Patterns charts. So two builds from one commit install the same Python packages, but their
+  system packages can differ.
+- **Measured.** The notebook times the server in your cluster: pod start to Ready, time to first token,
+  single-stream decode speed, and total tokens per second at 1, 8 and 32 concurrent requests. The prompts are
+  chosen from a fixed seed, and every request uses temperature 0 and a fixed number of output tokens. Results are in
+  seconds and tokens per second. Start to Ready is in whole seconds and can trail the server by up to about 2
+  seconds.
+- **Separate from OpenShift AI.** The server is one pod in a plain Deployment, running Ray Serve LLM with the vLLM
+  engine from PyPI (Ray 2.60.0, vLLM 0.29.0, PyTorch 2.13.0) on NVIDIA's CUDA 13.0.3 UBI 9 image. It uses no
+  KServe, no KubeRay and no Red Hat AI Inference Server image: the chart has no KServe `InferenceService` or
+  `ServingRuntime`.
+- **Its own cluster, for now.** The pattern installs Node Feature Discovery and the NVIDIA GPU Operator itself,
+  with its own OperatorGroups and settings. On a cluster that already runs those operators it can clash with them,
+  and it has not been tried on a cluster that runs OpenShift AI. Use a cluster without those two operators.
 
 > [!WARNING]
 > **Cost.** On AWS, the default install creates **one billable GPU instance: `g6.2xlarge` with one NVIDIA L4**.
