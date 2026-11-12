@@ -11,7 +11,7 @@
 # every rule.
 #
 # Permissions: the charts give the imperative ServiceAccount (imperative/imperative-sa) a
-# Role in rhvp-inference and rhvp-notebook to read builds and start one
+# Role in vllm-inference and vllm-notebook to read builds and start one
 # (charts/all/*/templates/rebuild-rbac.yaml).
 - name: Start image builds for new commits
   hosts: localhost
@@ -19,11 +19,11 @@
   gather_facts: false
   vars:
     rhvp_rebuild_targets:
-      - namespace: rhvp-inference
+      - namespace: vllm-inference
         buildconfig: ray-serve-llm
         context_dir: inference-server
-      - namespace: rhvp-notebook
-        buildconfig: rhvp-notebook
+      - namespace: vllm-notebook
+        buildconfig: notebook
         context_dir: notebooks
   tasks:
     - name: Start a build where the checked-out commit changed the build folder

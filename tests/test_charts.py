@@ -116,7 +116,7 @@ def test_server_deployment_rollout(server):
 def test_server_image_and_trigger(server):
     deploy = one(server, "Deployment", "ray-serve-llm")
     c = container(deploy, "server")
-    assert c["image"] == "image-registry.openshift-image-registry.svc:5000/rhvp-inference/ray-serve-llm:latest"
+    assert c["image"] == "image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest"
     # The pod names the entrypoint itself, so an image CMD mangled by the builder is never passed to the server.
     containerfile = (REPO / "inference-server/Containerfile").read_text()
     assert f'ENTRYPOINT {json.dumps(c["command"])}' in containerfile
@@ -249,7 +249,7 @@ def test_server_image_override_hides_build(server_variant):
     deploy = one(server_variant, "Deployment", "ray-serve-llm")
     assert "image.openshift.io/triggers" not in (deploy["metadata"].get("annotations") or {})
     assert container(deploy, "server")["image"] == "quay.io/example/ray-serve-llm:1.0"
-    assert not [d for d in server_variant if d["kind"] == "Role" and d["metadata"]["name"] == "rhvp-rebuild-on-commit"]
+    assert not [d for d in server_variant if d["kind"] == "Role" and d["metadata"]["name"] == "rebuild-on-commit"]
 
 
 def test_server_route_when_enabled(server_variant):
@@ -261,12 +261,12 @@ def test_server_route_when_enabled(server_variant):
 
 
 def test_rebuild_rbac(server, notebook):
-    for items, ns in ((server, "rhvp-inference"), (notebook, "rhvp-notebook")):
-        role = one(items, "Role", "rhvp-rebuild-on-commit")
+    for items, ns in ((server, "vllm-inference"), (notebook, "vllm-notebook")):
+        role = one(items, "Role", "rebuild-on-commit")
         assert "namespace" not in role["metadata"]  # lands in the app's namespace
         rules = {(tuple(r["resources"]), tuple(r["verbs"])) for r in role["rules"]}
         assert (("buildconfigs/instantiate", "builds/docker"), ("create",)) in rules
-        binding = one(items, "RoleBinding", "rhvp-rebuild-on-commit")
+        binding = one(items, "RoleBinding", "rebuild-on-commit")
         assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "imperative-sa", "namespace": "imperative"}]
 
 
@@ -284,7 +284,7 @@ def notebook_variant(render) -> list[dict]:
 
 
 def test_notebook_jupyter_on_loopback(notebook):
-    deploy = one(notebook, "Deployment", "rhvp-notebook")
+    deploy = one(notebook, "Deployment", "notebook")
     assert deploy["spec"]["strategy"] == {"type": "Recreate"}
     assert deploy["spec"]["progressDeadlineSeconds"] >= 1800
     c = container(deploy, "notebook")
@@ -305,73 +305,73 @@ def test_notebook_jupyter_on_loopback(notebook):
     assert "ports" not in c  # Jupyter is reachable only through the proxy
     mounts = {m["mountPath"] for m in c["volumeMounts"]}
     assert "/work" in mounts
-    assert c["image"] == "image-registry.openshift-image-registry.svc:5000/rhvp-notebook/rhvp-notebook:latest"
+    assert c["image"] == "image-registry.openshift-image-registry.svc:5000/vllm-notebook/notebook:latest"
     [trigger] = json.loads(deploy["metadata"]["annotations"]["image.openshift.io/triggers"])
-    assert trigger["from"] == {"kind": "ImageStreamTag", "name": "rhvp-notebook:latest"}
+    assert trigger["from"] == {"kind": "ImageStreamTag", "name": "notebook:latest"}
     assert trigger["fieldPath"] == 'spec.template.spec.containers[?(@.name=="notebook")].image'
 
 
 def test_notebook_oauth_proxy(notebook):
-    deploy = one(notebook, "Deployment", "rhvp-notebook")
+    deploy = one(notebook, "Deployment", "notebook")
     pod = deploy["spec"]["template"]["spec"]
-    assert pod["serviceAccountName"] == "rhvp-notebook"
+    assert pod["serviceAccountName"] == "notebook"
     proxy = container(deploy, "oauth-proxy")
     args = proxy["args"]
     assert "--provider=openshift" in args
-    assert "--openshift-service-account=rhvp-notebook" in args
+    assert "--openshift-service-account=notebook" in args
     assert "--upstream=http://127.0.0.1:8888" in args
     assert "--https-address=:8443" in args
     [sar] = [a for a in args if a.startswith("--openshift-sar=")]
-    assert json.loads(sar.split("=", 1)[1])["namespace"] == "rhvp-notebook"
+    assert json.loads(sar.split("=", 1)[1])["namespace"] == "vllm-notebook"
     assert proxy["ports"] == [{"name": "https", "containerPort": 8443, "protocol": "TCP"}]
     vols = {v["name"]: v for v in pod["volumes"]}
     tls = {m["mountPath"]: m["name"] for m in proxy["volumeMounts"]}["/etc/tls/private"]
-    assert vols[tls]["secret"]["secretName"] == "rhvp-notebook-tls"
-    assert one(notebook, "Secret", "rhvp-notebook-proxy")["data"]["session_secret"]
-    svc = one(notebook, "Service", "rhvp-notebook")
-    assert svc["metadata"]["annotations"]["service.beta.openshift.io/serving-cert-secret-name"] == "rhvp-notebook-tls"
+    assert vols[tls]["secret"]["secretName"] == "notebook-tls"
+    assert one(notebook, "Secret", "notebook-proxy")["data"]["session_secret"]
+    svc = one(notebook, "Service", "notebook")
+    assert svc["metadata"]["annotations"]["service.beta.openshift.io/serving-cert-secret-name"] == "notebook-tls"
     assert svc["spec"]["ports"][0]["port"] == 8443
-    route = one(notebook, "Route", "rhvp-notebook")
+    route = one(notebook, "Route", "notebook")
     assert route["spec"]["tls"]["termination"] == "reencrypt"
-    assert route["spec"]["to"]["name"] == "rhvp-notebook"
-    sa = one(notebook, "ServiceAccount", "rhvp-notebook")
+    assert route["spec"]["to"]["name"] == "notebook"
+    sa = one(notebook, "ServiceAccount", "notebook")
     ref = json.loads(sa["metadata"]["annotations"]["serviceaccounts.openshift.io/oauth-redirectreference.primary"])
-    assert ref["reference"] == {"kind": "Route", "name": "rhvp-notebook"}
+    assert ref["reference"] == {"kind": "Route", "name": "notebook"}
 
 
 def test_notebook_reads_server_pods(notebook):
-    role = one(notebook, "Role", "rhvp-notebook-read-pods")
-    assert role["metadata"]["namespace"] == "rhvp-inference"
+    role = one(notebook, "Role", "notebook-read-pods")
+    assert role["metadata"]["namespace"] == "vllm-inference"
     assert role["rules"] == [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"]}]
-    binding = one(notebook, "RoleBinding", "rhvp-notebook-read-pods")
-    assert binding["metadata"]["namespace"] == "rhvp-inference"
-    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "rhvp-notebook", "namespace": "rhvp-notebook"}]
+    binding = one(notebook, "RoleBinding", "notebook-read-pods")
+    assert binding["metadata"]["namespace"] == "vllm-inference"
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "notebook", "namespace": "vllm-notebook"}]
 
 
 def test_notebook_env(notebook, notebook_variant):
-    env = env_map(container(one(notebook, "Deployment", "rhvp-notebook"), "notebook"))
-    assert env["RHVP_ENDPOINT"] == "http://ray-serve-llm.rhvp-inference.svc:8000"
+    env = env_map(container(one(notebook, "Deployment", "notebook"), "notebook"))
+    assert env["RHVP_ENDPOINT"] == "http://ray-serve-llm.vllm-inference.svc:8000"
     assert env["RHVP_MODEL_ID"] == GLOBAL["global"]["model"]["id"]
     assert env["RHVP_MODEL_REVISION"] == GLOBAL["global"]["model"]["revision"]
-    assert env["RHVP_SERVER_NAMESPACE"] == "rhvp-inference"
+    assert env["RHVP_SERVER_NAMESPACE"] == "vllm-inference"
     assert env["RHVP_SERVER_LABEL_SELECTOR"] == "app.kubernetes.io/name=ray-serve-llm"
     assert "RHVP_INTERNAL" not in env and "RHVP_REPLAY" not in env
-    venv = env_map(container(one(notebook_variant, "Deployment", "rhvp-notebook"), "notebook"))
+    venv = env_map(container(one(notebook_variant, "Deployment", "notebook"), "notebook"))
     assert venv["RHVP_INTERNAL"] == "1"
     assert venv["RHVP_REPLAY"] == "/opt/app-root/notebooks/replay/example"
 
 
 def test_notebook_build(notebook, notebook_variant):
-    bc = one(notebook, "BuildConfig", "rhvp-notebook")["spec"]
+    bc = one(notebook, "BuildConfig", "notebook")["spec"]
     assert bc["strategy"]["dockerStrategy"] == {"dockerfilePath": "Containerfile"}
     assert bc["source"]["contextDir"] == "notebooks"
     assert bc["triggers"] == [{"type": "ConfigChange"}]
-    assert bc["output"]["to"] == {"kind": "ImageStreamTag", "name": "rhvp-notebook:latest"}
-    assert one(notebook, "ImageStream", "rhvp-notebook")["spec"]["lookupPolicy"] == {"local": True}
+    assert bc["output"]["to"] == {"kind": "ImageStreamTag", "name": "notebook:latest"}
+    assert one(notebook, "ImageStream", "notebook")["spec"]["lookupPolicy"] == {"local": True}
     assert not kinds(notebook_variant) & {"BuildConfig", "ImageStream"}
-    deploy = one(notebook_variant, "Deployment", "rhvp-notebook")
+    deploy = one(notebook_variant, "Deployment", "notebook")
     assert "image.openshift.io/triggers" not in (deploy["metadata"].get("annotations") or {})
-    assert container(deploy, "notebook")["image"] == "quay.io/example/rhvp-notebook:1.0"
+    assert container(deploy, "notebook")["image"] == "quay.io/example/notebook:1.0"
 
 
 # ---- GPU enablement ------------------------------------------------------------------------
@@ -405,7 +405,7 @@ def test_applications(cg):
     assert set(apps) == {"vault", "openshift-external-secrets", "nfd-config", "nvidia-gpu-config",
                          "ray-serve-llm", "notebook"}
     want = {"nfd-config": "openshift-nfd", "nvidia-gpu-config": "nvidia-gpu-operator",
-            "ray-serve-llm": "rhvp-inference", "notebook": "rhvp-notebook"}
+            "ray-serve-llm": "vllm-inference", "notebook": "vllm-notebook"}
     for name, ns in want.items():
         assert apps[name]["spec"]["source"]["path"] == f"charts/all/{name}"
         assert apps[name]["spec"]["destination"]["namespace"] == ns
@@ -416,7 +416,7 @@ def test_applications(cg):
 
 def test_image_triggered_apps_ignore_image_drift(cg):
     apps = {d["metadata"]["name"]: d for d in cg["default"] if d["kind"] == "Application"}
-    triggered = {"ray-serve-llm": ("ray-serve-llm", "server"), "notebook": ("rhvp-notebook", "notebook")}
+    triggered = {"ray-serve-llm": ("ray-serve-llm", "server"), "notebook": ("notebook", "notebook")}
     for name, (deployment, container) in triggered.items():
         spec = apps[name]["spec"]
         ignore = {(i.get("group", ""), i["kind"]): i for i in spec["ignoreDifferences"]}
@@ -475,7 +475,7 @@ def test_operators(cg):
     assert groups["openshift-nfd"] == {"targetNamespaces": ["openshift-nfd"]}
     assert groups["nvidia-gpu-operator"] == {"targetNamespaces": ["nvidia-gpu-operator"]}
     namespaces = {d["metadata"]["name"] for d in cg["default"] if d["kind"] == "Namespace"}
-    assert {"rhvp-inference", "rhvp-notebook", "openshift-nfd", "nvidia-gpu-operator"} <= namespaces
+    assert {"vllm-inference", "vllm-notebook", "openshift-nfd", "nvidia-gpu-operator"} <= namespaces
     # The clustergroup chart creates no namespace named after the pattern itself.
     pattern = GLOBAL["global"]["pattern"]
     assert pattern == "vllm-ray-inference-server"
@@ -569,7 +569,7 @@ def test_one_target_failing_does_not_stop_the_others_or_fail_the_job(tmp_path):
     head = rev(repo)
     state = tmp_path / "state"
     state.mkdir()
-    for ns, bc in (("rhvp-inference", "ray-serve-llm"), ("rhvp-notebook", "rhvp-notebook")):
+    for ns, bc in (("vllm-inference", "ray-serve-llm"), ("vllm-notebook", "notebook")):
         (state / f"{ns}.{bc}.bc").write_text("")
         (state / f"{ns}.{bc}.builds.json").write_text(json.dumps({"items": [build(f"{bc}-1", "Complete", "0" * 40)]}))
     oc = tmp_path / "oc"
@@ -577,16 +577,16 @@ def test_one_target_failing_does_not_stop_the_others_or_fail_the_job(tmp_path):
                                   '    echo "Error from server (Forbidden): cannot create" >&2; exit 1 ;;\n'
                                   '  "start-build "*)'))
     oc.chmod(0o755)
-    targets = [{"namespace": "rhvp-inference", "buildconfig": "ray-serve-llm", "context_dir": "inference-server"},
-               {"namespace": "rhvp-notebook", "buildconfig": "rhvp-notebook", "context_dir": "notebooks"}]
+    targets = [{"namespace": "vllm-inference", "buildconfig": "ray-serve-llm", "context_dir": "inference-server"},
+               {"namespace": "vllm-notebook", "buildconfig": "notebook", "context_dir": "notebooks"}]
     proc = subprocess.run([sys.executable, str(REPO / "ansible/rebuild_on_commit.py"), "--repo", str(repo),
                            "--targets", json.dumps(targets), "--oc", str(oc)],
                           env={**os.environ, "FAKE_OC_STATE": str(state)}, capture_output=True, text=True,
                           timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert "ERROR rhvp-inference/ray-serve-llm" in proc.stdout and "Forbidden" in proc.stdout
-    assert "STARTED rhvp-notebook/rhvp-notebook" in proc.stdout
-    assert (state / "started.log").read_text().strip() == f"start-build rhvp-notebook -n rhvp-notebook --commit={head} -o name"
+    assert "ERROR vllm-inference/ray-serve-llm" in proc.stdout and "Forbidden" in proc.stdout
+    assert "STARTED vllm-notebook/notebook" in proc.stdout
+    assert (state / "started.log").read_text().strip() == f"start-build notebook -n vllm-notebook --commit={head} -o name"
 
 
 def test_rebuild_playbook_end_to_end(tmp_path):
@@ -618,8 +618,8 @@ def test_rebuild_playbook_end_to_end(tmp_path):
     fakebin.mkdir()
     (fakebin / "oc").write_text(FAKE_OC)
     (fakebin / "oc").chmod(0o755)
-    (state / "rhvp-inference.ray-serve-llm.bc").write_text("")
-    (state / "rhvp-notebook.rhvp-notebook.bc").write_text("")
+    (state / "vllm-inference.ray-serve-llm.bc").write_text("")
+    (state / "vllm-notebook.notebook.bc").write_text("")
 
     def builds_file(ns, bc, items):
         (state / f"{ns}.{bc}.builds.json").write_text(json.dumps({"items": items}))
@@ -656,20 +656,20 @@ def test_rebuild_playbook_end_to_end(tmp_path):
         return log.read_text() if log.exists() else ""
 
     # Both images built from the first commit; the checkout is that commit: nothing to do.
-    builds_file("rhvp-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first)])
-    builds_file("rhvp-notebook", "rhvp-notebook", [build("rhvp-notebook-1", "Complete", first)])
+    builds_file("vllm-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first)])
+    builds_file("vllm-notebook", "notebook", [build("notebook-1", "Complete", first)])
     assert run_job(first) == ""
     # A docs-only commit: build folders unchanged, nothing to do.
     assert run_job(docs_only) == ""
     # A commit that changes inference-server/: only the server rebuilds, at that commit.
     started = run_job(server_change)
-    assert started.strip() == f"start-build ray-serve-llm -n rhvp-inference --commit={server_change} -o name"
+    assert started.strip() == f"start-build ray-serve-llm -n vllm-inference --commit={server_change} -o name"
     # While that build runs, nothing more is started.
-    builds_file("rhvp-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first),
+    builds_file("vllm-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first),
                                                     build("ray-serve-llm-2", "Running", server_change,
                                                           "2026-01-03T00:00:00Z", True)])
     assert run_job(server_change) == ""
     # No BuildConfig (image.override set): skipped.
-    (state / "rhvp-inference.ray-serve-llm.bc").unlink()
-    builds_file("rhvp-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first)])
+    (state / "vllm-inference.ray-serve-llm.bc").unlink()
+    builds_file("vllm-inference", "ray-serve-llm", [build("ray-serve-llm-1", "Complete", first)])
     assert run_job(server_change) == ""

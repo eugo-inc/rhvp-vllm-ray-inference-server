@@ -1,6 +1,6 @@
 {{/* Common labels. */}}
 {{- define "notebook.labels" -}}
-app.kubernetes.io/name: rhvp-notebook
+app.kubernetes.io/name: notebook
 app.kubernetes.io/part-of: vllm-ray-inference-server
 {{- end }}
 
@@ -14,6 +14,6 @@ app.kubernetes.io/part-of: vllm-ray-inference-server
 {{- if .Values.image.override -}}
 {{ .Values.image.override }}
 {{- else -}}
-image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/rhvp-notebook:latest
+image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebook:latest
 {{- end -}}
 {{- end }}

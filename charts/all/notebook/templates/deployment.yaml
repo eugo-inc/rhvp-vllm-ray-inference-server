@@ -1,13 +1,13 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rhvp-notebook
+  name: notebook
   labels:
     {{- include "notebook.labels" . | nindent 4 }}
   {{- if include "notebook.inClusterBuild" . }}
   annotations:
     # Rolls the Deployment to each image a finished build pushes to the ImageStream.
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"rhvp-notebook:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"notebook\")].image"}]'
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"notebook:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"notebook\")].image"}]'
   {{- end }}
 spec:
   replicas: 1
@@ -18,13 +18,13 @@ spec:
   revisionHistoryLimit: 3
   selector:
     matchLabels:
-      app.kubernetes.io/name: rhvp-notebook
+      app.kubernetes.io/name: notebook
   template:
     metadata:
       labels:
         {{- include "notebook.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: rhvp-notebook
+      serviceAccountName: notebook
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -91,7 +91,7 @@ spec:
           imagePullPolicy: {{ .Values.oauthProxy.pullPolicy }}
           args:
             - --provider=openshift
-            - --openshift-service-account=rhvp-notebook
+            - --openshift-service-account=notebook
             - --https-address=:8443
             - --http-address=
             - --upstream=http://127.0.0.1:8888
@@ -99,7 +99,7 @@ spec:
             - --tls-key=/etc/tls/private/tls.key
             - --cookie-secret-file=/etc/proxy/secrets/session_secret
             - --cookie-secure=true
-            - '--openshift-sar={"namespace":"{{ .Release.Namespace }}","resource":"services","resourceName":"rhvp-notebook","verb":"update"}'
+            - '--openshift-sar={"namespace":"{{ .Release.Namespace }}","resource":"services","resourceName":"notebook","verb":"update"}'
           ports:
             - name: https
               containerPort: 8443
@@ -142,7 +142,7 @@ spec:
           emptyDir: {}
         - name: proxy-tls
           secret:
-            secretName: rhvp-notebook-tls
+            secretName: notebook-tls
         - name: proxy-cookie
           secret:
-            secretName: rhvp-notebook-proxy
+            secretName: notebook-proxy

@@ -26,7 +26,7 @@ image:
 build:
   contextDir: inference-server
   dockerfilePath: Containerfile
-  # Name of a Secret in rhvp-inference with git credentials, for a private fork.
+  # Name of a Secret in vllm-inference with git credentials, for a private fork.
   sourceSecret: ""
   # The build unpacks a CUDA devel base image and installs several GB of wheels.
   resources:

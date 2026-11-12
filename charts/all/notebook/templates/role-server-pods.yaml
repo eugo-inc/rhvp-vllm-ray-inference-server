@@ -3,7 +3,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: rhvp-notebook-read-pods
+  name: notebook-read-pods
   namespace: {{ .Values.notebook.serverNamespace }}
   labels:
     {{- include "notebook.labels" . | nindent 4 }}
@@ -20,15 +20,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: rhvp-notebook-read-pods
+  name: notebook-read-pods
   namespace: {{ .Values.notebook.serverNamespace }}
   labels:
     {{- include "notebook.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: rhvp-notebook-read-pods
+  name: notebook-read-pods
 subjects:
   - kind: ServiceAccount
-    name: rhvp-notebook
+    name: notebook
     namespace: {{ .Release.Namespace }}

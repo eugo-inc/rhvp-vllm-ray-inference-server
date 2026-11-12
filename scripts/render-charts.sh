@@ -134,11 +134,11 @@ for dir in charts/all/*/; do
 done
 
 # Variants: prebuilt image (no BuildConfig, ImageStream or trigger) and the opt-ins.
-helm template ray-serve-llm charts/all/ray-serve-llm --namespace rhvp-inference "${FARGS[@]}" "${SETS[@]}" \
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
   --set image.override=quay.io/example/ray-serve-llm:1.0 --set route.enabled=true \
   > "${RENDER_DIR}/charts/ray-serve-llm-variant.yaml"
-helm template notebook charts/all/notebook --namespace rhvp-notebook "${FARGS[@]}" "${SETS[@]}" \
-  --set image.override=quay.io/example/rhvp-notebook:1.0 --set notebook.internal=true \
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set image.override=quay.io/example/notebook:1.0 --set notebook.internal=true \
   --set notebook.replay=/opt/app-root/notebooks/replay/example \
   > "${RENDER_DIR}/charts/notebook-variant.yaml"
 echo "rendered charts/*-variant.yaml"

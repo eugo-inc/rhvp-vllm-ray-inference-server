@@ -242,7 +242,7 @@ def _synthetic_pod() -> dict:
                {"name": "config", "configMap": {"name": "ray-serve-llm-config"}}]
     day = "2026-01-01T"
     return {
-        "metadata": {"name": "ray-serve-llm-synthetic", "namespace": "rhvp-inference",
+        "metadata": {"name": "ray-serve-llm-synthetic", "namespace": "vllm-inference",
                      "creationTimestamp": day + "00:00:00Z", "labels": {"app.kubernetes.io/name": "ray-serve-llm"}},
         "spec": {"containers": [{"name": "server", "env": env, "volumeMounts": mounts}], "volumes": volumes},
         "status": {
@@ -314,7 +314,7 @@ def record(endpoint: str, model: str, count: int = 8, max_tokens: int | None = N
         completion = client.post(measure.COMPLETIONS, json=measure.request_body(model, "Hello", 1, stream=False)).json()
     pods = []
     if measure.in_cluster():
-        pods = measure.read_pods(os.environ.get("RHVP_SERVER_NAMESPACE", "rhvp-inference"),
+        pods = measure.read_pods(os.environ.get("RHVP_SERVER_NAMESPACE", "vllm-inference"),
                                  os.environ.get("RHVP_SERVER_LABEL_SELECTOR", "app.kubernetes.io/name=ray-serve-llm"))
     return {"format": FORMAT,
             "metadata": {"synthetic": False, "note": LIVE_NOTE, "model_id": model,
@@ -333,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--port", type=int, default=8000)
     rec = sub.add_parser("record", help="record a live server's streams")
     rec.add_argument("--out", type=Path, required=True)
-    rec.add_argument("--endpoint", default=os.environ.get("RHVP_ENDPOINT", "http://ray-serve-llm.rhvp-inference.svc:8000"))
+    rec.add_argument("--endpoint", default=os.environ.get("RHVP_ENDPOINT", "http://ray-serve-llm.vllm-inference.svc:8000"))
     rec.add_argument("--model", default=os.environ.get("RHVP_MODEL_ID", MODEL_ID))
     rec.add_argument("--requests", type=int, default=8)
     rec.add_argument("--max-tokens", type=int, default=None)

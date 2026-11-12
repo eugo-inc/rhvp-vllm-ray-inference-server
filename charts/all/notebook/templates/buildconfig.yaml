@@ -5,7 +5,7 @@
 apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
-  name: rhvp-notebook
+  name: notebook
   labels:
     {{- include "notebook.labels" . | nindent 4 }}
 spec:
@@ -34,7 +34,7 @@ spec:
   output:
     to:
       kind: ImageStreamTag
-      name: rhvp-notebook:latest
+      name: notebook:latest
   triggers:
     - type: ConfigChange
 {{- end }}

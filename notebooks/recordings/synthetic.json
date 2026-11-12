@@ -43,7 +43,7 @@
   {
    "metadata": {
     "name": "ray-serve-llm-synthetic",
-    "namespace": "rhvp-inference",
+    "namespace": "vllm-inference",
     "creationTimestamp": "2026-01-01T00:00:00Z",
     "labels": {
      "app.kubernetes.io/name": "ray-serve-llm"

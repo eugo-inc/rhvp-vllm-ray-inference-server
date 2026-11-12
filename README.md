@@ -68,7 +68,7 @@ flowchart TB
       ms["MachineSet job, AWS only: one g6.2xlarge with one NVIDIA L4"]
     end
 
-    subgraph inference["Namespace rhvp-inference"]
+    subgraph inference["Namespace vllm-inference"]
       bc["BuildConfig ray-serve-llm"]
       isr["ImageStream ray-serve-llm"]
       dep["Deployment ray-serve-llm: Ray head + Ray Serve + vLLM, one GPU"]
@@ -76,8 +76,8 @@ flowchart TB
       svc["Service ray-serve-llm, port 8000"]
     end
 
-    subgraph notebook["Namespace rhvp-notebook"]
-      nbbuild["BuildConfig and ImageStream rhvp-notebook"]
+    subgraph notebook["Namespace vllm-notebook"]
+      nbbuild["BuildConfig and ImageStream notebook"]
       nb["Notebook pod: JupyterLab + oauth-proxy"]
       route["Route with OpenShift login"]
     end
@@ -109,7 +109,7 @@ flowchart TB
   clustergroup chart, which creates every app listed in `variants/prod/values-prod.yaml`.
 - **The server pod** runs a Ray head, Ray Serve and vLLM. It reports Ready only after the model has loaded.
 - **The notebook pod** serves JupyterLab behind the OpenShift oauth-proxy. Only users who may edit the
-  `rhvp-notebook` namespace (its editors and admins, and cluster admins) can open it. It talks to the server
+  `vllm-notebook` namespace (its editors and admins, and cluster admins) can open it. It talks to the server
   through the in-cluster Service.
 
 ## What is in the stock stack
@@ -198,22 +198,37 @@ version 580 or newer.
 5. Watch it come up:
    ```sh
    oc get applications.argoproj.io -A
-   oc get builds -n rhvp-inference
-   oc get pods -n rhvp-inference -w
+   oc get builds -n vllm-inference
+   oc get pods -n vllm-inference -w
    ```
 
 [AGENTS.md](AGENTS.md#how-to-deploy) also covers the web-console install, private forks, reloading secrets, and how
 updates and image rebuilds work.
 
-**Installed under the old name?** This pattern was named `rhvp-vllm-ray-inference-server` until November 2026. An
-install made under that name keeps working. Merging the rename into its branch rebuilds both images and restarts the
-server and notebook pods, more than once, so download notebook work first. To move it to the new name, uninstall it
-with `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`, rename your secrets file from
-`values-secret-rhvp-vllm-ray-inference-server.yaml` to `values-secret-vllm-ray-inference-server.yaml`, then install
-again. Until you move it, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `make` target you run on it.
+**Installed under the old name?** This pattern was named `rhvp-vllm-ray-inference-server` until November 2026,
+and its namespaces were `rhvp-inference` and `rhvp-notebook`; they are now `vllm-inference` and `vllm-notebook`. An
+install made under the old name keeps working. Merging the rename into its branch does not delete the old
+namespaces: Argo CD builds and starts a second server and notebook in the new ones, and the old server keeps its
+GPU, so with one GPU the new server waits until you delete the old namespaces. To move the install to the new name
+instead:
+
+1. Download any notebook work you want to keep.
+2. Uninstall it with `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`.
+3. Once the uninstall has finished, check for the old namespaces and the old model's claim. Delete what is left;
+   this deletes the downloaded model. Then check `oc get pv`, as in [Uninstall](#uninstall), step 3.
+   ```sh
+   oc get namespace rhvp-inference rhvp-notebook
+   oc get pvc -n rhvp-inference
+   oc delete namespace rhvp-inference rhvp-notebook
+   ```
+4. Rename your secrets file from `values-secret-rhvp-vllm-ray-inference-server.yaml` to
+   `values-secret-vllm-ray-inference-server.yaml`.
+5. Install again with `./pattern.sh make install`. The new install builds both images and downloads the model again.
+
+Until you move it, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `make` target you run on it.
 Without it, `load-secrets` can load the repo's template instead of your file and replace your token in Vault with
-`none`, and `install` creates a second Pattern next to the old one. [AGENTS.md](AGENTS.md#updating-a-running-install) has the details, including the one
-target that ignores `PATTERN_NAME`.
+`none`, and `install` creates a second Pattern next to the old one. [AGENTS.md](AGENTS.md#updating-a-running-install)
+has the details, including what to delete after a merge and the one target that ignores `PATTERN_NAME`.
 
 ## What to expect on the first install
 
@@ -236,10 +251,10 @@ can outlast that wait. The failure undoes nothing: the pattern is already instal
 recover:
 
 ```sh
-oc get builds -n rhvp-inference                  # is the image build still running, or did it fail?
-oc logs -f bc/ray-serve-llm -n rhvp-inference    # follow the latest build
-oc start-build ray-serve-llm -n rhvp-inference --follow   # only if the build failed
-oc get pods -n rhvp-inference                    # Pending = no GPU yet; Running but not Ready = still loading
+oc get builds -n vllm-inference                  # is the image build still running, or did it fail?
+oc logs -f bc/ray-serve-llm -n vllm-inference    # follow the latest build
+oc start-build ray-serve-llm -n vllm-inference --follow   # only if the build failed
+oc get pods -n vllm-inference                    # Pending = no GPU yet; Running but not Ready = still loading
 ./pattern.sh make argo-healthcheck               # re-check once things settle
 ```
 
@@ -248,11 +263,11 @@ To skip the wait entirely, install with `VP_SKIP_ARGO_HEALTHCHECK=true ./pattern
 
 ## Using the API
 
-The server is reachable inside the cluster at `http://ray-serve-llm.rhvp-inference.svc:8000`. From your workstation,
+The server is reachable inside the cluster at `http://ray-serve-llm.vllm-inference.svc:8000`. From your workstation,
 forward the port:
 
 ```sh
-oc port-forward svc/ray-serve-llm 8000:8000 -n rhvp-inference
+oc port-forward svc/ray-serve-llm 8000:8000 -n vllm-inference
 ```
 
 In another terminal:
@@ -279,12 +294,12 @@ can use the model and the GPU.
 ## The notebook
 
 Open it through its Route and log in with your OpenShift account. The proxy lets in only users who may update the
-Service `rhvp-notebook` in namespace `rhvp-notebook`: that namespace's editors and admins, and cluster admins. Any
+Service `notebook` in namespace `vllm-notebook`: that namespace's editors and admins, and cluster admins. Any
 other logged-in user gets 403 Forbidden. To let someone in, give them the `edit` role there:
-`oc adm policy add-role-to-user edit <user> -n rhvp-notebook`.
+`oc adm policy add-role-to-user edit <user> -n vllm-notebook`.
 
 ```sh
-oc get route -n rhvp-notebook
+oc get route -n vllm-notebook
 ```
 
 The notebook is `inference_timings.ipynb`. It times the server in four sections:
@@ -335,7 +350,7 @@ The model has to fit in the GPU's memory alongside the engine settings in the `r
      -o custom-columns=NAME:.metadata.name,TYPE:.spec.template.spec.providerSpec.value.instanceType
    oc delete machineset <name-of-the-g6.2xlarge-machineset> -n openshift-machine-api
    ```
-3. Check `oc get pv` for a leftover volume from the claim `rhvp-inference/ray-serve-llm-models`.
+3. Check `oc get pv` for a leftover volume from the claim `vllm-inference/ray-serve-llm-models`.
 
 ## Support
 
@@ -359,8 +374,8 @@ software this pattern deploys, and their use does not imply endorsement.
 
 ## What this pattern was verified against
 
-The installs below ran before the pattern was renamed, under its old name `rhvp-vllm-ray-inference-server`, which
-shows below where the installer used it.
+The installs below ran before the pattern and its namespaces were renamed, under its old name
+`rhvp-vllm-ray-inference-server`, which shows below where the installer used it.
 
 - **A fresh install on AWS** (November 2026): a new installer-provisioned compact cluster, not changed after the
   installer ran: OpenShift 4.22.18, x86_64, region us-east-1, three m5.2xlarge nodes that are both control plane and

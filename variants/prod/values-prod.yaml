@@ -12,8 +12,8 @@ clusterGroup:
     external-secrets:
     openshift-nfd:
     nvidia-gpu-operator:
-    rhvp-inference:
-    rhvp-notebook:
+    vllm-inference:
+    vllm-notebook:
 
   subscriptions:
     eso:
@@ -65,7 +65,7 @@ clusterGroup:
       path: charts/all/nvidia-gpu-config
     ray-serve-llm:
       name: ray-serve-llm
-      namespace: rhvp-inference
+      namespace: vllm-inference
       path: charts/all/ray-serve-llm
       # The image trigger rewrites the server container's image to the digest
       # of each finished build, so Argo CD must not compare or reset it. The
@@ -94,14 +94,14 @@ clusterGroup:
           - RespectIgnoreDifferences=true
     notebook:
       name: notebook
-      namespace: rhvp-notebook
+      namespace: vllm-notebook
       path: charts/all/notebook
       # Only the notebook container is image-triggered; the oauth-proxy
       # container's image stays compared, so an oauthProxy.image change syncs.
       ignoreDifferences:
         - group: apps
           kind: Deployment
-          name: rhvp-notebook
+          name: notebook
           jqPathExpressions:
             - '.spec.template.spec.containers[] | select(.name == "notebook") | .image'
         - group: build.openshift.io
@@ -111,8 +111,8 @@ clusterGroup:
         # The oauth-proxy cookie secret is generated once, when the Secret is
         # first created; later renders must not replace it.
         - kind: Secret
-          name: rhvp-notebook-proxy
-          namespace: rhvp-notebook
+          name: notebook-proxy
+          namespace: vllm-notebook
           jsonPointers:
             - /data/session_secret
       syncPolicy:

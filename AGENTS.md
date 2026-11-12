@@ -38,16 +38,18 @@ one, change it everywhere and run the tests.
 | Pattern (`global.pattern`) | `vllm-ray-inference-server`; also `name` in `pattern-metadata.yaml`, the `app.kubernetes.io/part-of` label in both charts, both Containerfiles' labels, and the secrets file name |
 | GitHub repository | `https://github.com/eugo-inc/vllm-ray-inference-server`: `pattern-metadata.yaml`, the `global.repoURL` stubs in both charts' `values.yaml`, `scripts/render-charts.sh` and both Containerfiles' labels |
 | Cluster group / variant | `prod` (`variants/prod/values-prod.yaml`) |
-| Server namespace | `rhvp-inference` |
-| Notebook namespace | `rhvp-notebook` |
+| Server namespace | `vllm-inference` |
+| Notebook namespace | `vllm-notebook` |
 | Server Deployment, Service, ImageStream, BuildConfig | `ray-serve-llm` (label `app.kubernetes.io/name=ray-serve-llm`, container `server`) |
 | Server Service port | `8000`, port name `http` |
 | Server config | ConfigMap `ray-serve-llm-config`, key `llm.yaml`, mounted at `/config/llm.yaml` |
 | Model cache | PVC `ray-serve-llm-models`, mounted at `/models` |
 | Hugging Face token | Vault `secret/data/hub/hfmodel`, property `hftoken` → ExternalSecret and Secret `huggingface-secret`, key `hftoken` |
 | Server build | BuildConfig `contextDir: inference-server`, `dockerfilePath: Containerfile` |
-| Notebook build | BuildConfig and ImageStream `rhvp-notebook`, `contextDir: notebooks`, `dockerfilePath: Containerfile` |
-| Notebook ServiceAccount | `rhvp-notebook`, with a Role and RoleBinding in `rhvp-inference` that allow get/list/watch on pods |
+| Notebook Deployment, Service, Route | `notebook` (label `app.kubernetes.io/name=notebook`, containers `notebook` and `oauth-proxy`); Secrets `notebook-tls` (serving certificate) and `notebook-proxy` (cookie secret) |
+| Notebook build | BuildConfig and ImageStream `notebook`, `contextDir: notebooks`, `dockerfilePath: Containerfile` |
+| Notebook ServiceAccount | `notebook`, with a Role and RoleBinding `notebook-read-pods` in `vllm-inference` that allow get/list/watch on pods |
+| Rebuild permission | Role and RoleBinding `rebuild-on-commit` in both namespaces, for ServiceAccount `imperative/imperative-sa`; the namespaces and BuildConfig names are also listed in `ansible/rebuild-on-commit.yaml` |
 
 ## Repo map
 
@@ -124,10 +126,10 @@ Server container environment:
 
 Notebook environment (set by the chart, read by `rhvp_bench`):
 
-- `RHVP_ENDPOINT=http://ray-serve-llm.rhvp-inference.svc:8000`
+- `RHVP_ENDPOINT=http://ray-serve-llm.vllm-inference.svc:8000`
 - `RHVP_MODEL_ID=<global.model.id>`
 - `RHVP_MODEL_REVISION=<global.model.revision>`, set only when the revision is not empty.
-- `RHVP_SERVER_NAMESPACE=rhvp-inference`
+- `RHVP_SERVER_NAMESPACE=vllm-inference`
 - `RHVP_SERVER_LABEL_SELECTOR=app.kubernetes.io/name=ray-serve-llm`
 - Optional `RHVP_INTERNAL=1` adds an amber INTERNAL strip. It is off by default.
 - Optional `RHVP_REPLAY=<path to a recorded run>` turns on REPLAY mode.
@@ -239,7 +241,7 @@ it to sync.
    `make install` already loaded it once. The secret travels from Vault (`secret/data/hub/hfmodel`, property
    `hftoken`) through ExternalSecret `huggingface-secret` to the Secret `huggingface-secret`. The server reads
    `HF_TOKEN` only when its container starts, so delete the pod to pick up a new token:
-   `oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n rhvp-inference`.
+   `oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n vllm-inference`.
 7. `./pattern.sh make argo-healthcheck` checks again that every Argo CD application is Synced and Healthy. Use
    it after an install that timed out.
 
@@ -284,18 +286,18 @@ Argo CD needs credentials to read a private fork:
    ```
 3. See https://validatedpatterns.io/learn/private-repos/ for the Secret format.
 
-That token covers Argo CD only. The in-cluster BuildConfigs (`ray-serve-llm`, `rhvp-notebook`) also clone the
+That token covers Argo CD only. The in-cluster BuildConfigs (`ray-serve-llm`, `notebook`) also clone the
 repo from `global.repoURL`, and they do not use that Secret. For a private fork, give each build its own git
 credentials:
 
 1. Create a source secret in each build's namespace, for example with a GitHub token:
    ```sh
-   oc create secret generic rhvp-git -n rhvp-inference --type=kubernetes.io/basic-auth \
+   oc create secret generic pattern-git -n vllm-inference --type=kubernetes.io/basic-auth \
      --from-literal=username=<you> --from-literal=password=<token>
-   oc create secret generic rhvp-git -n rhvp-notebook --type=kubernetes.io/basic-auth \
+   oc create secret generic pattern-git -n vllm-notebook --type=kubernetes.io/basic-auth \
      --from-literal=username=<you> --from-literal=password=<token>
    ```
-2. Set `build.sourceSecret: rhvp-git` in `charts/all/ray-serve-llm/values.yaml` and
+2. Set `build.sourceSecret: pattern-git` in `charts/all/ray-serve-llm/values.yaml` and
    `charts/all/notebook/values.yaml`, then push.
 
 Or keep the fork public, or set `image.override` to a prebuilt image. On a running install, a new `image.override`
@@ -310,7 +312,7 @@ needs extra steps; see Troubleshooting.
 - **Images.** A BuildConfig's ConfigChange trigger fires only when the BuildConfig is created, so a push alone
   does not rebuild an image. There are two ways to rebuild:
   - **Automatic.** The `rebuild-on-commit` imperative job (`ansible/rebuild-on-commit.yaml`) runs every 10
-    minutes, for both `ray-serve-llm` and `rhvp-notebook`. It starts a build only when that build's folder
+    minutes, for both `ray-serve-llm` and `notebook`. It starts a build only when that build's folder
     (`inference-server/` or `notebooks/`) changed between the last successful build's commit and the head of the
     target branch. A failed build is not retried automatically. The full rule list is at the top of
     `ansible/rebuild_on_commit.py`. An error on one build (for example a Forbidden `start-build` when
@@ -320,19 +322,22 @@ needs extra steps; see Troubleshooting.
     300-second job timeout can still fail the pod, and that also skips the GPU MachineSet job for that run.
   - **By hand:**
     ```sh
-    oc start-build ray-serve-llm -n rhvp-inference --follow
-    oc start-build rhvp-notebook -n rhvp-notebook --follow
+    oc start-build ray-serve-llm -n vllm-inference --follow
+    oc start-build notebook -n vllm-notebook --follow
     ```
 
   A finished build updates the ImageStream. The image trigger annotation then rolls the Deployment.
 - **Installs made under the old name.** Until November 2026 this pattern was named
-  `rhvp-vllm-ray-inference-server`. An install made under that name keeps working, and its Pattern resource and
-  clustergroup app keep that name.
-  - Merging the rename into your install's branch restarts both pods. Argo CD applies the new
-    `app.kubernetes.io/part-of` label, which rolls the server and notebook Deployments; the server is down until its
-    new pod is Ready. The rename also changes both build folders, so `rebuild-on-commit` then rebuilds both images
-    (the server image takes about 18 minutes), and each new image rolls its Deployment again. The notebook pod loses
-    your edits each time it restarts, so download notebook work first.
+  `rhvp-vllm-ray-inference-server`, and its namespaces were `rhvp-inference` and `rhvp-notebook`. An install made
+  under the old name keeps working, and its Pattern resource and clustergroup app keep that name.
+  - Merging the rename into your install's branch moves both apps to the new namespaces, `vllm-inference` and
+    `vllm-notebook`, and nothing deletes the old ones. The `ray-serve-llm` and `notebook` apps sync without pruning
+    (`automated: {}` in `variants/prod/values-prod.yaml`), and the Validated Patterns Operator syncs the
+    clustergroup app without pruning too. So Argo CD creates a second server and a second notebook in the new
+    namespaces, builds both images there (the server image takes about 18 minutes), and creates a new model PVC, so
+    the new server downloads the model again. The old server keeps running in `rhvp-inference` and keeps its GPU.
+    With one GPU, the new server pod stays Pending until you delete the old namespaces (see "Old namespaces" below).
+    This is what the charts and the operator's code imply; it has not been tried on a cluster.
   - The installer takes the pattern name from `PATTERN_NAME` when it is set, and from `global.pattern` otherwise,
     and finds the Pattern resource and the secrets file by that name. So once your fork has the new
     `global.pattern`, set `PATTERN_NAME=rhvp-vllm-ray-inference-server` on every `./pattern.sh make` target you run
@@ -345,14 +350,32 @@ needs extra steps; see Troubleshooting.
     `PATTERN_NAME`. For it, set `VALUES_SECRET` to your old secrets file's path instead.
 
   To move the install to the new name:
-  1. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
+  1. Download any notebook work you want to keep.
+  2. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
      (see [Uninstall](#uninstall)).
-  2. Rename your secrets file, if you have one:
+  3. Once the uninstall has finished, check for the old namespaces and delete them (see "Old namespaces" below).
+  4. Rename your secrets file, if you have one:
      ```sh
      mv ~/.config/validated-patterns/values-secret-rhvp-vllm-ray-inference-server.yaml \
         ~/.config/validated-patterns/values-secret-vllm-ray-inference-server.yaml
      ```
-  3. Install again: `./pattern.sh make install`.
+  5. Install again: `./pattern.sh make install`. The new install creates `vllm-inference` and `vllm-notebook`,
+     builds both images, and downloads the model again into a new PVC, `vllm-inference/ray-serve-llm-models`.
+
+  Old namespaces. Neither path is sure to delete `rhvp-inference` and `rhvp-notebook`. A merge never does. The
+  uninstall is experimental and has not been checked here; the framework's announcement says its last phase removes
+  namespaces. Delete them only after the merge has synced or the uninstall has finished; before that, Argo CD can
+  create them again. To check:
+  ```sh
+  oc get namespace rhvp-inference rhvp-notebook
+  oc get pvc ray-serve-llm-models -n rhvp-inference
+  ```
+  To delete them with everything in them, including the old server, the old notebook and the downloaded model:
+  ```sh
+  oc delete namespace rhvp-inference rhvp-notebook
+  ```
+  Then check `oc get pv` for a volume whose claim was `rhvp-inference/ray-serve-llm-models`. A volume with the
+  reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`.
 
 ## Before changing structure, study how existing patterns do it
 
@@ -512,20 +535,20 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
     change one prebuilt image for another, only step 2 is needed: there is no trigger, and nothing to remove.
     1. Wait until Argo CD has applied the commit: this prints nothing once the image-trigger annotation is gone
        (before that, the trigger would put the old image back):
-       `oc get deployment/ray-serve-llm -n rhvp-inference -o jsonpath='{.metadata.annotations.image\.openshift\.io/triggers}'`
-       (for the notebook, `deployment/rhvp-notebook -n rhvp-notebook`). The app still shows OutOfSync at this
+       `oc get deployment/ray-serve-llm -n vllm-inference -o jsonpath='{.metadata.annotations.image\.openshift\.io/triggers}'`
+       (for the notebook, `deployment/notebook -n vllm-notebook`). The app still shows OutOfSync at this
        point, because of the objects step 3 removes.
     2. Set the image on the Deployment yourself. Argo CD ignores that one field, so the value stays:
-       `oc set image deployment/ray-serve-llm server=<your image> -n rhvp-inference`
-       (for the notebook: `oc set image deployment/rhvp-notebook notebook=<your image> -n rhvp-notebook`).
+       `oc set image deployment/ray-serve-llm server=<your image> -n vllm-inference`
+       (for the notebook: `oc set image deployment/notebook notebook=<your image> -n vllm-notebook`).
        Wait until the new pod runs that image.
     3. Remove what the chart no longer renders. The apps sync automatically without pruning, so Argo CD leaves the
        BuildConfig, ImageStream and the rebuild Role and RoleBinding in place; the app stays OutOfSync and
        `rebuild-on-commit` keeps starting builds of that BuildConfig. Either sync once with Prune checked in the
        Argo CD UI, or delete them:
-       `oc delete buildconfig/ray-serve-llm imagestream/ray-serve-llm role/rhvp-rebuild-on-commit rolebinding/rhvp-rebuild-on-commit -n rhvp-inference`
-       (for the notebook, `buildconfig/rhvp-notebook imagestream/rhvp-notebook` and the same Role and RoleBinding,
-       in `rhvp-notebook`). Do this only after step 2: the old pod's image is pulled through that ImageStream.
+       `oc delete buildconfig/ray-serve-llm imagestream/ray-serve-llm role/rebuild-on-commit rolebinding/rebuild-on-commit -n vllm-inference`
+       (for the notebook, `buildconfig/notebook imagestream/notebook` and the same Role and RoleBinding,
+       in `vllm-notebook`). Do this only after step 2: the old pod's image is pulled through that ImageStream.
   - Do not delete the Deployment instead: these apps sync automatically without self-heal, so Argo CD recreates a
     deleted Deployment only on the next commit or a manual sync, and the server stays down until then.
   - A fresh install with `image.override` set from the start needs none of this: no BuildConfig, ImageStream,
@@ -533,9 +556,9 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
 - **The image did not change after a push, or the first build failed.**
   - Why: ConfigChange triggers fire only when the BuildConfig is created. `rebuild-on-commit` starts a new build
     only after a push changes the build's folder, and it never retries a failed build on its own.
-  - Fix: read the build log with `oc logs -f bc/ray-serve-llm -n rhvp-inference`, fix the cause, then start the
-    build by hand: `oc start-build ray-serve-llm -n rhvp-inference --follow` (for the notebook:
-    `oc start-build rhvp-notebook -n rhvp-notebook --follow`).
+  - Fix: read the build log with `oc logs -f bc/ray-serve-llm -n vllm-inference`, fix the cause, then start the
+    build by hand: `oc start-build ray-serve-llm -n vllm-inference --follow` (for the notebook:
+    `oc start-build notebook -n vllm-notebook --follow`).
 - **The `ray-serve-llm` Argo CD app shows OutOfSync.**
   - Why: the image trigger rewrites the Deployment's container image to a digest. The app entry in
     `variants/prod/values-prod.yaml` handles this with `ignoreDifferences` on the triggered container's image
@@ -545,7 +568,7 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
 - **`make install` fails after about an hour, with apps not Healthy.**
   - Why: the installer waits at most 60 minutes, and a first install can take longer. Everything before the wait
     has already run: the pattern is installed and the secrets are loaded.
-  - Fix: watch progress with `oc get builds -n rhvp-inference` and `oc get pods -n rhvp-inference`, then run
+  - Fix: watch progress with `oc get builds -n vllm-inference` and `oc get pods -n vllm-inference`, then run
     `./pattern.sh make argo-healthcheck`. To skip the wait on a later install, run
     `VP_SKIP_ARGO_HEALTHCHECK=true ./pattern.sh make install`, then run `make argo-healthcheck` once things
     settle.
@@ -596,4 +619,4 @@ the NVIDIA L4 on the default AWS node (README, "What this pattern was verified a
     -o custom-columns=NAME:.metadata.name,TYPE:.spec.template.spec.providerSpec.value.instanceType
   oc delete machineset <name-of-the-g6.2xlarge-machineset> -n openshift-machine-api
   ```
-- Check `oc get pv` for a leftover volume from claim `rhvp-inference/ray-serve-llm-models`.
+- Check `oc get pv` for a leftover volume from claim `vllm-inference/ray-serve-llm-models`.

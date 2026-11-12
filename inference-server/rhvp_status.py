@@ -4,7 +4,7 @@
 Run it inside the server container, where the Ray cluster started by
 serve_app.py is visible, for example::
 
-    oc exec -n rhvp-inference deploy/ray-serve-llm -c server -- python rhvp_status.py
+    oc exec -n vllm-inference deploy/ray-serve-llm -c server -- python rhvp_status.py
 
 It attaches with ``ray.init(address="auto")``, which finds the Ray processes
 running in this container, and prints one word:

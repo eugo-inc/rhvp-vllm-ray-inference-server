@@ -15,9 +15,9 @@ import os
 
 from . import draw, measure, prompts, replay, words
 
-DEFAULT_ENDPOINT = "http://ray-serve-llm.rhvp-inference.svc:8000"
+DEFAULT_ENDPOINT = "http://ray-serve-llm.vllm-inference.svc:8000"
 DEFAULT_MODEL = "qwen2.5-0.5b-instruct"
-DEFAULT_NAMESPACE = "rhvp-inference"
+DEFAULT_NAMESPACE = "vllm-inference"
 DEFAULT_SELECTOR = "app.kubernetes.io/name=ray-serve-llm"
 SERVER_CONTAINER = "server"
 ON = ("1", "true", "yes", "on")

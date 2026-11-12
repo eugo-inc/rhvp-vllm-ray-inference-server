@@ -261,7 +261,7 @@ def test_no_hardware_names_in_the_notebook_folder():
 
 
 def test_the_address_check_trips_on_planted_controls():
-    for planted in ("http://x", "ray-serve-llm.rhvp-inference.svc", "localhost", "127.0.0.1", "port :8000"):
+    for planted in ("http://x", "ray-serve-llm.vllm-inference.svc", "localhost", "127.0.0.1", "port :8000"):
         assert ADDRESS.search(planted), planted
 
 
