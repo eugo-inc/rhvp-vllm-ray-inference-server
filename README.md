@@ -305,7 +305,8 @@ oc get route -n vllm-notebook
 The notebook is `inference_timings.ipynb`. It times the server in four sections:
 
 1. **Server pod start to Ready.** Read from the pod's Kubernetes status, so this section runs only inside the
-   cluster.
+   cluster. Kubernetes records these times in whole seconds, and the server's probes check for its ready file
+   every 2 seconds, so Ready can be recorded up to about 4 seconds after the server is serving.
 2. **Time to first token.**
 3. **Single-stream decode tokens per second.**
 4. **Aggregate tokens per second at 1, 8 and 32 concurrent requests.**

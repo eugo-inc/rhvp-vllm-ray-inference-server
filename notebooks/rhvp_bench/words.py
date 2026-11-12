@@ -78,7 +78,7 @@ STARTUP_STEPS = ("Placed on a node to container start: {to_start} s, including a
 STARTUP_EMPTY = "Empty when the pod started: {names}."
 STARTUP_KEPT = "Kept between starts: {names}."
 STARTUP_SECONDS = ("Kubernetes records these times in whole seconds. The pod's probes look for the server's ready file "
-                   "every 10 seconds, so Ready can be recorded up to about 20 seconds after the server is serving. If "
+                   "every 2 seconds, so Ready can be recorded up to about 4 seconds after the server is serving. If "
                    "the pod lost Ready and got it back since it started, the time runs to its latest Ready.")
 #: What each of the server container's storage settings holds, by environment variable.
 CACHE_NAMES = {

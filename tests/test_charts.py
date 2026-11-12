@@ -133,6 +133,12 @@ def test_server_probes(server):
     assert ready["exec"]["command"] == READY_FILE
     budget = startup["periodSeconds"] * startup["failureThreshold"]
     assert 3500 <= budget <= 3700, budget
+    # A short period keeps the notebook's start-to-Ready figure close to the moment the server is serving.
+    assert startup["periodSeconds"] == 2 and ready["periodSeconds"] == 2
+    assert ready["periodSeconds"] * ready["failureThreshold"] == 30
+    # The notebook's words state the period; keep them in step with the chart.
+    words = (REPO / "notebooks/rhvp_bench/words.py").read_text()
+    assert f"every {ready['periodSeconds']} seconds" in words
     assert live["httpGet"] == {"path": "/-/healthz", "port": "http"}
     assert live["initialDelaySeconds"] >= 60
     assert c["ports"] == [{"name": "http", "containerPort": 8000, "protocol": "TCP"}]

@@ -95,7 +95,9 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 3. It starts Ray with a 2 GiB object store, starts Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`.
    `serve.run` returns once the app is RUNNING, which means the model is loaded.
 4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM.
-5. The startup and readiness probes check that ready file. The liveness probe calls `/-/healthz`.
+5. The startup and readiness probes check that ready file every 2 seconds, so the pod turns Ready up to about 4
+   seconds after the file appears. That is the resolution of the notebook's start-to-Ready figure, which
+   Kubernetes also records in whole seconds. The liveness probe calls `/-/healthz` every 30 seconds.
 
 `llm.yaml` (the chart renders it from `values-global.yaml`):
 
