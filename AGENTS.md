@@ -180,8 +180,9 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
 to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). Not checked
-yet: a run on OpenShift with a GPU (restricted SCC, internal registry, Argo CD), DCGM energy on a cluster, and the
-length of a run (an estimate of 2 to 3 hours with the defaults).
+yet: any round against a real inference server (every end-to-end run used GuideLLM's mock server, without a GPU);
+tokens per joule from real power samples (DCGM or nvidia-smi); a run on OpenShift (restricted SCC, internal
+registry, Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
 
 ## How to deploy
 

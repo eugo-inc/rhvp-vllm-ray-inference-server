@@ -49,8 +49,9 @@ global:
   # again. Change it only after the current run has finished, or delete the
   # running Job first: two runs at once share the GPU, and the first to end
   # brings the live server back while the other is still measuring. A partial
-  # run's Job reads Failed (the notebook app shows Degraded until you delete
-  # it). Setting enabled back to false deletes nothing.
+  # run's Job reads Failed; before you delete it, set enabled to false or start
+  # a new run, or a later sync creates it again and the run repeats. Setting
+  # enabled back to false deletes nothing.
   compare:
     enabled: false
     # Lower-case letters, digits, "-" or "."; at most 40 characters.

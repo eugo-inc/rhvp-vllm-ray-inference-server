@@ -395,8 +395,8 @@ oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
    - check `runName`, `rounds`, `load` and `analysis`. The comments there explain each setting.
-3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. The `notebook` app stays
-   Progressing while the Job runs.
+3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
+   app to show Progressing while the Job runs; this has not been tried on a cluster.
 4. Follow it: `oc get configmap -n vllm-notebook -l app.kubernetes.io/component=compare-run`, or the Job's log.
 5. Open `compare_images.ipynb` in the notebook to see the results.
 
@@ -407,8 +407,11 @@ Run one comparison at a time. Before you push a new run, wait for the current on
 two runs at once share the GPU, and the first to end scales the live server back up while the other is still
 measuring.
 
-A run that ends partial (some rounds failed, or it was stopped) exits 1, so its Job reads `Failed` and Argo CD shows
-the `notebook` app as Degraded until you delete that Job. The results of the rounds that finished are kept.
+A run that ends partial (some rounds failed, or it was stopped) exits 1, so its Job reads `Failed`, and we expect
+Argo CD to show the `notebook` app as Degraded until that Job is gone (not tried on a cluster). The results of the
+rounds that finished are kept. Do not just delete the Job: it is still in Git, so the next sync (after any later
+commit) would create it again, and a run that is not complete runs again from the start and takes the server down
+again. First set `enabled: false`, or change the config to start a new run, push, and only then delete the old Job.
 
 Setting `enabled: false` deletes nothing, because the apps sync without pruning. Delete old Jobs, the
 `image-compare-config-*` and `compare-*` ConfigMaps and the PVC `image-compare-results` yourself when you no longer
@@ -512,14 +515,18 @@ images, not on vLLM versions inside one image. To compare this pattern's server 
 
 ### What has not been checked
 
+- No round has started a real inference server yet: every end-to-end run used GuideLLM's mock server, without a
+  GPU. The example config (two vLLM releases) has not been run; the `vllm-openai` preset's arguments, the start as
+  an arbitrary UID, the log phases and `GET /version` are covered by unit tests only.
+- Tokens per joule has not been computed from real power samples, from DCGM or from nvidia-smi; both readers are
+  tested against recorded answer shapes only.
 - No comparison has run on OpenShift with a GPU yet. The runner's Job, with the chart's RBAC, has run on a plain
   Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the
   status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
   `STOPPED`, deleted the side and brought the server back within seconds. That says nothing about OpenShift's
   restricted security context, the internal registry, the cluster's monitoring or Argo CD. The whole run has also
   been tried with docker (`scripts/compare-local.sh`), against the same mock server.
-- Energy from DCGM has not been read on a cluster. Its parsing is tested against recorded answer shapes, under both
-  the old and the new DCGM exporter metric names.
+- DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - The length of a run, and so of the server's outage, is an estimate.
 
 ## Changing the model
