@@ -12,6 +12,11 @@ clusterGroup:
     external-secrets:
     openshift-nfd:
     nvidia-gpu-operator:
+      # Lets the cluster's own monitoring scrape the GPU Operator's DCGM exporter
+      # (its ServiceMonitor), as NVIDIA's OpenShift guide says. The image
+      # comparison reads GPU power from there.
+      labels:
+        openshift.io/cluster-monitoring: "true"
     vllm-inference:
     vllm-notebook:
 

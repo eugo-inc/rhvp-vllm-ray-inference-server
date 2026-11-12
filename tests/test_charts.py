@@ -381,6 +381,119 @@ def test_notebook_build(notebook, notebook_variant):
     assert container(deploy, "notebook")["image"] == "quay.io/example/notebook:1.0"
 
 
+# ---- the image comparison (global.compare) --------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def compare(render) -> dict[str, list[dict]]:
+    return {name: docs(render / f"charts/{name}.yaml")
+            for name in ("ray-serve-llm-compare", "notebook-compare", "notebook-compare-noenergy")}
+
+
+COMPARE_KINDS = {"Job", "PersistentVolumeClaim", "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
+
+
+def test_compare_is_off_by_default(server, notebook):
+    assert GLOBAL["global"]["compare"]["enabled"] is False
+    assert one(server, "Deployment", "ray-serve-llm")["spec"]["replicas"] == 1
+    assert not [d for d in notebook if "compare" in d["metadata"]["name"]]
+    assert not kinds(notebook) & {"Job", "PersistentVolumeClaim", "ClusterRole"}
+    deploy = one(notebook, "Deployment", "notebook")
+    assert "RHVP_COMPARE_RESULTS" not in env_map(container(deploy, "notebook"))
+
+
+def test_compare_scales_the_server_to_zero(compare):
+    assert one(compare["ray-serve-llm-compare"], "Deployment", "ray-serve-llm")["spec"]["replicas"] == 0
+
+
+def test_compare_job(compare):
+    items = compare["notebook-compare"]
+    [job] = [d for d in items if d["kind"] == "Job"]
+    config = one(items, "ConfigMap")
+    digest = config["metadata"]["name"].rsplit("-", 1)[1]
+    assert job["metadata"]["name"] == f"compare-{GLOBAL['global']['compare']['runName']}-{digest}"
+    assert len(job["metadata"]["name"]) <= 63
+    spec = job["spec"]
+    assert spec["backoffLimit"] == 0 and "ttlSecondsAfterFinished" not in spec
+    pod = spec["template"]["spec"]
+    assert pod["serviceAccountName"] == "image-compare" and pod["restartPolicy"] == "Never"
+    assert pod["securityContext"] == {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}}
+    affinity = pod["affinity"]["podAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]
+    assert affinity == {"labelSelector": {"matchLabels": {"app.kubernetes.io/name": "notebook"}},
+                        "topologyKey": "kubernetes.io/hostname"}
+    [copy] = pod["initContainers"]
+    assert copy["image"] == "image-registry.openshift-image-registry.svc:5000/vllm-notebook/notebook:latest"
+    assert copy["command"] == ["cp", "-R", "/opt/app-root/notebooks/rhvp_compare", "/runner/"]
+    [runner] = pod["containers"]
+    assert runner["image"].startswith("ghcr.io/vllm-project/guidellm:v0.8.1@sha256:")
+    assert runner["command"] == ["python", "-m", "rhvp_compare", "run", "--backend", "kube", "--config",
+                                 "/config/compare.json", "--results", "/results"]
+    env = env_map(runner)
+    assert env["RHVP_COMPARE_NAMESPACE"] == "vllm-inference" and env["PYTHONPATH"] == "/runner"
+    assert env["RHVP_COMPARE_MODELS_PVC"] == "ray-serve-llm-models"
+    assert json.loads(env["RHVP_COMPARE_SIDE_RESOURCES"])["limits"]["memory"] == "24Gi"
+    for c in pod["initContainers"] + pod["containers"]:
+        assert c["securityContext"] == {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
+    assert "runAsUser" not in json.dumps(job)
+    volumes = {v["name"]: v for v in pod["volumes"]}
+    assert volumes["config"]["configMap"]["name"] == config["metadata"]["name"]
+    assert volumes["results"]["persistentVolumeClaim"]["claimName"] == "image-compare-results"
+    pvc = one(items, "PersistentVolumeClaim", "image-compare-results")
+    assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
+
+
+def test_compare_config_is_global_compare_plus_the_model(compare):
+    config = json.loads(one(compare["notebook-compare"], "ConfigMap")["data"]["compare.json"])
+    want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k != "enabled"}
+    assert {k: v for k, v in config.items() if k != "model"} == json.loads(json.dumps(want))
+    assert config["model"] == {k: GLOBAL["global"]["model"][k] for k in ("id", "source", "revision")}
+    sys.path.insert(0, str(REPO / "notebooks"))
+    from rhvp_compare import plan as plans
+
+    plan = plans.build(config, "openshift")
+    assert plan["floor"]["reachable"] and plan["energy"]["source"] == "dcgm"
+    for side in plan["sides"]:
+        assert side["image"].startswith("docker.io/vllm/vllm-openai:v") and "@sha256:" in side["image"]
+
+
+def test_compare_rbac(compare):
+    items = compare["notebook-compare"]
+    role = one(items, "Role", "image-compare-sides")
+    assert role["metadata"]["namespace"] == "vllm-inference"
+    assert role["rules"] == [
+        {"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete", "get", "list", "watch"]},
+        {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+        {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["huggingface-secret"], "verbs": ["get"]}]
+    binding = one(items, "RoleBinding", "image-compare-sides")
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "image-compare", "namespace": "vllm-notebook"}]
+    cluster_role = one(items, "ClusterRole", "vllm-notebook-image-compare")
+    assert cluster_role["rules"] == [
+        {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get"]},
+        {"apiGroups": ["config.openshift.io"], "resources": ["clusterversions"], "verbs": ["get"]}]
+    monitoring = one(items, "ClusterRoleBinding", "vllm-notebook-image-compare-monitoring")
+    assert monitoring["roleRef"]["name"] == "cluster-monitoring-view"
+    names = {d["metadata"]["name"] for d in compare["notebook-compare-noenergy"] if d["kind"] == "ClusterRoleBinding"}
+    assert names == {"vllm-notebook-image-compare"}
+
+
+def test_compare_notebook_mounts_the_results_read_only(compare):
+    deploy = one(compare["notebook-compare"], "Deployment", "notebook")
+    c = container(deploy, "notebook")
+    assert env_map(c)["RHVP_COMPARE_RESULTS"] == "/results"
+    assert {"name": "compare-results", "mountPath": "/results", "readOnly": True} in c["volumeMounts"]
+    volume = next(v for v in deploy["spec"]["template"]["spec"]["volumes"] if v["name"] == "compare-results")
+    assert volume["persistentVolumeClaim"] == {"claimName": "image-compare-results", "readOnly": True}
+    assert deploy["spec"]["strategy"] == {"type": "Recreate"}
+    variant = compare["notebook-compare-noenergy"]
+    [job] = [d for d in variant if d["kind"] == "Job"]
+    assert job["spec"]["template"]["spec"]["initContainers"][0]["image"] == "quay.io/example/notebook:1.0"
+
+
+def test_gpu_operator_namespace_is_scraped_by_cluster_monitoring(cg):
+    [ns] = [d for d in cg["default"] if d["kind"] == "Namespace" and d["metadata"]["name"] == "nvidia-gpu-operator"]
+    assert ns["metadata"]["labels"]["openshift.io/cluster-monitoring"] == "true"
+
+
 # ---- GPU enablement ------------------------------------------------------------------------
 
 

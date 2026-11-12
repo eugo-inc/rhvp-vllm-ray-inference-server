@@ -1,0 +1,6156 @@
+{
+ "schema": "rhvp-image-compare/1",
+ "run": {
+  "id": "synthetic-example-60a94f13",
+  "name": "synthetic-example",
+  "status": "complete",
+  "started_at": "2026-01-01T00:00:00.000Z",
+  "finished_at": "2026-01-01T02:15:15.353Z",
+  "platform": "openshift",
+  "synthetic": true,
+  "notes": [
+   "Synthetic: written by notebooks/rhvp_compare/example.py, never measured."
+  ],
+  "errors": []
+ },
+ "plan": {
+  "schema": "rhvp-image-compare/1",
+  "run_name": "synthetic-example",
+  "run_id": "synthetic-example-60a94f13",
+  "platform": "openshift",
+  "model": {
+   "id": "example-model",
+   "source": "example-org/example-model",
+   "revision": ""
+  },
+  "sides": [
+   {
+    "key": "A",
+    "name": "baseline",
+    "image": "registry.example/inference-server:baseline",
+    "preset": "vllm-openai",
+    "command": null,
+    "args": [],
+    "env": {},
+    "gpu": true
+   },
+   {
+    "key": "B",
+    "name": "candidate",
+    "image": "registry.example/inference-server:candidate",
+    "preset": "vllm-openai",
+    "command": null,
+    "args": [],
+    "env": {},
+    "gpu": true
+   }
+  ],
+  "rounds": [
+   {
+    "index": 1,
+    "side": "A",
+    "kind": "warmup",
+    "pair": null
+   },
+   {
+    "index": 2,
+    "side": "B",
+    "kind": "warmup",
+    "pair": null
+   },
+   {
+    "index": 3,
+    "side": "A",
+    "kind": "scored",
+    "pair": 1
+   },
+   {
+    "index": 4,
+    "side": "B",
+    "kind": "scored",
+    "pair": 1
+   },
+   {
+    "index": 5,
+    "side": "B",
+    "kind": "scored",
+    "pair": 2
+   },
+   {
+    "index": 6,
+    "side": "A",
+    "kind": "scored",
+    "pair": 2
+   },
+   {
+    "index": 7,
+    "side": "A",
+    "kind": "scored",
+    "pair": 3
+   },
+   {
+    "index": 8,
+    "side": "B",
+    "kind": "scored",
+    "pair": 3
+   },
+   {
+    "index": 9,
+    "side": "B",
+    "kind": "scored",
+    "pair": 4
+   },
+   {
+    "index": 10,
+    "side": "A",
+    "kind": "scored",
+    "pair": 4
+   },
+   {
+    "index": 11,
+    "side": "A",
+    "kind": "scored",
+    "pair": 5
+   },
+   {
+    "index": 12,
+    "side": "B",
+    "kind": "scored",
+    "pair": 5
+   },
+   {
+    "index": 13,
+    "side": "B",
+    "kind": "scored",
+    "pair": 6
+   },
+   {
+    "index": 14,
+    "side": "A",
+    "kind": "scored",
+    "pair": 6
+   },
+   {
+    "index": 15,
+    "side": "A",
+    "kind": "scored",
+    "pair": 7
+   },
+   {
+    "index": 16,
+    "side": "B",
+    "kind": "scored",
+    "pair": 7
+   },
+   {
+    "index": 17,
+    "side": "B",
+    "kind": "scored",
+    "pair": 8
+   },
+   {
+    "index": 18,
+    "side": "A",
+    "kind": "scored",
+    "pair": 8
+   },
+   {
+    "index": 19,
+    "side": "A",
+    "kind": "scored",
+    "pair": 9
+   },
+   {
+    "index": 20,
+    "side": "B",
+    "kind": "scored",
+    "pair": 9
+   },
+   {
+    "index": 21,
+    "side": "B",
+    "kind": "scored",
+    "pair": 10
+   },
+   {
+    "index": 22,
+    "side": "A",
+    "kind": "scored",
+    "pair": 10
+   },
+   {
+    "index": 23,
+    "side": "A",
+    "kind": "aa",
+    "pair": 1
+   },
+   {
+    "index": 24,
+    "side": "A",
+    "kind": "aa",
+    "pair": 1
+   },
+   {
+    "index": 25,
+    "side": "A",
+    "kind": "aa",
+    "pair": 2
+   },
+   {
+    "index": 26,
+    "side": "A",
+    "kind": "aa",
+    "pair": 2
+   }
+  ],
+  "pairs": 10,
+  "aa_pairs": 2,
+  "warmup": true,
+  "server": {
+   "port": 8000,
+   "ready_timeout_s": 1800.0,
+   "warmup_timeout_s": 3600.0,
+   "gpu_memory_utilization": 0.85,
+   "max_model_len": 8192,
+   "seed": 0,
+   "first_answer_tokens": 16
+  },
+  "load": {
+   "tool": "guidellm",
+   "image": "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081",
+   "concurrencies": [
+    1,
+    8,
+    32
+   ],
+   "prompt_tokens": 256,
+   "output_tokens": 128,
+   "seconds_per_level": 60.0,
+   "seed": 42,
+   "request_format": "/v1/completions",
+   "tokenizer": "example-org/example-model",
+   "timeout_s": 750.0
+  },
+  "energy": {
+   "source": "dcgm",
+   "label": "GPU-only power",
+   "settle_s": 45.0,
+   "thanos_url": "https://thanos-querier.openshift-monitoring.svc:9091",
+   "min_samples": 2
+  },
+  "analysis": {
+   "baseline": "A",
+   "candidate": "B",
+   "ratio": "B/A",
+   "pairing": "ABBA, each pair one A round and the B round next to it",
+   "unit": "one summary per round and metric; requests are never pooled across rounds",
+   "test": "sign",
+   "correction": "holm",
+   "tie_band": 0.05,
+   "alpha": 0.05,
+   "min_pairs": 3,
+   "ci_level": 0.95,
+   "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
+   "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band"
+  },
+  "metrics": [
+   {
+    "id": "startup.ready_s",
+    "label": "time to ready",
+    "unit": "s",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": null
+   },
+   {
+    "id": "startup.first_answer_s",
+    "label": "time to first answer",
+    "unit": "s",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": null
+   },
+   {
+    "id": "c1.ttft_ms_median",
+    "label": "time to first token, median, 1 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 1
+   },
+   {
+    "id": "c1.itl_ms_median",
+    "label": "inter-token latency, median, 1 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 1
+   },
+   {
+    "id": "c1.output_tokens_per_s",
+    "label": "output tokens per second, 1 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "concurrency": 1
+   },
+   {
+    "id": "c1.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 1 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "concurrency": 1
+   },
+   {
+    "id": "c8.ttft_ms_median",
+    "label": "time to first token, median, 8 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 8
+   },
+   {
+    "id": "c8.itl_ms_median",
+    "label": "inter-token latency, median, 8 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 8
+   },
+   {
+    "id": "c8.output_tokens_per_s",
+    "label": "output tokens per second, 8 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "concurrency": 8
+   },
+   {
+    "id": "c8.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 8 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "concurrency": 8
+   },
+   {
+    "id": "c32.ttft_ms_median",
+    "label": "time to first token, median, 32 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 32
+   },
+   {
+    "id": "c32.itl_ms_median",
+    "label": "inter-token latency, median, 32 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "concurrency": 32
+   },
+   {
+    "id": "c32.output_tokens_per_s",
+    "label": "output tokens per second, 32 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "concurrency": 32
+   },
+   {
+    "id": "c32.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 32 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "concurrency": 32
+   }
+  ],
+  "floor": {
+   "family_size": 14,
+   "min_adjusted_p": 0.02734375,
+   "reachable": true,
+   "pairs_needed": 10
+  }
+ },
+ "provenance": {
+  "harness": {
+   "name": "rhvp_compare",
+   "version": "1"
+  },
+  "load_tool": {
+   "name": "guidellm",
+   "image": "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081",
+   "version": "0.8.1"
+  },
+  "seeds": {
+   "load": 42,
+   "server": 0
+  },
+  "sides": {
+   "A": {
+    "image": "registry.example/inference-server:baseline",
+    "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "server_version": {
+     "vllm": "0.0.0-example",
+     "source": "endpoint"
+    }
+   },
+   "B": {
+    "image": "registry.example/inference-server:candidate",
+    "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "server_version": {
+     "vllm": "0.0.0-example",
+     "source": "endpoint"
+    }
+   }
+  },
+  "gpu": {
+   "product": "Example-GPU",
+   "driver": "0.0",
+   "cuda_driver": "0.0",
+   "memory_mib": 24000,
+   "count": 1,
+   "source": "made up"
+  },
+  "node": {
+   "name": "gpu-node-1",
+   "arch": "amd64",
+   "instance_type": "example.large",
+   "os_image": "example",
+   "kernel": "0.0",
+   "container_runtime": "example"
+  },
+  "cluster": {
+   "openshift_version": "4.20.0"
+  }
+ },
+ "rounds": [
+  {
+   "index": 1,
+   "side": "A",
+   "kind": "warmup",
+   "pair": null,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:00:00.000Z",
+   "finished_at": "2026-01-01T00:06:08.847Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 329.487,
+    "first_answer_s": 333.848,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 16.474,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 65.9,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 98.85,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 32.95,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 148.27,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [],
+   "metrics": {
+    "startup.ready_s": 329.4868389038872,
+    "startup.first_answer_s": 333.8476629797783
+   },
+   "artifacts": {
+    "server_log": "rounds/01-A-warmup/server.log"
+   }
+  },
+  {
+   "index": 2,
+   "side": "B",
+   "kind": "warmup",
+   "pair": null,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:06:08.847Z",
+   "finished_at": "2026-01-01T00:12:01.591Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 328.383,
+    "first_answer_s": 317.744,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 16.419,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 65.68,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 98.51,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 32.84,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 147.77,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [],
+   "metrics": {
+    "startup.ready_s": 328.3830195678233,
+    "startup.first_answer_s": 317.7442774959539
+   },
+   "artifacts": {
+    "server_log": "rounds/02-B-warmup/server.log"
+   }
+  },
+  {
+   "index": 3,
+   "side": "A",
+   "kind": "scored",
+   "pair": 1,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:12:01.591Z",
+   "finished_at": "2026-01-01T00:17:16.929Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 94.441,
+    "first_answer_s": 94.337,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.722,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.89,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.33,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.44,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.5,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:13:40.929Z",
+     "finished_at": "2026-01-01T00:14:40.929Z",
+     "start_epoch": 1767226420.92935,
+     "end_epoch": 1767226480.92935,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 75,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.34738730981172,
+      "p90": 29.051603502755235,
+      "mean": 23.464756675302304,
+      "count": 75
+     },
+     "itl_ms": {
+      "median": 6.021326850819915,
+      "p90": 7.225592220983898,
+      "mean": 6.141753387836314,
+      "count": 9604
+     },
+     "output_tokens": 9604,
+     "output_tokens_per_s": 160.0797727166605,
+     "requests_per_s": 1.2506232243489102,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.2376106366947,
+      "energy_j": 5594.256638201682,
+      "tokens_per_joule": 1.7169012764647074,
+      "joules_per_token": 0.5824446715183953,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:14:42.929Z",
+     "finished_at": "2026-01-01T00:15:42.929Z",
+     "start_epoch": 1767226482.92935,
+     "end_epoch": 1767226542.92935,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 487,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.725210900584596,
+      "p90": 39.942774170759975,
+      "mean": 32.26147144561383,
+      "count": 487
+     },
+     "itl_ms": {
+      "median": 7.292899063949554,
+      "p90": 8.751478876739466,
+      "mean": 7.438757045228545,
+      "count": 62407
+     },
+     "output_tokens": 62407,
+     "output_tokens_per_s": 1040.1210070067589,
+     "requests_per_s": 8.125945367240304,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.0678473399331,
+      "energy_j": 9724.070840395987,
+      "tokens_per_joule": 6.417812194575103,
+      "joules_per_token": 0.15581633891457397,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:15:44.929Z",
+     "finished_at": "2026-01-01T00:16:44.929Z",
+     "start_epoch": 1767226544.92935,
+     "end_epoch": 1767226604.92935,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1211,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.74352585298511,
+      "p90": 76.36658360888065,
+      "mean": 61.68070214563436,
+      "count": 1211
+     },
+     "itl_ms": {
+      "median": 11.66864762919305,
+      "p90": 14.00237715503166,
+      "mean": 11.902020581776911,
+      "count": 155085
+     },
+     "output_tokens": 155085,
+     "output_tokens_per_s": 2584.7640323700552,
+     "requests_per_s": 20.193469002891057,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 230.35838728435115,
+      "energy_j": 13821.50323706107,
+      "tokens_per_joule": 11.220620455114833,
+      "joules_per_token": 0.08912163137504199,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 94.44125750151827,
+    "startup.first_answer_s": 94.33741040148038,
+    "c1.ttft_ms_median": 22.34738730981172,
+    "c1.itl_ms_median": 6.021326850819915,
+    "c1.output_tokens_per_s": 160.0797727166605,
+    "c1.tokens_per_joule": 1.7169012764647074,
+    "c8.ttft_ms_median": 30.725210900584596,
+    "c8.itl_ms_median": 7.292899063949554,
+    "c8.output_tokens_per_s": 1040.1210070067589,
+    "c8.tokens_per_joule": 6.417812194575103,
+    "c32.ttft_ms_median": 58.74352585298511,
+    "c32.itl_ms_median": 11.66864762919305,
+    "c32.output_tokens_per_s": 2584.7640323700552,
+    "c32.tokens_per_joule": 11.220620455114833
+   },
+   "artifacts": {
+    "server_log": "rounds/03-A-scored/server.log",
+    "load_report": "rounds/03-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 4,
+   "side": "B",
+   "kind": "scored",
+   "pair": 1,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:17:16.929Z",
+   "finished_at": "2026-01-01T00:22:14.594Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 92.413,
+    "first_answer_s": 76.665,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.621,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.48,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.72,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.24,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.59,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:18:38.594Z",
+     "finished_at": "2026-01-01T00:19:38.594Z",
+     "start_epoch": 1767226718.594522,
+     "end_epoch": 1767226778.594522,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 83,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.374773526186647,
+      "p90": 29.087205584042643,
+      "mean": 23.49351220249598,
+      "count": 83
+     },
+     "itl_ms": {
+      "median": 5.393598880121866,
+      "p90": 6.472318656146239,
+      "mean": 5.501470857724303,
+      "count": 10641
+     },
+     "output_tokens": 10641,
+     "output_tokens_per_s": 177.3632779123198,
+     "requests_per_s": 1.3856506086899985,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 97.4569508258031,
+      "energy_j": 5847.417049548187,
+      "tokens_per_joule": 1.8199140893433368,
+      "joules_per_token": 0.5494764867504384,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:19:40.594Z",
+     "finished_at": "2026-01-01T00:20:40.594Z",
+     "start_epoch": 1767226780.594522,
+     "end_epoch": 1767226840.594522,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 549,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.15184577536533,
+      "p90": 40.49739950797493,
+      "mean": 32.7094380641336,
+      "count": 549
+     },
+     "itl_ms": {
+      "median": 6.78625021915167,
+      "p90": 8.143500262982004,
+      "mean": 6.921975223534703,
+      "count": 70296
+     },
+     "output_tokens": 70296,
+     "output_tokens_per_s": 1171.6089304049742,
+     "requests_per_s": 9.153194768788861,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.15949990771898,
+      "energy_j": 9729.56999446314,
+      "tokens_per_joule": 7.225040352687991,
+      "joules_per_token": 0.13840753147184318,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:20:42.594Z",
+     "finished_at": "2026-01-01T00:21:42.594Z",
+     "start_epoch": 1767226842.594522,
+     "end_epoch": 1767226902.594522,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1352,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.18673298773818,
+      "p90": 75.64275288405963,
+      "mean": 61.09606963712509,
+      "count": 1352
+     },
+     "itl_ms": {
+      "median": 10.804076870159138,
+      "p90": 12.964892244190965,
+      "mean": 11.02015840756232,
+      "count": 173153
+     },
+     "output_tokens": 173153,
+     "output_tokens_per_s": 2885.89327682204,
+     "requests_per_s": 22.54604122517219,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 234.1830041665013,
+      "energy_j": 14050.980249990078,
+      "tokens_per_joule": 12.323239626605032,
+      "joules_per_token": 0.08114749289148515,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 92.41344692345811,
+    "startup.first_answer_s": 76.66517208833075,
+    "c1.ttft_ms_median": 22.374773526186647,
+    "c1.itl_ms_median": 5.393598880121866,
+    "c1.output_tokens_per_s": 177.3632779123198,
+    "c1.tokens_per_joule": 1.8199140893433368,
+    "c8.ttft_ms_median": 31.15184577536533,
+    "c8.itl_ms_median": 6.78625021915167,
+    "c8.output_tokens_per_s": 1171.6089304049742,
+    "c8.tokens_per_joule": 7.225040352687991,
+    "c32.ttft_ms_median": 58.18673298773818,
+    "c32.itl_ms_median": 10.804076870159138,
+    "c32.output_tokens_per_s": 2885.89327682204,
+    "c32.tokens_per_joule": 12.323239626605032
+   },
+   "artifacts": {
+    "server_log": "rounds/04-B-scored/server.log",
+    "load_report": "rounds/04-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 5,
+   "side": "B",
+   "kind": "scored",
+   "pair": 2,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:22:14.594Z",
+   "finished_at": "2026-01-01T00:27:13.610Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 88.649,
+    "first_answer_s": 78.016,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.432,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 17.73,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 26.59,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 8.86,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 39.89,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:23:37.610Z",
+     "finished_at": "2026-01-01T00:24:37.610Z",
+     "start_epoch": 1767227017.61031,
+     "end_epoch": 1767227077.61031,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 83,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.406191221540507,
+      "p90": 29.12804858800266,
+      "mean": 23.526500782617532,
+      "count": 83
+     },
+     "itl_ms": {
+      "median": 5.547478307323564,
+      "p90": 6.656973968788276,
+      "mean": 5.6584278734700355,
+      "count": 10690
+     },
+     "output_tokens": 10690,
+     "output_tokens_per_s": 178.16868828978377,
+     "requests_per_s": 1.3919428772639357,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.6322366404237,
+      "energy_j": 5797.9341984254215,
+      "tokens_per_joule": 1.8437810660718095,
+      "joules_per_token": 0.5423637428550604,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:24:39.610Z",
+     "finished_at": "2026-01-01T00:25:39.610Z",
+     "start_epoch": 1767227079.61031,
+     "end_epoch": 1767227139.61031,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 551,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.714186570485396,
+      "p90": 41.22844254163102,
+      "mean": 33.29989589900967,
+      "count": 551
+     },
+     "itl_ms": {
+      "median": 6.681188767105075,
+      "p90": 8.01742652052609,
+      "mean": 6.814812542447177,
+      "count": 70643
+     },
+     "output_tokens": 70643,
+     "output_tokens_per_s": 1177.3954323628134,
+     "requests_per_s": 9.19840181533448,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 164.66074708447263,
+      "energy_j": 9879.644825068357,
+      "tokens_per_joule": 7.15043174047302,
+      "joules_per_token": 0.13985169515566165,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:25:41.610Z",
+     "finished_at": "2026-01-01T00:26:41.610Z",
+     "start_epoch": 1767227141.61031,
+     "end_epoch": 1767227201.61031,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1361,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.56602005972606,
+      "p90": 76.13582607764387,
+      "mean": 61.49432106271236,
+      "count": 1361
+     },
+     "itl_ms": {
+      "median": 10.747048686417912,
+      "p90": 12.896458423701494,
+      "mean": 10.961989660146271,
+      "count": 174208
+     },
+     "output_tokens": 174208,
+     "output_tokens_per_s": 2903.4728706942506,
+     "requests_per_s": 22.683381802298832,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 238.72884944314768,
+      "energy_j": 14323.73096658886,
+      "tokens_per_joule": 12.162220349433305,
+      "joules_per_token": 0.08222182884941685,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 88.64859284308424,
+    "startup.first_answer_s": 78.01578759117984,
+    "c1.ttft_ms_median": 22.406191221540507,
+    "c1.itl_ms_median": 5.547478307323564,
+    "c1.output_tokens_per_s": 178.16868828978377,
+    "c1.tokens_per_joule": 1.8437810660718095,
+    "c8.ttft_ms_median": 31.714186570485396,
+    "c8.itl_ms_median": 6.681188767105075,
+    "c8.output_tokens_per_s": 1177.3954323628134,
+    "c8.tokens_per_joule": 7.15043174047302,
+    "c32.ttft_ms_median": 58.56602005972606,
+    "c32.itl_ms_median": 10.747048686417912,
+    "c32.output_tokens_per_s": 2903.4728706942506,
+    "c32.tokens_per_joule": 12.162220349433305
+   },
+   "artifacts": {
+    "server_log": "rounds/05-B-scored/server.log",
+    "load_report": "rounds/05-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 6,
+   "side": "A",
+   "kind": "scored",
+   "pair": 2,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:27:13.610Z",
+   "finished_at": "2026-01-01T00:32:27.499Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 93.033,
+    "first_answer_s": 92.889,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.652,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.61,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.91,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.3,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.87,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:28:51.499Z",
+     "finished_at": "2026-01-01T00:29:51.499Z",
+     "start_epoch": 1767227331.499446,
+     "end_epoch": 1767227391.499446,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.737291672447697,
+      "p90": 28.258479174182007,
+      "mean": 22.824156256070083,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.010535122669889,
+      "p90": 7.212642147203867,
+      "mean": 6.130745825123287,
+      "count": 9441
+     },
+     "output_tokens": 9441,
+     "output_tokens_per_s": 157.35458465630947,
+     "requests_per_s": 1.2293326926274177,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 95.7660234120268,
+      "energy_j": 5745.961404721608,
+      "tokens_per_joule": 1.6431149488091625,
+      "joules_per_token": 0.6086001473754127,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:29:53.499Z",
+     "finished_at": "2026-01-01T00:30:53.499Z",
+     "start_epoch": 1767227393.499446,
+     "end_epoch": 1767227453.499446,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 500,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.864250525463515,
+      "p90": 40.12352568310257,
+      "mean": 32.40746305173669,
+      "count": 500
+     },
+     "itl_ms": {
+      "median": 7.472429559497464,
+      "p90": 8.966915471396957,
+      "mean": 7.621878150687413,
+      "count": 64030
+     },
+     "output_tokens": 64030,
+     "output_tokens_per_s": 1067.166804464893,
+     "requests_per_s": 8.337240659881976,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 160.09488200310258,
+      "energy_j": 9605.692920186155,
+      "tokens_per_joule": 6.665839601569597,
+      "joules_per_token": 0.15001861127359428,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:30:55.499Z",
+     "finished_at": "2026-01-01T00:31:55.499Z",
+     "start_epoch": 1767227455.499446,
+     "end_epoch": 1767227515.499446,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1197,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.031343460201725,
+      "p90": 74.14074649826225,
+      "mean": 59.882910633211814,
+      "count": 1197
+     },
+     "itl_ms": {
+      "median": 11.754538781996102,
+      "p90": 14.105446538395322,
+      "mean": 11.989629557636023,
+      "count": 153336
+     },
+     "output_tokens": 153336,
+     "output_tokens_per_s": 2555.614045430756,
+     "requests_per_s": 19.96573472992778,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 233.3874827353896,
+      "energy_j": 14003.248964123375,
+      "tokens_per_joule": 10.950090448202245,
+      "joules_per_token": 0.09132344657154655,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 93.03349553973963,
+    "startup.first_answer_s": 92.88913582776794,
+    "c1.ttft_ms_median": 21.737291672447697,
+    "c1.itl_ms_median": 6.010535122669889,
+    "c1.output_tokens_per_s": 157.35458465630947,
+    "c1.tokens_per_joule": 1.6431149488091625,
+    "c8.ttft_ms_median": 30.864250525463515,
+    "c8.itl_ms_median": 7.472429559497464,
+    "c8.output_tokens_per_s": 1067.166804464893,
+    "c8.tokens_per_joule": 6.665839601569597,
+    "c32.ttft_ms_median": 57.031343460201725,
+    "c32.itl_ms_median": 11.754538781996102,
+    "c32.output_tokens_per_s": 2555.614045430756,
+    "c32.tokens_per_joule": 10.950090448202245
+   },
+   "artifacts": {
+    "server_log": "rounds/06-A-scored/server.log",
+    "load_report": "rounds/06-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 7,
+   "side": "A",
+   "kind": "scored",
+   "pair": 3,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:32:27.499Z",
+   "finished_at": "2026-01-01T00:37:42.578Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.379,
+    "first_answer_s": 94.079,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.569,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.28,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.41,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.14,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.12,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:34:06.578Z",
+     "finished_at": "2026-01-01T00:35:06.578Z",
+     "start_epoch": 1767227646.578152,
+     "end_epoch": 1767227706.578152,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 74,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.006888486648535,
+      "p90": 28.608955032643095,
+      "mean": 23.10723291098096,
+      "count": 74
+     },
+     "itl_ms": {
+      "median": 6.00449243302452,
+      "p90": 7.205390919629424,
+      "mean": 6.124582281685011,
+      "count": 9589
+     },
+     "output_tokens": 9589,
+     "output_tokens_per_s": 159.82617492839915,
+     "requests_per_s": 1.2486419916281184,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.69675162293805,
+      "energy_j": 5621.805097376283,
+      "tokens_per_joule": 1.7057813868679719,
+      "joules_per_token": 0.5862415944379163,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:35:08.578Z",
+     "finished_at": "2026-01-01T00:36:08.578Z",
+     "start_epoch": 1767227708.578152,
+     "end_epoch": 1767227768.578152,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 496,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.009030928138667,
+      "p90": 40.31174020658027,
+      "mean": 32.559482474545604,
+      "count": 496
+     },
+     "itl_ms": {
+      "median": 7.501096336296594,
+      "p90": 9.001315603555913,
+      "mean": 7.651118263022526,
+      "count": 63582
+     },
+     "output_tokens": 63582,
+     "output_tokens_per_s": 1059.704940005754,
+     "requests_per_s": 8.278944843794953,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 159.89790842377568,
+      "energy_j": 9593.87450542654,
+      "tokens_per_joule": 6.627384625927874,
+      "joules_per_token": 0.15088908467569045,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:36:10.578Z",
+     "finished_at": "2026-01-01T00:37:10.578Z",
+     "start_epoch": 1767227770.578152,
+     "end_epoch": 1767227830.578152,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1199,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.54744212128668,
+      "p90": 76.11167475767269,
+      "mean": 61.47481422735102,
+      "count": 1199
+     },
+     "itl_ms": {
+      "median": 11.656870488990096,
+      "p90": 13.988244586788115,
+      "mean": 11.890007898769898,
+      "count": 153522
+     },
+     "output_tokens": 153522,
+     "output_tokens_per_s": 2558.716602348177,
+     "requests_per_s": 19.98997345584513,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 229.88835920855334,
+      "energy_j": 13793.3015525132,
+      "tokens_per_joule": 11.13025736125649,
+      "joules_per_token": 0.08984518215013768,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.37925875171057,
+    "startup.first_answer_s": 94.07870631000527,
+    "c1.ttft_ms_median": 22.006888486648535,
+    "c1.itl_ms_median": 6.00449243302452,
+    "c1.output_tokens_per_s": 159.82617492839915,
+    "c1.tokens_per_joule": 1.7057813868679719,
+    "c8.ttft_ms_median": 31.009030928138667,
+    "c8.itl_ms_median": 7.501096336296594,
+    "c8.output_tokens_per_s": 1059.704940005754,
+    "c8.tokens_per_joule": 6.627384625927874,
+    "c32.ttft_ms_median": 58.54744212128668,
+    "c32.itl_ms_median": 11.656870488990096,
+    "c32.output_tokens_per_s": 2558.716602348177,
+    "c32.tokens_per_joule": 11.13025736125649
+   },
+   "artifacts": {
+    "server_log": "rounds/07-A-scored/server.log",
+    "load_report": "rounds/07-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 8,
+   "side": "B",
+   "kind": "scored",
+   "pair": 3,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:37:42.578Z",
+   "finished_at": "2026-01-01T00:42:37.788Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 90.034,
+    "first_answer_s": 74.21,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.502,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.01,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.01,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.0,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.52,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:39:01.788Z",
+     "finished_at": "2026-01-01T00:40:01.788Z",
+     "start_epoch": 1767227941.788556,
+     "end_epoch": 1767228001.788556,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 83,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.04706709958454,
+      "p90": 28.661187229459905,
+      "mean": 23.14942045456377,
+      "count": 83
+     },
+     "itl_ms": {
+      "median": 5.392138104738411,
+      "p90": 6.470565725686093,
+      "mean": 5.499980866833179,
+      "count": 10666
+     },
+     "output_tokens": 10666,
+     "output_tokens_per_s": 177.77997765437019,
+     "requests_per_s": 1.388906075424767,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 97.17919888420964,
+      "energy_j": 5830.751933052578,
+      "tokens_per_joule": 1.8294036141026178,
+      "joules_per_token": 0.5466262296035381,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:40:03.788Z",
+     "finished_at": "2026-01-01T00:41:03.788Z",
+     "start_epoch": 1767228003.788556,
+     "end_epoch": 1767228063.788556,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 545,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.74882561450531,
+      "p90": 41.273473298856906,
+      "mean": 33.33626689523058,
+      "count": 545
+     },
+     "itl_ms": {
+      "median": 6.7537412514115855,
+      "p90": 8.104489501693902,
+      "mean": 6.888816076439817,
+      "count": 69844
+     },
+     "output_tokens": 69844,
+     "output_tokens_per_s": 1164.0677280243062,
+     "requests_per_s": 9.094279125189892,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 161.34555534954129,
+      "energy_j": 9680.733320972477,
+      "tokens_per_joule": 7.214749272159704,
+      "joules_per_token": 0.13860495524893748,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:41:05.788Z",
+     "finished_at": "2026-01-01T00:42:05.788Z",
+     "start_epoch": 1767228065.788556,
+     "end_epoch": 1767228125.788556,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1318,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.931508362485324,
+      "p90": 76.61096087123093,
+      "mean": 61.87808378060959,
+      "count": 1318
+     },
+     "itl_ms": {
+      "median": 10.568145770393796,
+      "p90": 12.681774924472554,
+      "mean": 10.779508685801673,
+      "count": 168740
+     },
+     "output_tokens": 168740,
+     "output_tokens_per_s": 2812.335149824493,
+     "requests_per_s": 21.97136835800385,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 235.25808901643788,
+      "energy_j": 14115.485340986274,
+      "tokens_per_joule": 11.954254842340363,
+      "joules_per_token": 0.08365222368006865,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 90.03367283404742,
+    "startup.first_answer_s": 74.21040388608064,
+    "c1.ttft_ms_median": 22.04706709958454,
+    "c1.itl_ms_median": 5.392138104738411,
+    "c1.output_tokens_per_s": 177.77997765437019,
+    "c1.tokens_per_joule": 1.8294036141026178,
+    "c8.ttft_ms_median": 31.74882561450531,
+    "c8.itl_ms_median": 6.7537412514115855,
+    "c8.output_tokens_per_s": 1164.0677280243062,
+    "c8.tokens_per_joule": 7.214749272159704,
+    "c32.ttft_ms_median": 58.931508362485324,
+    "c32.itl_ms_median": 10.568145770393796,
+    "c32.output_tokens_per_s": 2812.335149824493,
+    "c32.tokens_per_joule": 11.954254842340363
+   },
+   "artifacts": {
+    "server_log": "rounds/08-B-scored/server.log",
+    "load_report": "rounds/08-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 9,
+   "side": "B",
+   "kind": "scored",
+   "pair": 4,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:42:37.788Z",
+   "finished_at": "2026-01-01T00:47:36.248Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 92.259,
+    "first_answer_s": 77.46,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.613,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.45,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.68,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.23,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.52,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:44:00.248Z",
+     "finished_at": "2026-01-01T00:45:00.248Z",
+     "start_epoch": 1767228240.248916,
+     "end_epoch": 1767228300.248916,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 82,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.452102170611496,
+      "p90": 29.187732821794945,
+      "mean": 23.57470727914207,
+      "count": 82
+     },
+     "itl_ms": {
+      "median": 5.446168446562971,
+      "p90": 6.5354021358755645,
+      "mean": 5.55509181549423,
+      "count": 10566
+     },
+     "output_tokens": 10566,
+     "output_tokens_per_s": 176.1016046169932,
+     "requests_per_s": 1.3757937860702594,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 98.07782764733953,
+      "energy_j": 5884.669658840372,
+      "tokens_per_joule": 1.79552921227217,
+      "joules_per_token": 0.5569388641327312,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:45:02.248Z",
+     "finished_at": "2026-01-01T00:46:02.248Z",
+     "start_epoch": 1767228302.248916,
+     "end_epoch": 1767228362.248916,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 547,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.61020022295603,
+      "p90": 41.09326028984284,
+      "mean": 33.19071023410383,
+      "count": 547
+     },
+     "itl_ms": {
+      "median": 6.532825878295008,
+      "p90": 7.839391053954009,
+      "mean": 6.663482395860909,
+      "count": 70130
+     },
+     "output_tokens": 70130,
+     "output_tokens_per_s": 1168.8481776577,
+     "requests_per_s": 9.131626387950782,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.1427504915949,
+      "energy_j": 9728.565029495694,
+      "tokens_per_joule": 7.2087600223501225,
+      "joules_per_token": 0.1387201123216182,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:46:04.248Z",
+     "finished_at": "2026-01-01T00:47:04.248Z",
+     "start_epoch": 1767228364.248916,
+     "end_epoch": 1767228424.248916,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1366,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.36219700379603,
+      "p90": 75.87085610493483,
+      "mean": 61.28030685398583,
+      "count": 1366
+     },
+     "itl_ms": {
+      "median": 10.574926670399675,
+      "p90": 12.68991200447961,
+      "mean": 10.786425203807669,
+      "count": 174866
+     },
+     "output_tokens": 174866,
+     "output_tokens_per_s": 2914.437651165875,
+     "requests_per_s": 22.7690441497334,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 237.04753911753983,
+      "energy_j": 14222.85234705239,
+      "tokens_per_joule": 12.294739114421912,
+      "joules_per_token": 0.08133560140588791,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 92.25906192106808,
+    "startup.first_answer_s": 77.46035997979122,
+    "c1.ttft_ms_median": 22.452102170611496,
+    "c1.itl_ms_median": 5.446168446562971,
+    "c1.output_tokens_per_s": 176.1016046169932,
+    "c1.tokens_per_joule": 1.79552921227217,
+    "c8.ttft_ms_median": 31.61020022295603,
+    "c8.itl_ms_median": 6.532825878295008,
+    "c8.output_tokens_per_s": 1168.8481776577,
+    "c8.tokens_per_joule": 7.2087600223501225,
+    "c32.ttft_ms_median": 58.36219700379603,
+    "c32.itl_ms_median": 10.574926670399675,
+    "c32.output_tokens_per_s": 2914.437651165875,
+    "c32.tokens_per_joule": 12.294739114421912
+   },
+   "artifacts": {
+    "server_log": "rounds/09-B-scored/server.log",
+    "load_report": "rounds/09-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 10,
+   "side": "A",
+   "kind": "scored",
+   "pair": 4,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:47:36.248Z",
+   "finished_at": "2026-01-01T00:52:51.720Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 89.425,
+    "first_answer_s": 94.472,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.471,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 17.88,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 26.83,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 8.94,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.24,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:49:15.720Z",
+     "finished_at": "2026-01-01T00:50:15.720Z",
+     "start_epoch": 1767228555.720871,
+     "end_epoch": 1767228615.720871,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 76,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.894829937114473,
+      "p90": 28.463278918248815,
+      "mean": 22.989571433970198,
+      "count": 76
+     },
+     "itl_ms": {
+      "median": 6.18018849530636,
+      "p90": 7.416226194367631,
+      "mean": 6.303792265212487,
+      "count": 9743
+     },
+     "output_tokens": 9743,
+     "output_tokens_per_s": 162.39696477902908,
+     "requests_per_s": 1.2687262873361647,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.15208667276893,
+      "energy_j": 5589.125200366136,
+      "tokens_per_joule": 1.7433529465583344,
+      "joules_per_token": 0.5736073134095793,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:50:17.720Z",
+     "finished_at": "2026-01-01T00:51:17.720Z",
+     "start_epoch": 1767228617.720871,
+     "end_epoch": 1767228677.720871,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 499,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.738540231594573,
+      "p90": 39.96010230107294,
+      "mean": 32.275467243174305,
+      "count": 499
+     },
+     "itl_ms": {
+      "median": 7.264685872680885,
+      "p90": 8.717623047217062,
+      "mean": 7.409979590134503,
+      "count": 63957
+     },
+     "output_tokens": 63957,
+     "output_tokens_per_s": 1065.9620898291319,
+     "requests_per_s": 8.327828826790093,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 163.1500488090095,
+      "energy_j": 9789.002928540569,
+      "tokens_per_joule": 6.533630223286009,
+      "joules_per_token": 0.15305426934569652,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:51:19.720Z",
+     "finished_at": "2026-01-01T00:52:19.720Z",
+     "start_epoch": 1767228679.720871,
+     "end_epoch": 1767228739.720871,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1212,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.55717214658007,
+      "p90": 74.82432379055409,
+      "mean": 60.435030753909075,
+      "count": 1212
+     },
+     "itl_ms": {
+      "median": 11.834353920647677,
+      "p90": 14.201224704777212,
+      "mean": 12.071040999060632,
+      "count": 155247
+     },
+     "output_tokens": 155247,
+     "output_tokens_per_s": 2587.466432994039,
+     "requests_per_s": 20.21458150776593,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 232.1076818950311,
+      "energy_j": 13926.460913701867,
+      "tokens_per_joule": 11.147698395282758,
+      "joules_per_token": 0.08970461565619306,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 89.42453603987418,
+    "startup.first_answer_s": 94.47195485557208,
+    "c1.ttft_ms_median": 21.894829937114473,
+    "c1.itl_ms_median": 6.18018849530636,
+    "c1.output_tokens_per_s": 162.39696477902908,
+    "c1.tokens_per_joule": 1.7433529465583344,
+    "c8.ttft_ms_median": 30.738540231594573,
+    "c8.itl_ms_median": 7.264685872680885,
+    "c8.output_tokens_per_s": 1065.9620898291319,
+    "c8.tokens_per_joule": 6.533630223286009,
+    "c32.ttft_ms_median": 57.55717214658007,
+    "c32.itl_ms_median": 11.834353920647677,
+    "c32.output_tokens_per_s": 2587.466432994039,
+    "c32.tokens_per_joule": 11.147698395282758
+   },
+   "artifacts": {
+    "server_log": "rounds/10-A-scored/server.log",
+    "load_report": "rounds/10-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 11,
+   "side": "A",
+   "kind": "scored",
+   "pair": 5,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:52:51.720Z",
+   "finished_at": "2026-01-01T00:58:05.178Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 89.956,
+    "first_answer_s": 92.458,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.498,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 17.99,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 26.99,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.0,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.48,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:54:29.178Z",
+     "finished_at": "2026-01-01T00:55:29.178Z",
+     "start_epoch": 1767228869.178645,
+     "end_epoch": 1767228929.178645,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.797651459830984,
+      "p90": 28.33694689778028,
+      "mean": 22.887534032822533,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.175096385016616,
+      "p90": 7.410115662019939,
+      "mean": 6.2985983127169485,
+      "count": 9417
+     },
+     "output_tokens": 9417,
+     "output_tokens_per_s": 156.96447865627945,
+     "requests_per_s": 1.2262849895021832,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.35449709838244,
+      "energy_j": 5601.269825902947,
+      "tokens_per_joule": 1.6813810103959008,
+      "joules_per_token": 0.5947491935599644,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T00:55:31.178Z",
+     "finished_at": "2026-01-01T00:56:31.178Z",
+     "start_epoch": 1767228931.178645,
+     "end_epoch": 1767228991.178645,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 488,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.039575361995695,
+      "p90": 40.35144797059441,
+      "mean": 32.59155413009548,
+      "count": 488
+     },
+     "itl_ms": {
+      "median": 7.357695237837601,
+      "p90": 8.829234285405121,
+      "mean": 7.504849142594353,
+      "count": 62523
+     },
+     "output_tokens": 62523,
+     "output_tokens_per_s": 1042.0502472833846,
+     "requests_per_s": 8.141017556901442,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 161.5410343943517,
+      "energy_j": 9692.462063661102,
+      "tokens_per_joule": 6.450684503725204,
+      "joules_per_token": 0.15502230800816724,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T00:56:33.178Z",
+     "finished_at": "2026-01-01T00:57:33.178Z",
+     "start_epoch": 1767228993.178645,
+     "end_epoch": 1767229053.178645,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1204,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 56.853492437662936,
+      "p90": 73.90954016896183,
+      "mean": 59.696167059546084,
+      "count": 1204
+     },
+     "itl_ms": {
+      "median": 12.015313771844188,
+      "p90": 14.418376526213024,
+      "mean": 12.255620047281072,
+      "count": 154121
+     },
+     "output_tokens": 154121,
+     "output_tokens_per_s": 2568.6902553387654,
+     "requests_per_s": 20.067892619834105,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 233.98361069100648,
+      "energy_j": 14039.016641460388,
+      "tokens_per_joule": 10.97807768566714,
+      "joules_per_token": 0.0910906288544113,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 89.95634295445666,
+    "startup.first_answer_s": 92.4577742621044,
+    "c1.ttft_ms_median": 21.797651459830984,
+    "c1.itl_ms_median": 6.175096385016616,
+    "c1.output_tokens_per_s": 156.96447865627945,
+    "c1.tokens_per_joule": 1.6813810103959008,
+    "c8.ttft_ms_median": 31.039575361995695,
+    "c8.itl_ms_median": 7.357695237837601,
+    "c8.output_tokens_per_s": 1042.0502472833846,
+    "c8.tokens_per_joule": 6.450684503725204,
+    "c32.ttft_ms_median": 56.853492437662936,
+    "c32.itl_ms_median": 12.015313771844188,
+    "c32.output_tokens_per_s": 2568.6902553387654,
+    "c32.tokens_per_joule": 10.97807768566714
+   },
+   "artifacts": {
+    "server_log": "rounds/11-A-scored/server.log",
+    "load_report": "rounds/11-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 12,
+   "side": "B",
+   "kind": "scored",
+   "pair": 5,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T00:58:05.178Z",
+   "finished_at": "2026-01-01T01:03:02.960Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 92.334,
+    "first_answer_s": 76.782,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.617,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.47,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.7,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.23,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.55,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T00:59:26.960Z",
+     "finished_at": "2026-01-01T01:00:26.960Z",
+     "start_epoch": 1767229166.960444,
+     "end_epoch": 1767229226.960444,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 82,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.49135727253132,
+      "p90": 29.238764454290717,
+      "mean": 23.615925136157887,
+      "count": 82
+     },
+     "itl_ms": {
+      "median": 5.388963003181317,
+      "p90": 6.46675560381758,
+      "mean": 5.496742263244943,
+      "count": 10622
+     },
+     "output_tokens": 10622,
+     "output_tokens_per_s": 177.04393393921495,
+     "requests_per_s": 1.3831557339001168,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.45088860731803,
+      "energy_j": 5787.053316439082,
+      "tokens_per_joule": 1.8355863434293136,
+      "joules_per_token": 0.5447850511525169,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:00:28.960Z",
+     "finished_at": "2026-01-01T01:01:28.960Z",
+     "start_epoch": 1767229228.960444,
+     "end_epoch": 1767229288.960444,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 537,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.901477201314776,
+      "p90": 40.17192036170921,
+      "mean": 32.44655106138052,
+      "count": 537
+     },
+     "itl_ms": {
+      "median": 6.5895717567535534,
+      "p90": 7.907486108104264,
+      "mean": 6.721363191888624,
+      "count": 68858
+     },
+     "output_tokens": 68858,
+     "output_tokens_per_s": 1147.6493465548388,
+     "requests_per_s": 8.966010519959678,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 165.11271062828905,
+      "energy_j": 9906.762637697342,
+      "tokens_per_joule": 6.9507025969580924,
+      "joules_per_token": 0.14387034778867394,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:01:30.960Z",
+     "finished_at": "2026-01-01T01:02:30.960Z",
+     "start_epoch": 1767229290.960444,
+     "end_epoch": 1767229350.960444,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1319,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 59.32210831743603,
+      "p90": 77.11874081266684,
+      "mean": 62.288213733307835,
+      "count": 1319
+     },
+     "itl_ms": {
+      "median": 10.769931992087107,
+      "p90": 12.923918390504529,
+      "mean": 10.98533063192885,
+      "count": 168844
+     },
+     "output_tokens": 168844,
+     "output_tokens_per_s": 2814.083000878632,
+     "requests_per_s": 21.985023444364312,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 232.73420081856742,
+      "energy_j": 13964.052049114045,
+      "tokens_per_joule": 12.091402943705754,
+      "joules_per_token": 0.08270338890000813,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 92.33419767923519,
+    "startup.first_answer_s": 76.78179877099662,
+    "c1.ttft_ms_median": 22.49135727253132,
+    "c1.itl_ms_median": 5.388963003181317,
+    "c1.output_tokens_per_s": 177.04393393921495,
+    "c1.tokens_per_joule": 1.8355863434293136,
+    "c8.ttft_ms_median": 30.901477201314776,
+    "c8.itl_ms_median": 6.5895717567535534,
+    "c8.output_tokens_per_s": 1147.6493465548388,
+    "c8.tokens_per_joule": 6.9507025969580924,
+    "c32.ttft_ms_median": 59.32210831743603,
+    "c32.itl_ms_median": 10.769931992087107,
+    "c32.output_tokens_per_s": 2814.083000878632,
+    "c32.tokens_per_joule": 12.091402943705754
+   },
+   "artifacts": {
+    "server_log": "rounds/12-B-scored/server.log",
+    "load_report": "rounds/12-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 13,
+   "side": "B",
+   "kind": "scored",
+   "pair": 6,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:03:02.960Z",
+   "finished_at": "2026-01-01T01:07:59.910Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.388,
+    "first_answer_s": 75.95,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.569,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.28,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.42,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.14,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.12,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:04:23.910Z",
+     "finished_at": "2026-01-01T01:05:23.910Z",
+     "start_epoch": 1767229463.910816,
+     "end_epoch": 1767229523.910816,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 83,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.882975980847753,
+      "p90": 28.44786877510208,
+      "mean": 22.977124779890143,
+      "count": 83
+     },
+     "itl_ms": {
+      "median": 5.529522537634798,
+      "p90": 6.635427045161758,
+      "mean": 5.640112988387494,
+      "count": 10676
+     },
+     "output_tokens": 10676,
+     "output_tokens_per_s": 177.93778836841236,
+     "requests_per_s": 1.3901389716282215,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 97.06634361950755,
+      "energy_j": 5823.980617170453,
+      "tokens_per_joule": 1.8331563931769648,
+      "joules_per_token": 0.5455071938881019,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:05:25.910Z",
+     "finished_at": "2026-01-01T01:06:25.910Z",
+     "start_epoch": 1767229525.910816,
+     "end_epoch": 1767229585.910816,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 543,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.11537314733123,
+      "p90": 40.4499850915306,
+      "mean": 32.67114180469779,
+      "count": 543
+     },
+     "itl_ms": {
+      "median": 6.789853382098041,
+      "p90": 8.14782405851765,
+      "mean": 6.925650449740002,
+      "count": 69563
+     },
+     "output_tokens": 69563,
+     "output_tokens_per_s": 1159.3968704366284,
+     "requests_per_s": 9.05778805028616,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 161.2568610144342,
+      "energy_j": 9675.411660866052,
+      "tokens_per_joule": 7.189752194995598,
+      "joules_per_token": 0.13908685207482485,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:06:27.910Z",
+     "finished_at": "2026-01-01T01:07:27.910Z",
+     "start_epoch": 1767229587.910816,
+     "end_epoch": 1767229647.910816,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1354,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.66184865689125,
+      "p90": 74.96040325395863,
+      "mean": 60.544941089735815,
+      "count": 1354
+     },
+     "itl_ms": {
+      "median": 10.657381701160046,
+      "p90": 12.788858041392055,
+      "mean": 10.870529335183248,
+      "count": 173406
+     },
+     "output_tokens": 173406,
+     "output_tokens_per_s": 2890.102290719436,
+     "requests_per_s": 22.578924146245594,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 230.90632092973186,
+      "energy_j": 13854.379255783912,
+      "tokens_per_joule": 12.516341168498961,
+      "joules_per_token": 0.07989555306440456,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.38780763745905,
+    "startup.first_answer_s": 75.95037190753658,
+    "c1.ttft_ms_median": 21.882975980847753,
+    "c1.itl_ms_median": 5.529522537634798,
+    "c1.output_tokens_per_s": 177.93778836841236,
+    "c1.tokens_per_joule": 1.8331563931769648,
+    "c8.ttft_ms_median": 31.11537314733123,
+    "c8.itl_ms_median": 6.789853382098041,
+    "c8.output_tokens_per_s": 1159.3968704366284,
+    "c8.tokens_per_joule": 7.189752194995598,
+    "c32.ttft_ms_median": 57.66184865689125,
+    "c32.itl_ms_median": 10.657381701160046,
+    "c32.output_tokens_per_s": 2890.102290719436,
+    "c32.tokens_per_joule": 12.516341168498961
+   },
+   "artifacts": {
+    "server_log": "rounds/13-B-scored/server.log",
+    "load_report": "rounds/13-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 14,
+   "side": "A",
+   "kind": "scored",
+   "pair": 6,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:07:59.910Z",
+   "finished_at": "2026-01-01T01:13:15.606Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 92.991,
+    "first_answer_s": 94.695,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.65,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.6,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.9,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.3,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.85,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:09:39.606Z",
+     "finished_at": "2026-01-01T01:10:39.606Z",
+     "start_epoch": 1767229779.606058,
+     "end_epoch": 1767229839.606058,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.330645658779673,
+      "p90": 29.029839356413575,
+      "mean": 23.447177941718657,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.190779755746696,
+      "p90": 7.428935706896035,
+      "mean": 6.31459535086163,
+      "count": 9412
+     },
+     "output_tokens": 9412,
+     "output_tokens_per_s": 156.8819182777901,
+     "requests_per_s": 1.2256399865452352,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.25613395504767,
+      "energy_j": 5775.36803730286,
+      "tokens_per_joule": 1.62983813946917,
+      "joules_per_token": 0.6135578593870032,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:10:41.606Z",
+     "finished_at": "2026-01-01T01:11:41.606Z",
+     "start_epoch": 1767229841.606058,
+     "end_epoch": 1767229901.606058,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 498,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.896934551381065,
+      "p90": 40.16601491679538,
+      "mean": 32.44178127895012,
+      "count": 498
+     },
+     "itl_ms": {
+      "median": 7.507512772868404,
+      "p90": 9.009015327442084,
+      "mean": 7.657663028325772,
+      "count": 63801
+     },
+     "output_tokens": 63801,
+     "output_tokens_per_s": 1063.35518563699,
+     "requests_per_s": 8.307462387788984,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.2624169034418,
+      "energy_j": 9735.745014206508,
+      "tokens_per_joule": 6.553305478432295,
+      "joules_per_token": 0.15259474829780462,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:11:43.606Z",
+     "finished_at": "2026-01-01T01:12:43.606Z",
+     "start_epoch": 1767229903.606058,
+     "end_epoch": 1767229963.606058,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1218,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.04741984852504,
+      "p90": 74.16164580308255,
+      "mean": 59.89979084095129,
+      "count": 1218
+     },
+     "itl_ms": {
+      "median": 11.975179677053957,
+      "p90": 14.370215612464747,
+      "mean": 12.214683270595035,
+      "count": 155950
+     },
+     "output_tokens": 155950,
+     "output_tokens_per_s": 2599.1782822807236,
+     "requests_per_s": 20.306080330318153,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 234.46901118705995,
+      "energy_j": 14068.140671223597,
+      "tokens_per_joule": 11.085380831870753,
+      "joules_per_token": 0.09020889901454485,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 92.9905719763465,
+    "startup.first_answer_s": 94.69524200278923,
+    "c1.ttft_ms_median": 22.330645658779673,
+    "c1.itl_ms_median": 6.190779755746696,
+    "c1.output_tokens_per_s": 156.8819182777901,
+    "c1.tokens_per_joule": 1.62983813946917,
+    "c8.ttft_ms_median": 30.896934551381065,
+    "c8.itl_ms_median": 7.507512772868404,
+    "c8.output_tokens_per_s": 1063.35518563699,
+    "c8.tokens_per_joule": 6.553305478432295,
+    "c32.ttft_ms_median": 57.04741984852504,
+    "c32.itl_ms_median": 11.975179677053957,
+    "c32.output_tokens_per_s": 2599.1782822807236,
+    "c32.tokens_per_joule": 11.085380831870753
+   },
+   "artifacts": {
+    "server_log": "rounds/14-A-scored/server.log",
+    "load_report": "rounds/14-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 15,
+   "side": "A",
+   "kind": "scored",
+   "pair": 7,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:13:15.606Z",
+   "finished_at": "2026-01-01T01:18:30.791Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 94.174,
+    "first_answer_s": 94.186,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.709,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.83,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.25,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.42,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.38,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:14:54.791Z",
+     "finished_at": "2026-01-01T01:15:54.791Z",
+     "start_epoch": 1767230094.791584,
+     "end_epoch": 1767230154.791584,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.119186772062,
+      "p90": 28.754942803680603,
+      "mean": 23.2251461106651,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.205720249884374,
+      "p90": 7.446864299861248,
+      "mean": 6.329834654882061,
+      "count": 9463
+     },
+     "output_tokens": 9463,
+     "output_tokens_per_s": 157.727546362162,
+     "requests_per_s": 1.2322464559543906,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.47209381072031,
+      "energy_j": 5608.325628643219,
+      "tokens_per_joule": 1.6874292629151766,
+      "joules_per_token": 0.592617434091676,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:15:56.791Z",
+     "finished_at": "2026-01-01T01:16:56.791Z",
+     "start_epoch": 1767230156.791584,
+     "end_epoch": 1767230216.791584,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 486,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.284981964840366,
+      "p90": 40.67047655429248,
+      "mean": 32.849231063082385,
+      "count": 486
+     },
+     "itl_ms": {
+      "median": 7.3823640091909635,
+      "p90": 8.858836811029155,
+      "mean": 7.530011289374783,
+      "count": 62274
+     },
+     "output_tokens": 62274,
+     "output_tokens_per_s": 1037.9059200360339,
+     "requests_per_s": 8.108640000281515,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 158.93401176690563,
+      "energy_j": 9536.040706014337,
+      "tokens_per_joule": 6.53042044618013,
+      "joules_per_token": 0.15312949728756511,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:16:58.791Z",
+     "finished_at": "2026-01-01T01:17:58.791Z",
+     "start_epoch": 1767230218.791584,
+     "end_epoch": 1767230278.791584,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1239,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.08592403319252,
+      "p90": 75.51170124315028,
+      "mean": 60.990220234852146,
+      "count": 1239
+     },
+     "itl_ms": {
+      "median": 11.855787426907426,
+      "p90": 14.22694491228891,
+      "mean": 12.092903175445574,
+      "count": 158693
+     },
+     "output_tokens": 158693,
+     "output_tokens_per_s": 2644.899496311095,
+     "requests_per_s": 20.66327731493043,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 228.76492634517447,
+      "energy_j": 13725.895580710468,
+      "tokens_per_joule": 11.561647751545223,
+      "joules_per_token": 0.08649286170012828,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 94.17429316851272,
+    "startup.first_answer_s": 94.18552628036817,
+    "c1.ttft_ms_median": 22.119186772062,
+    "c1.itl_ms_median": 6.205720249884374,
+    "c1.output_tokens_per_s": 157.727546362162,
+    "c1.tokens_per_joule": 1.6874292629151766,
+    "c8.ttft_ms_median": 31.284981964840366,
+    "c8.itl_ms_median": 7.3823640091909635,
+    "c8.output_tokens_per_s": 1037.9059200360339,
+    "c8.tokens_per_joule": 6.53042044618013,
+    "c32.ttft_ms_median": 58.08592403319252,
+    "c32.itl_ms_median": 11.855787426907426,
+    "c32.output_tokens_per_s": 2644.899496311095,
+    "c32.tokens_per_joule": 11.561647751545223
+   },
+   "artifacts": {
+    "server_log": "rounds/15-A-scored/server.log",
+    "load_report": "rounds/15-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 16,
+   "side": "B",
+   "kind": "scored",
+   "pair": 7,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:18:30.791Z",
+   "finished_at": "2026-01-01T01:23:28.283Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.856,
+    "first_answer_s": 76.492,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.593,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.37,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.56,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.19,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.34,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:19:52.283Z",
+     "finished_at": "2026-01-01T01:20:52.283Z",
+     "start_epoch": 1767230392.283899,
+     "end_epoch": 1767230452.283899,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 83,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.00054472280103,
+      "p90": 28.60070813964134,
+      "mean": 23.100571958941085,
+      "count": 83
+     },
+     "itl_ms": {
+      "median": 5.461955259699681,
+      "p90": 6.554346311639617,
+      "mean": 5.571194364893675,
+      "count": 10691
+     },
+     "output_tokens": 10691,
+     "output_tokens_per_s": 178.19619114051088,
+     "requests_per_s": 1.3921577432852412,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 95.9837768985025,
+      "energy_j": 5759.0266139101495,
+      "tokens_per_joule": 1.8565240595704358,
+      "joules_per_token": 0.5386410129429623,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:20:54.283Z",
+     "finished_at": "2026-01-01T01:21:54.283Z",
+     "start_epoch": 1767230454.283899,
+     "end_epoch": 1767230514.283899,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 539,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.614432180086254,
+      "p90": 41.09876183411213,
+      "mean": 33.19515378909057,
+      "count": 539
+     },
+     "itl_ms": {
+      "median": 6.533263146641444,
+      "p90": 7.839915775969732,
+      "mean": 6.663928409574273,
+      "count": 68996
+     },
+     "output_tokens": 68996,
+     "output_tokens_per_s": 1149.9386127533016,
+     "requests_per_s": 8.983895412135169,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 164.04760318644296,
+      "energy_j": 9842.856191186578,
+      "tokens_per_joule": 7.009786125594145,
+      "joules_per_token": 0.1426577048262283,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:21:56.283Z",
+     "finished_at": "2026-01-01T01:22:56.283Z",
+     "start_epoch": 1767230516.283899,
+     "end_epoch": 1767230576.283899,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1367,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.88859352268493,
+      "p90": 75.25517157949041,
+      "mean": 60.78302319881918,
+      "count": 1367
+     },
+     "itl_ms": {
+      "median": 10.79733093746162,
+      "p90": 12.956797124953944,
+      "mean": 11.013277556210852,
+      "count": 175009
+     },
+     "output_tokens": 175009,
+     "output_tokens_per_s": 2916.8262817463337,
+     "requests_per_s": 22.787705326143232,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 233.22796879046464,
+      "energy_j": 13993.678127427878,
+      "tokens_per_joule": 12.506331452754932,
+      "joules_per_token": 0.07995949921667213,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.85633158490239,
+    "startup.first_answer_s": 76.49231510126116,
+    "c1.ttft_ms_median": 22.00054472280103,
+    "c1.itl_ms_median": 5.461955259699681,
+    "c1.output_tokens_per_s": 178.19619114051088,
+    "c1.tokens_per_joule": 1.8565240595704358,
+    "c8.ttft_ms_median": 31.614432180086254,
+    "c8.itl_ms_median": 6.533263146641444,
+    "c8.output_tokens_per_s": 1149.9386127533016,
+    "c8.tokens_per_joule": 7.009786125594145,
+    "c32.ttft_ms_median": 57.88859352268493,
+    "c32.itl_ms_median": 10.79733093746162,
+    "c32.output_tokens_per_s": 2916.8262817463337,
+    "c32.tokens_per_joule": 12.506331452754932
+   },
+   "artifacts": {
+    "server_log": "rounds/16-B-scored/server.log",
+    "load_report": "rounds/16-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 17,
+   "side": "B",
+   "kind": "scored",
+   "pair": 8,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:23:28.283Z",
+   "finished_at": "2026-01-01T01:28:27.335Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.052,
+    "first_answer_s": 78.051,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.553,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.21,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.32,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.11,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.97,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:24:51.335Z",
+     "finished_at": "2026-01-01T01:25:51.335Z",
+     "start_epoch": 1767230691.335356,
+     "end_epoch": 1767230751.335356,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 82,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.121548429933107,
+      "p90": 28.75801295891304,
+      "mean": 23.227625851429764,
+      "count": 82
+     },
+     "itl_ms": {
+      "median": 5.507423734923657,
+      "p90": 6.608908481908388,
+      "mean": 5.61757220962213,
+      "count": 10590
+     },
+     "output_tokens": 10590,
+     "output_tokens_per_s": 176.50266926744501,
+     "requests_per_s": 1.3789271036519142,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.84521926951255,
+      "energy_j": 5810.713156170753,
+      "tokens_per_joule": 1.8225233067649123,
+      "joules_per_token": 0.5486898281564694,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:25:53.335Z",
+     "finished_at": "2026-01-01T01:26:53.335Z",
+     "start_epoch": 1767230753.335356,
+     "end_epoch": 1767230813.335356,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 546,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.99229331432501,
+      "p90": 40.289981308622515,
+      "mean": 32.54190798004126,
+      "count": 546
+     },
+     "itl_ms": {
+      "median": 6.535656137789348,
+      "p90": 7.842787365347218,
+      "mean": 6.666369260545135,
+      "count": 69978
+     },
+     "output_tokens": 69978,
+     "output_tokens_per_s": 1166.3146724197047,
+     "requests_per_s": 9.111833378278943,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.34281931227352,
+      "energy_j": 9740.56915873641,
+      "tokens_per_joule": 7.184270159656692,
+      "joules_per_token": 0.13919298380724954,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:26:55.335Z",
+     "finished_at": "2026-01-01T01:27:55.335Z",
+     "start_epoch": 1767230815.335356,
+     "end_epoch": 1767230875.335356,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1333,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.77939248933532,
+      "p90": 75.11321023613593,
+      "mean": 60.66836211380209,
+      "count": 1333
+     },
+     "itl_ms": {
+      "median": 10.536383053102238,
+      "p90": 12.643659663722685,
+      "mean": 10.747110714164283,
+      "count": 170748
+     },
+     "output_tokens": 170748,
+     "output_tokens_per_s": 2845.8050563645015,
+     "requests_per_s": 22.232852002847668,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 237.67588764752935,
+      "energy_j": 14260.553258851762,
+      "tokens_per_joule": 11.97346977235149,
+      "joules_per_token": 0.08351797925018759,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.05240842528269,
+    "startup.first_answer_s": 78.05145656168818,
+    "c1.ttft_ms_median": 22.121548429933107,
+    "c1.itl_ms_median": 5.507423734923657,
+    "c1.output_tokens_per_s": 176.50266926744501,
+    "c1.tokens_per_joule": 1.8225233067649123,
+    "c8.ttft_ms_median": 30.99229331432501,
+    "c8.itl_ms_median": 6.535656137789348,
+    "c8.output_tokens_per_s": 1166.3146724197047,
+    "c8.tokens_per_joule": 7.184270159656692,
+    "c32.ttft_ms_median": 57.77939248933532,
+    "c32.itl_ms_median": 10.536383053102238,
+    "c32.output_tokens_per_s": 2845.8050563645015,
+    "c32.tokens_per_joule": 11.97346977235149
+   },
+   "artifacts": {
+    "server_log": "rounds/17-B-scored/server.log",
+    "load_report": "rounds/17-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 18,
+   "side": "A",
+   "kind": "scored",
+   "pair": 8,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:28:27.335Z",
+   "finished_at": "2026-01-01T01:33:43.645Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.468,
+    "first_answer_s": 95.311,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.573,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.29,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.44,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.15,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.16,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:30:07.645Z",
+     "finished_at": "2026-01-01T01:31:07.645Z",
+     "start_epoch": 1767231007.645915,
+     "end_epoch": 1767231067.645915,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 75,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.812664603652635,
+      "p90": 28.356463984748427,
+      "mean": 22.903297833835268,
+      "count": 75
+     },
+     "itl_ms": {
+      "median": 6.1770444504951,
+      "p90": 7.41245334059412,
+      "mean": 6.300585339505003,
+      "count": 9706
+     },
+     "output_tokens": 9706,
+     "output_tokens_per_s": 161.76885375565314,
+     "requests_per_s": 1.2638191699660402,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.81239275659615,
+      "energy_j": 5628.743565395769,
+      "tokens_per_joule": 1.7243868214232156,
+      "joules_per_token": 0.5799162853579768,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:31:09.645Z",
+     "finished_at": "2026-01-01T01:32:09.645Z",
+     "start_epoch": 1767231069.645915,
+     "end_epoch": 1767231129.645915,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 495,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.70856335890844,
+      "p90": 39.92113236658097,
+      "mean": 32.24399152685386,
+      "count": 495
+     },
+     "itl_ms": {
+      "median": 7.31429436845398,
+      "p90": 8.777153242144776,
+      "mean": 7.460580255823059,
+      "count": 63437
+     },
+     "output_tokens": 63437,
+     "output_tokens_per_s": 1057.2934135715109,
+     "requests_per_s": 8.260104793527429,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 157.17876721923218,
+      "energy_j": 9430.726033153931,
+      "tokens_per_joule": 6.726693638567626,
+      "joules_per_token": 0.14866144553789115,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:32:11.645Z",
+     "finished_at": "2026-01-01T01:33:11.645Z",
+     "start_epoch": 1767231131.645915,
+     "end_epoch": 1767231191.645915,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1198,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.941981852805206,
+      "p90": 76.62457640864677,
+      "mean": 61.88908094544547,
+      "count": 1198
+     },
+     "itl_ms": {
+      "median": 11.646765641223766,
+      "p90": 13.976118769468519,
+      "mean": 11.879700954048241,
+      "count": 153454
+     },
+     "output_tokens": 153454,
+     "output_tokens_per_s": 2557.576140435545,
+     "requests_per_s": 19.981063597152694,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 229.18267859942526,
+      "energy_j": 13750.960715965515,
+      "tokens_per_joule": 11.1595525284255,
+      "joules_per_token": 0.08960932774435265,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.4678034419389,
+    "startup.first_answer_s": 95.31055928765396,
+    "c1.ttft_ms_median": 21.812664603652635,
+    "c1.itl_ms_median": 6.1770444504951,
+    "c1.output_tokens_per_s": 161.76885375565314,
+    "c1.tokens_per_joule": 1.7243868214232156,
+    "c8.ttft_ms_median": 30.70856335890844,
+    "c8.itl_ms_median": 7.31429436845398,
+    "c8.output_tokens_per_s": 1057.2934135715109,
+    "c8.tokens_per_joule": 6.726693638567626,
+    "c32.ttft_ms_median": 58.941981852805206,
+    "c32.itl_ms_median": 11.646765641223766,
+    "c32.output_tokens_per_s": 2557.576140435545,
+    "c32.tokens_per_joule": 11.1595525284255
+   },
+   "artifacts": {
+    "server_log": "rounds/18-A-scored/server.log",
+    "load_report": "rounds/18-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 19,
+   "side": "A",
+   "kind": "scored",
+   "pair": 9,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:33:43.645Z",
+   "finished_at": "2026-01-01T01:39:00.225Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 93.365,
+    "first_answer_s": 95.579,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.668,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.67,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.01,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.34,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.01,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:35:24.225Z",
+     "finished_at": "2026-01-01T01:36:24.225Z",
+     "start_epoch": 1767231324.225284,
+     "end_epoch": 1767231384.225284,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 76,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.853190062154372,
+      "p90": 28.409147080800686,
+      "mean": 22.94584956526209,
+      "count": 76
+     },
+     "itl_ms": {
+      "median": 6.14697261756982,
+      "p90": 7.376367141083784,
+      "mean": 6.269912069921217,
+      "count": 9765
+     },
+     "output_tokens": 9765,
+     "output_tokens_per_s": 162.76564570049064,
+     "requests_per_s": 1.271606607035083,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.05470630441435,
+      "energy_j": 5763.282378264861,
+      "tokens_per_joule": 1.6945098471766444,
+      "joules_per_token": 0.5901411559609278,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:36:26.225Z",
+     "finished_at": "2026-01-01T01:37:26.225Z",
+     "start_epoch": 1767231386.225284,
+     "end_epoch": 1767231446.225284,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 489,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.575485719708514,
+      "p90": 41.048131435621066,
+      "mean": 33.15426000569394,
+      "count": 489
+     },
+     "itl_ms": {
+      "median": 7.445930666304739,
+      "p90": 8.935116799565687,
+      "mean": 7.594849279630834,
+      "count": 62696
+     },
+     "output_tokens": 62696,
+     "output_tokens_per_s": 1044.9409441828532,
+     "requests_per_s": 8.16360112642854,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 159.99391376713567,
+      "energy_j": 9599.63482602814,
+      "tokens_per_joule": 6.531129338480464,
+      "joules_per_token": 0.15311287652935388,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:37:28.225Z",
+     "finished_at": "2026-01-01T01:38:28.225Z",
+     "start_epoch": 1767231448.225284,
+     "end_epoch": 1767231508.225284,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1242,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 56.94332197979669,
+      "p90": 74.02631857373571,
+      "mean": 59.79048807878653,
+      "count": 1242
+     },
+     "itl_ms": {
+      "median": 11.981506032680555,
+      "p90": 14.377807239216665,
+      "mean": 12.221136153334166,
+      "count": 159038
+     },
+     "output_tokens": 159038,
+     "output_tokens_per_s": 2650.6475717532207,
+     "requests_per_s": 20.708184154322037,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 234.35186551398482,
+      "energy_j": 14061.11193083909,
+      "tokens_per_joule": 11.310546071138678,
+      "joules_per_token": 0.08841306102379247,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 93.3654852134521,
+    "startup.first_answer_s": 95.57936913529531,
+    "c1.ttft_ms_median": 21.853190062154372,
+    "c1.itl_ms_median": 6.14697261756982,
+    "c1.output_tokens_per_s": 162.76564570049064,
+    "c1.tokens_per_joule": 1.6945098471766444,
+    "c8.ttft_ms_median": 31.575485719708514,
+    "c8.itl_ms_median": 7.445930666304739,
+    "c8.output_tokens_per_s": 1044.9409441828532,
+    "c8.tokens_per_joule": 6.531129338480464,
+    "c32.ttft_ms_median": 56.94332197979669,
+    "c32.itl_ms_median": 11.981506032680555,
+    "c32.output_tokens_per_s": 2650.6475717532207,
+    "c32.tokens_per_joule": 11.310546071138678
+   },
+   "artifacts": {
+    "server_log": "rounds/19-A-scored/server.log",
+    "load_report": "rounds/19-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 20,
+   "side": "B",
+   "kind": "scored",
+   "pair": 9,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:39:00.225Z",
+   "finished_at": "2026-01-01T01:43:58.215Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 89.356,
+    "first_answer_s": 76.99,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.468,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 17.87,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 26.81,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 8.94,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.21,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:40:22.215Z",
+     "finished_at": "2026-01-01T01:41:22.215Z",
+     "start_epoch": 1767231622.215533,
+     "end_epoch": 1767231682.215533,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 82,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.53306207890741,
+      "p90": 29.292980702579634,
+      "mean": 23.659715182852782,
+      "count": 82
+     },
+     "itl_ms": {
+      "median": 5.52655339868753,
+      "p90": 6.631864078425036,
+      "mean": 5.637084466661281,
+      "count": 10568
+     },
+     "output_tokens": 10568,
+     "output_tokens_per_s": 176.14735561309476,
+     "requests_per_s": 1.3761512157273028,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 95.09477628698598,
+      "energy_j": 5705.686577219159,
+      "tokens_per_joule": 1.8523347179607497,
+      "joules_per_token": 0.5398592329473304,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:41:24.215Z",
+     "finished_at": "2026-01-01T01:42:24.215Z",
+     "start_epoch": 1767231684.215533,
+     "end_epoch": 1767231744.215533,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 542,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.08395660163882,
+      "p90": 40.40914358213047,
+      "mean": 32.638154431720764,
+      "count": 542
+     },
+     "itl_ms": {
+      "median": 6.6133983880790295,
+      "p90": 7.936078065694835,
+      "mean": 6.74566635584061,
+      "count": 69406
+     },
+     "output_tokens": 69406,
+     "output_tokens_per_s": 1156.7812488427612,
+     "requests_per_s": 9.037353506584072,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.61514469646653,
+      "energy_j": 9756.908681787992,
+      "tokens_per_joule": 7.113613255407305,
+      "joules_per_token": 0.1405755365235614,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:42:26.215Z",
+     "finished_at": "2026-01-01T01:43:26.215Z",
+     "start_epoch": 1767231746.215533,
+     "end_epoch": 1767231806.215533,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1358,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.98118547022386,
+      "p90": 75.37554111129103,
+      "mean": 60.88024474373506,
+      "count": 1358
+     },
+     "itl_ms": {
+      "median": 10.643238688124521,
+      "p90": 12.771886425749425,
+      "mean": 10.856103461887011,
+      "count": 173898
+     },
+     "output_tokens": 173898,
+     "output_tokens_per_s": 2898.3075630692115,
+     "requests_per_s": 22.643027836478215,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 231.57885444715703,
+      "energy_j": 13894.731266829422,
+      "tokens_per_joule": 12.515424044169645,
+      "joules_per_token": 0.07990140777258391,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 89.35579637240066,
+    "startup.first_answer_s": 76.99024854030097,
+    "c1.ttft_ms_median": 22.53306207890741,
+    "c1.itl_ms_median": 5.52655339868753,
+    "c1.output_tokens_per_s": 176.14735561309476,
+    "c1.tokens_per_joule": 1.8523347179607497,
+    "c8.ttft_ms_median": 31.08395660163882,
+    "c8.itl_ms_median": 6.6133983880790295,
+    "c8.output_tokens_per_s": 1156.7812488427612,
+    "c8.tokens_per_joule": 7.113613255407305,
+    "c32.ttft_ms_median": 57.98118547022386,
+    "c32.itl_ms_median": 10.643238688124521,
+    "c32.output_tokens_per_s": 2898.3075630692115,
+    "c32.tokens_per_joule": 12.515424044169645
+   },
+   "artifacts": {
+    "server_log": "rounds/20-B-scored/server.log",
+    "load_report": "rounds/20-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 21,
+   "side": "B",
+   "kind": "scored",
+   "pair": 10,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:43:58.215Z",
+   "finished_at": "2026-01-01T01:48:53.440Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 89.31,
+    "first_answer_s": 74.225,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.466,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 17.86,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 26.79,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 8.93,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.19,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:45:17.440Z",
+     "finished_at": "2026-01-01T01:46:17.440Z",
+     "start_epoch": 1767231917.440306,
+     "end_epoch": 1767231977.440306,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 82,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.406551337823526,
+      "p90": 29.128516739170585,
+      "mean": 23.526878904714703,
+      "count": 82
+     },
+     "itl_ms": {
+      "median": 5.447582597772816,
+      "p90": 6.5370991173273785,
+      "mean": 5.556534249728272,
+      "count": 10498
+     },
+     "output_tokens": 10498,
+     "output_tokens_per_s": 174.96705428231652,
+     "requests_per_s": 1.3669301115805979,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.2026421076278,
+      "energy_j": 5772.158526457668,
+      "tokens_per_joule": 1.818734396988496,
+      "joules_per_token": 0.549832895697043,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:46:19.440Z",
+     "finished_at": "2026-01-01T01:47:19.440Z",
+     "start_epoch": 1767231979.440306,
+     "end_epoch": 1767232039.440306,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 545,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.364984501511817,
+      "p90": 40.77447985196536,
+      "mean": 32.93323372658741,
+      "count": 545
+     },
+     "itl_ms": {
+      "median": 6.78620584719136,
+      "p90": 8.143447016629633,
+      "mean": 6.921929964135188,
+      "count": 69869
+     },
+     "output_tokens": 69869,
+     "output_tokens_per_s": 1164.4861796909079,
+     "requests_per_s": 9.097548278835218,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.99134594294893,
+      "energy_j": 9779.480756576935,
+      "tokens_per_joule": 7.144466308649953,
+      "joules_per_token": 0.13996846745421407,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:47:21.440Z",
+     "finished_at": "2026-01-01T01:48:21.440Z",
+     "start_epoch": 1767232041.440306,
+     "end_epoch": 1767232101.440306,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1320,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 59.03215332530299,
+      "p90": 76.7417993228939,
+      "mean": 61.98376099156815,
+      "count": 1320
+     },
+     "itl_ms": {
+      "median": 10.585775140820376,
+      "p90": 12.70293016898445,
+      "mean": 10.797490643636783,
+      "count": 169037
+     },
+     "output_tokens": 169037,
+     "output_tokens_per_s": 2817.2868250595216,
+     "requests_per_s": 22.010053320777512,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 237.7505998505789,
+      "energy_j": 14265.035991034734,
+      "tokens_per_joule": 11.84975695888938,
+      "joules_per_token": 0.08438991647417933,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 89.3101397627878,
+    "startup.first_answer_s": 74.22477292606898,
+    "c1.ttft_ms_median": 22.406551337823526,
+    "c1.itl_ms_median": 5.447582597772816,
+    "c1.output_tokens_per_s": 174.96705428231652,
+    "c1.tokens_per_joule": 1.818734396988496,
+    "c8.ttft_ms_median": 31.364984501511817,
+    "c8.itl_ms_median": 6.78620584719136,
+    "c8.output_tokens_per_s": 1164.4861796909079,
+    "c8.tokens_per_joule": 7.144466308649953,
+    "c32.ttft_ms_median": 59.03215332530299,
+    "c32.itl_ms_median": 10.585775140820376,
+    "c32.output_tokens_per_s": 2817.2868250595216,
+    "c32.tokens_per_joule": 11.84975695888938
+   },
+   "artifacts": {
+    "server_log": "rounds/21-B-scored/server.log",
+    "load_report": "rounds/21-B-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 22,
+   "side": "A",
+   "kind": "scored",
+   "pair": 10,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:48:53.440Z",
+   "finished_at": "2026-01-01T01:54:08.410Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 94.312,
+    "first_answer_s": 93.97,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.716,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.86,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.29,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.43,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.44,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:50:32.410Z",
+     "finished_at": "2026-01-01T01:51:32.410Z",
+     "start_epoch": 1767232232.410698,
+     "end_epoch": 1767232292.410698,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 75,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.9110752175006,
+      "p90": 28.48439778275078,
+      "mean": 23.00662897837563,
+      "count": 75
+     },
+     "itl_ms": {
+      "median": 6.127220371330111,
+      "p90": 7.352664445596133,
+      "mean": 6.249764778756713,
+      "count": 9658
+     },
+     "output_tokens": 9658,
+     "output_tokens_per_s": 160.97287634580496,
+     "requests_per_s": 1.2576005964516013,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.10532080167411,
+      "energy_j": 5586.319248100446,
+      "tokens_per_joule": 1.7289331582745648,
+      "joules_per_token": 0.5783913595583862,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:51:34.410Z",
+     "finished_at": "2026-01-01T01:52:34.410Z",
+     "start_epoch": 1767232294.410698,
+     "end_epoch": 1767232354.410698,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 484,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.220684473641313,
+      "p90": 40.586889815733706,
+      "mean": 32.78171869732338,
+      "count": 484
+     },
+     "itl_ms": {
+      "median": 7.519873935179029,
+      "p90": 9.023848722214835,
+      "mean": 7.67027141388261,
+      "count": 62064
+     },
+     "output_tokens": 62064,
+     "output_tokens_per_s": 1034.4122938029786,
+     "requests_per_s": 8.08134604533577,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 157.71469701695816,
+      "energy_j": 9462.881821017489,
+      "tokens_per_joule": 6.558756497447757,
+      "joules_per_token": 0.152467925953515,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:52:36.410Z",
+     "finished_at": "2026-01-01T01:53:36.410Z",
+     "start_epoch": 1767232356.410698,
+     "end_epoch": 1767232416.410698,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1197,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.18035206783717,
+      "p90": 74.33445768818832,
+      "mean": 60.03936967122903,
+      "count": 1197
+     },
+     "itl_ms": {
+      "median": 12.022071845766616,
+      "p90": 14.426486214919938,
+      "mean": 12.26251328268195,
+      "count": 153297
+     },
+     "output_tokens": 153297,
+     "output_tokens_per_s": 2554.9561924542986,
+     "requests_per_s": 19.960595253549208,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 233.07486556563987,
+      "energy_j": 13984.491933938392,
+      "tokens_per_joule": 10.961955019275802,
+      "joules_per_token": 0.09122460348008841,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 94.31226249437077,
+    "startup.first_answer_s": 93.97039229929446,
+    "c1.ttft_ms_median": 21.9110752175006,
+    "c1.itl_ms_median": 6.127220371330111,
+    "c1.output_tokens_per_s": 160.97287634580496,
+    "c1.tokens_per_joule": 1.7289331582745648,
+    "c8.ttft_ms_median": 31.220684473641313,
+    "c8.itl_ms_median": 7.519873935179029,
+    "c8.output_tokens_per_s": 1034.4122938029786,
+    "c8.tokens_per_joule": 6.558756497447757,
+    "c32.ttft_ms_median": 57.18035206783717,
+    "c32.itl_ms_median": 12.022071845766616,
+    "c32.output_tokens_per_s": 2554.9561924542986,
+    "c32.tokens_per_joule": 10.961955019275802
+   },
+   "artifacts": {
+    "server_log": "rounds/22-A-scored/server.log",
+    "load_report": "rounds/22-A-scored/guidellm.json"
+   }
+  },
+  {
+   "index": 23,
+   "side": "A",
+   "kind": "aa",
+   "pair": 1,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:54:08.410Z",
+   "finished_at": "2026-01-01T01:59:25.442Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 93.794,
+    "first_answer_s": 96.032,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.69,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.76,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.14,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.38,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.21,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T01:55:49.442Z",
+     "finished_at": "2026-01-01T01:56:49.442Z",
+     "start_epoch": 1767232549.44293,
+     "end_epoch": 1767232609.44293,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 75,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.178051001107406,
+      "p90": 28.83146630143963,
+      "mean": 23.286953551162778,
+      "count": 75
+     },
+     "itl_ms": {
+      "median": 6.057806257744217,
+      "p90": 7.26936750929306,
+      "mean": 6.178962382899102,
+      "count": 9647
+     },
+     "output_tokens": 9647,
+     "output_tokens_per_s": 160.78484207753942,
+     "requests_per_s": 1.2561315787307767,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.52543315984622,
+      "energy_j": 5611.525989590773,
+      "tokens_per_joule": 1.7191563475866376,
+      "joules_per_token": 0.5816806606355531,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T01:56:51.442Z",
+     "finished_at": "2026-01-01T01:57:51.442Z",
+     "start_epoch": 1767232611.44293,
+     "end_epoch": 1767232671.44293,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 490,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.395078512076175,
+      "p90": 39.513602065699025,
+      "mean": 31.914832437679983,
+      "count": 490
+     },
+     "itl_ms": {
+      "median": 7.465850121485372,
+      "p90": 8.959020145782446,
+      "mean": 7.6151671239150796,
+      "count": 62771
+     },
+     "output_tokens": 62771,
+     "output_tokens_per_s": 1046.1952086940628,
+     "requests_per_s": 8.173400067922366,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 159.74860995159884,
+      "energy_j": 9584.91659709593,
+      "tokens_per_joule": 6.549009778620562,
+      "joules_per_token": 0.15269483995344302,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T01:57:53.442Z",
+     "finished_at": "2026-01-01T01:58:53.442Z",
+     "start_epoch": 1767232673.44293,
+     "end_epoch": 1767232733.44293,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1226,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 58.226226294437595,
+      "p90": 75.69409418276888,
+      "mean": 61.13753760915948,
+      "count": 1226
+     },
+     "itl_ms": {
+      "median": 11.903018967437353,
+      "p90": 14.283622760924823,
+      "mean": 12.1410793467861,
+      "count": 157003
+     },
+     "output_tokens": 157003,
+     "output_tokens_per_s": 2616.725045227545,
+     "requests_per_s": 20.443164415840194,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 231.39870428232044,
+      "energy_j": 13883.922256939226,
+      "tokens_per_joule": 11.308296013771027,
+      "joules_per_token": 0.08843065292792293,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 93.79427250007213,
+    "startup.first_answer_s": 96.03223248169076,
+    "c1.ttft_ms_median": 22.178051001107406,
+    "c1.itl_ms_median": 6.057806257744217,
+    "c1.output_tokens_per_s": 160.78484207753942,
+    "c1.tokens_per_joule": 1.7191563475866376,
+    "c8.ttft_ms_median": 30.395078512076175,
+    "c8.itl_ms_median": 7.465850121485372,
+    "c8.output_tokens_per_s": 1046.1952086940628,
+    "c8.tokens_per_joule": 6.549009778620562,
+    "c32.ttft_ms_median": 58.226226294437595,
+    "c32.itl_ms_median": 11.903018967437353,
+    "c32.output_tokens_per_s": 2616.725045227545,
+    "c32.tokens_per_joule": 11.308296013771027
+   },
+   "artifacts": {
+    "server_log": "rounds/23-A-aa/server.log",
+    "load_report": "rounds/23-A-aa/guidellm.json"
+   }
+  },
+  {
+   "index": 24,
+   "side": "A",
+   "kind": "aa",
+   "pair": 1,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T01:59:25.442Z",
+   "finished_at": "2026-01-01T02:04:40.970Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 90.361,
+    "first_answer_s": 94.528,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.518,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.07,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.11,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.04,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 40.66,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T02:01:04.970Z",
+     "finished_at": "2026-01-01T02:02:04.970Z",
+     "start_epoch": 1767232864.970971,
+     "end_epoch": 1767232924.970971,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 22.068009426365844,
+      "p90": 28.688412254275597,
+      "mean": 23.171409897684136,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.004992326093117,
+      "p90": 7.20599079131174,
+      "mean": 6.125092172614979,
+      "count": 9411
+     },
+     "output_tokens": 9411,
+     "output_tokens_per_s": 156.86620871676854,
+     "requests_per_s": 1.2255172555997542,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 94.68261815103165,
+      "energy_j": 5680.957089061899,
+      "tokens_per_joule": 1.656758249613943,
+      "joules_per_token": 0.6035883631380858,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T02:02:06.970Z",
+     "finished_at": "2026-01-01T02:03:06.970Z",
+     "start_epoch": 1767232926.970971,
+     "end_epoch": 1767232986.970971,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 494,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.395519492234047,
+      "p90": 40.81417533990426,
+      "mean": 32.96529546684575,
+      "count": 494
+     },
+     "itl_ms": {
+      "median": 7.263301664440734,
+      "p90": 8.71596199732888,
+      "mean": 7.4085676977295485,
+      "count": 63267
+     },
+     "output_tokens": 63267,
+     "output_tokens_per_s": 1054.4618500936747,
+     "requests_per_s": 8.237983203856833,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 162.3578932731432,
+      "energy_j": 9741.47359638859,
+      "tokens_per_joule": 6.494675613459077,
+      "joules_per_token": 0.15397227814237174,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T02:03:08.970Z",
+     "finished_at": "2026-01-01T02:04:08.970Z",
+     "start_epoch": 1767232988.970971,
+     "end_epoch": 1767233048.970971,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1215,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 56.965481639356696,
+      "p90": 74.0551261311637,
+      "mean": 59.81375572132453,
+      "count": 1215
+     },
+     "itl_ms": {
+      "median": 11.811655043177954,
+      "p90": 14.173986051813545,
+      "mean": 12.047888144041513,
+      "count": 155605
+     },
+     "output_tokens": 155605,
+     "output_tokens_per_s": 2593.4272170343006,
+     "requests_per_s": 20.261150133080474,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 228.64770770658166,
+      "energy_j": 13718.8624623949,
+      "tokens_per_joule": 11.342458855360082,
+      "joules_per_token": 0.08816430482597097,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 90.3611911252077,
+    "startup.first_answer_s": 94.52804084523169,
+    "c1.ttft_ms_median": 22.068009426365844,
+    "c1.itl_ms_median": 6.004992326093117,
+    "c1.output_tokens_per_s": 156.86620871676854,
+    "c1.tokens_per_joule": 1.656758249613943,
+    "c8.ttft_ms_median": 31.395519492234047,
+    "c8.itl_ms_median": 7.263301664440734,
+    "c8.output_tokens_per_s": 1054.4618500936747,
+    "c8.tokens_per_joule": 6.494675613459077,
+    "c32.ttft_ms_median": 56.965481639356696,
+    "c32.itl_ms_median": 11.811655043177954,
+    "c32.output_tokens_per_s": 2593.4272170343006,
+    "c32.tokens_per_joule": 11.342458855360082
+   },
+   "artifacts": {
+    "server_log": "rounds/24-A-aa/server.log",
+    "load_report": "rounds/24-A-aa/guidellm.json"
+   }
+  },
+  {
+   "index": 25,
+   "side": "A",
+   "kind": "aa",
+   "pair": 2,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T02:04:40.970Z",
+   "finished_at": "2026-01-01T02:09:58.062Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 91.91,
+    "first_answer_s": 96.091,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.595,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.38,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 27.57,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.19,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 41.36,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T02:06:22.062Z",
+     "finished_at": "2026-01-01T02:07:22.062Z",
+     "start_epoch": 1767233182.062225,
+     "end_epoch": 1767233242.062225,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 73,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.92897131479122,
+      "p90": 28.507662709228587,
+      "mean": 23.02541988053078,
+      "count": 73
+     },
+     "itl_ms": {
+      "median": 6.080100697937494,
+      "p90": 7.296120837524993,
+      "mean": 6.201702711896244,
+      "count": 9436
+     },
+     "output_tokens": 9436,
+     "output_tokens_per_s": 157.27808921196055,
+     "requests_per_s": 1.2287350719684418,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 93.17828588902553,
+      "energy_j": 5590.697153341532,
+      "tokens_per_joule": 1.687926405936221,
+      "joules_per_token": 0.5924428911610886,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T02:07:24.062Z",
+     "finished_at": "2026-01-01T02:08:24.062Z",
+     "start_epoch": 1767233244.062225,
+     "end_epoch": 1767233304.062225,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 501,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 31.605352368384178,
+      "p90": 41.086958078899436,
+      "mean": 33.18561998680339,
+      "count": 501
+     },
+     "itl_ms": {
+      "median": 7.532360212573935,
+      "p90": 9.038832255088721,
+      "mean": 7.683007416825414,
+      "count": 64251
+     },
+     "output_tokens": 64251,
+     "output_tokens_per_s": 1070.862602614137,
+     "requests_per_s": 8.366114082922945,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 158.26342292134385,
+      "energy_j": 9495.80537528063,
+      "tokens_per_joule": 6.766330355096328,
+      "joules_per_token": 0.14779059660408253,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T02:08:26.062Z",
+     "finished_at": "2026-01-01T02:09:26.062Z",
+     "start_epoch": 1767233306.062225,
+     "end_epoch": 1767233366.062225,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1217,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 57.399300268362715,
+      "p90": 74.61909034887154,
+      "mean": 60.269265281780854,
+      "count": 1217
+     },
+     "itl_ms": {
+      "median": 11.664898564541373,
+      "p90": 13.997878277449647,
+      "mean": 11.8981965358322,
+      "count": 155777
+     },
+     "output_tokens": 155777,
+     "output_tokens_per_s": 2596.2964359829302,
+     "requests_per_s": 20.283565906116642,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 232.75192182702307,
+      "energy_j": 13965.115309621384,
+      "tokens_per_joule": 11.154779799895486,
+      "joules_per_token": 0.08964766834835856,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 91.90950902648085,
+    "startup.first_answer_s": 96.09125406849948,
+    "c1.ttft_ms_median": 21.92897131479122,
+    "c1.itl_ms_median": 6.080100697937494,
+    "c1.output_tokens_per_s": 157.27808921196055,
+    "c1.tokens_per_joule": 1.687926405936221,
+    "c8.ttft_ms_median": 31.605352368384178,
+    "c8.itl_ms_median": 7.532360212573935,
+    "c8.output_tokens_per_s": 1070.862602614137,
+    "c8.tokens_per_joule": 6.766330355096328,
+    "c32.ttft_ms_median": 57.399300268362715,
+    "c32.itl_ms_median": 11.664898564541373,
+    "c32.output_tokens_per_s": 2596.2964359829302,
+    "c32.tokens_per_joule": 11.154779799895486
+   },
+   "artifacts": {
+    "server_log": "rounds/25-A-aa/server.log",
+    "load_report": "rounds/25-A-aa/guidellm.json"
+   }
+  },
+  {
+   "index": 26,
+   "side": "A",
+   "kind": "aa",
+   "pair": 2,
+   "status": "ok",
+   "error": null,
+   "started_at": "2026-01-01T02:09:58.062Z",
+   "finished_at": "2026-01-01T02:15:15.353Z",
+   "node": "gpu-node-1",
+   "image_digest": "registry.example/inference-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "server_version": {
+    "vllm": "0.0.0-example",
+    "source": "endpoint"
+   },
+   "startup": {
+    "ready_s": 94.366,
+    "first_answer_s": 96.291,
+    "clock": "runner, from just before the server was asked for",
+    "breakdown": [
+     {
+      "phase": "first_log",
+      "label": "the server writes its first log line",
+      "seconds": null,
+      "at_s": 4.718,
+      "source": "log"
+     },
+     {
+      "phase": "weights_load",
+      "label": "loading the weights",
+      "seconds": 18.87,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "torch_compile",
+      "label": "torch.compile in total",
+      "seconds": 28.31,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "cuda_graphs",
+      "label": "capturing CUDA graphs",
+      "seconds": 9.44,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     },
+     {
+      "phase": "engine_init",
+      "label": "engine start (profile, KV cache, warm-up)",
+      "seconds": 42.46,
+      "at_s": null,
+      "source": "log",
+      "count": 1
+     }
+    ]
+   },
+   "levels": [
+    {
+     "concurrency": 1,
+     "started_at": "2026-01-01T02:11:39.353Z",
+     "finished_at": "2026-01-01T02:12:39.353Z",
+     "start_epoch": 1767233499.35322,
+     "end_epoch": 1767233559.35322,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 75,
+      "errored": 0,
+      "incomplete": 1
+     },
+     "ttft_ms": {
+      "median": 21.709504624810968,
+      "p90": 28.22235601225426,
+      "mean": 22.79497985605152,
+      "count": 75
+     },
+     "itl_ms": {
+      "median": 6.067078596723419,
+      "p90": 7.280494316068102,
+      "mean": 6.1884201686578875,
+      "count": 9715
+     },
+     "output_tokens": 9715,
+     "output_tokens_per_s": 161.92215344148656,
+     "requests_per_s": 1.2650168237616137,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 96.40478115015235,
+      "energy_j": 5784.286869009141,
+      "tokens_per_joule": 1.6796070849358562,
+      "joules_per_token": 0.5953773409083886,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 8,
+     "started_at": "2026-01-01T02:12:41.353Z",
+     "finished_at": "2026-01-01T02:13:41.353Z",
+     "start_epoch": 1767233561.35322,
+     "end_epoch": 1767233621.35322,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 489,
+      "errored": 0,
+      "incomplete": 8
+     },
+     "ttft_ms": {
+      "median": 30.62268030010655,
+      "p90": 39.809484390138515,
+      "mean": 32.15381431511188,
+      "count": 489
+     },
+     "itl_ms": {
+      "median": 7.286384290324793,
+      "p90": 8.743661148389752,
+      "mean": 7.432111976131289,
+      "count": 62680
+     },
+     "output_tokens": 62680,
+     "output_tokens_per_s": 1044.6732297707515,
+     "requests_per_s": 8.161509607583996,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 160.79254633444108,
+      "energy_j": 9647.552780066466,
+      "tokens_per_joule": 6.497025226516902,
+      "joules_per_token": 0.15391659492387513,
+      "note": null
+     }
+    },
+    {
+     "concurrency": 32,
+     "started_at": "2026-01-01T02:13:43.353Z",
+     "finished_at": "2026-01-01T02:14:43.353Z",
+     "start_epoch": 1767233623.35322,
+     "end_epoch": 1767233683.35322,
+     "duration_s": 60.0,
+     "requests": {
+      "successful": 1207,
+      "errored": 0,
+      "incomplete": 32
+     },
+     "ttft_ms": {
+      "median": 59.02195450810891,
+      "p90": 76.72854086054159,
+      "mean": 61.97305223351436,
+      "count": 1207
+     },
+     "itl_ms": {
+      "median": 12.01711150265638,
+      "p90": 14.420533803187656,
+      "mean": 12.257453732709509,
+      "count": 154498
+     },
+     "output_tokens": 154498,
+     "output_tokens_per_s": 2574.9738309415297,
+     "requests_per_s": 20.1169830542307,
+     "usable": true,
+     "note": null,
+     "energy": {
+      "source": "dcgm",
+      "label": "GPU-only power",
+      "method": "energy_counter",
+      "samples": 4,
+      "mean_power_w": 230.54238616169712,
+      "energy_j": 13832.543169701827,
+      "tokens_per_joule": 11.169199182034589,
+      "joules_per_token": 0.08953193364198196,
+      "note": null
+     }
+    }
+   ],
+   "metrics": {
+    "startup.ready_s": 94.36583693848631,
+    "startup.first_answer_s": 96.29099536051608,
+    "c1.ttft_ms_median": 21.709504624810968,
+    "c1.itl_ms_median": 6.067078596723419,
+    "c1.output_tokens_per_s": 161.92215344148656,
+    "c1.tokens_per_joule": 1.6796070849358562,
+    "c8.ttft_ms_median": 30.62268030010655,
+    "c8.itl_ms_median": 7.286384290324793,
+    "c8.output_tokens_per_s": 1044.6732297707515,
+    "c8.tokens_per_joule": 6.497025226516902,
+    "c32.ttft_ms_median": 59.02195450810891,
+    "c32.itl_ms_median": 12.01711150265638,
+    "c32.output_tokens_per_s": 2574.9738309415297,
+    "c32.tokens_per_joule": 11.169199182034589
+   },
+   "artifacts": {
+    "server_log": "rounds/26-A-aa/server.log",
+    "load_report": "rounds/26-A-aa/guidellm.json"
+   }
+  }
+ ],
+ "analysis": {
+  "tool": {
+   "name": "rhvp_compare.analyze",
+   "version": "1"
+  },
+  "method": {
+   "baseline": "A",
+   "candidate": "B",
+   "ratio": "B/A",
+   "pairing": "ABBA, each pair one A round and the B round next to it",
+   "unit": "one summary per round and metric; requests are never pooled across rounds",
+   "test": "sign",
+   "correction": "holm",
+   "tie_band": 0.05,
+   "alpha": 0.05,
+   "min_pairs": 3,
+   "ci_level": 0.95,
+   "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
+   "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band",
+   "family_size": 14,
+   "pairs_planned": 10,
+   "pairs_usable_min": 10,
+   "min_adjusted_p": 0.02734375
+  },
+  "metrics": [
+   {
+    "id": "startup.ready_s",
+    "label": "time to ready",
+    "unit": "s",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 93.01203375804306,
+    "b_median": 91.22010803137087,
+    "ratios": [
+     0.9785283399257199,
+     0.9528674842193545,
+     0.9852747118323724,
+     1.031697406625962,
+     1.0264334303361176,
+     0.98276422754669,
+     0.9753864721929727,
+     0.9954585657354297,
+     0.9570538424142017,
+     0.9469621171278598
+    ],
+    "median_ratio": 0.9806462837362049,
+    "ci": {
+     "low": 0.9528674842193545,
+     "high": 1.0264334303361176,
+     "level": 0.978515625
+    },
+    "p_sign": 0.109375,
+    "p_wilcoxon": 0.16015625,
+    "p_value": 0.109375,
+    "p_adjusted": 0.4375,
+    "reachable": true,
+    "outcome": "tie",
+    "verdict": "TIE",
+    "reason": "median_ratio_inside_tie_band"
+   },
+   {
+    "id": "startup.first_answer_s",
+    "label": "time to first answer",
+    "unit": "s",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 94.26146834092427,
+    "b_median": 76.72348542966368,
+    "ratios": [
+     0.812669881037223,
+     0.8398806479999363,
+     0.7888119086325952,
+     0.8199296828165773,
+     0.830452597240026,
+     0.8020505603153691,
+     0.812145115307436,
+     0.8189172023020388,
+     0.805511160377289,
+     0.7898740348945661
+    ],
+    "median_ratio": 0.8124074981723295,
+    "ci": {
+     "low": 0.7898740348945661,
+     "high": 0.830452597240026,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c1.ttft_ms_median",
+    "label": "time to first token, median, 1 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 21.902952577307538,
+    "b_median": 22.390482373863577,
+    "ratios": [
+     1.001225477322931,
+     1.030771982046901,
+     1.0018257289284844,
+     1.0254522293663664,
+     1.0318247960785458,
+     0.9799526764800054,
+     0.9946362381906905,
+     1.0141607562346486,
+     1.0311108819728085,
+     1.0226130445632895
+    ],
+    "median_ratio": 1.0183869003989692,
+    "ci": {
+     "low": 0.9946362381906905,
+     "high": 1.0311108819728085,
+     "level": 0.978515625
+    },
+    "p_sign": 0.109375,
+    "p_wilcoxon": 0.048828125,
+    "p_value": 0.109375,
+    "p_adjusted": 0.4375,
+    "reachable": true,
+    "outcome": "tie",
+    "verdict": "TIE",
+    "reason": "median_ratio_inside_tie_band"
+   },
+   {
+    "id": "c1.itl_ms_median",
+    "label": "inter-token latency, median, 1 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 6.1610345012932175,
+    "b_median": 5.454768928736248,
+    "ratios": [
+     0.8957492283262164,
+     0.9229591366000313,
+     0.8980173036911198,
+     0.8812301519118952,
+     0.8726929374345007,
+     0.8931867641555048,
+     0.8801484823299035,
+     0.8915952894724966,
+     0.8990691422458995,
+     0.889078940797137
+    ],
+    "median_ratio": 0.8923910268140007,
+    "ci": {
+     "low": 0.8801484823299035,
+     "high": 0.8990691422458995,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c1.output_tokens_per_s",
+    "label": "output tokens per second, 1 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 159.95297382252983,
+    "b_median": 177.20360592576736,
+    "ratios": [
+     1.1079680768053746,
+     1.1322751649018428,
+     1.1123333066940644,
+     1.0843897535684353,
+     1.1279235624188926,
+     1.1342147668881681,
+     1.1297721625070507,
+     1.0910794332143,
+     1.082214584379975,
+     1.0869350057859997
+    ],
+    "median_ratio": 1.1101506917497195,
+    "ci": {
+     "low": 1.0843897535684353,
+     "high": 1.1322751649018428,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c1.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 1 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "n_pairs": 10,
+    "a_median": 1.7001456170223082,
+    "b_median": 1.8312800036397912,
+    "ratios": [
+     1.0599992639592792,
+     1.1221254285392988,
+     1.0724724916020052,
+     1.0299286875998577,
+     1.091713497464268,
+     1.124747512519258,
+     1.1002085245120934,
+     1.0569109460374442,
+     1.0931389516839158,
+     1.0519402605497779
+    ],
+    "median_ratio": 1.0820929945331366,
+    "ci": {
+     "low": 1.0519402605497779,
+     "high": 1.1221254285392988,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "MORE_EFFICIENT",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c8.ttft_ms_median",
+    "label": "time to first token, median, 8 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 30.952982739759868,
+    "b_median": 31.258415138438572,
+    "ratios": [
+     1.0138854986597543,
+     1.0275378805754791,
+     1.0238573945790523,
+     1.028357234429289,
+     0.995550900453039,
+     1.007069911598735,
+     1.0105306186724397,
+     1.0092394408719307,
+     0.9844332048465404,
+     1.0046219367161002
+    ],
+    "median_ratio": 1.0098850297721853,
+    "ci": {
+     "low": 0.995550900453039,
+     "high": 1.0275378805754791,
+     "level": 0.978515625
+    },
+    "p_sign": 0.109375,
+    "p_wilcoxon": 0.048828125,
+    "p_value": 0.109375,
+    "p_adjusted": 0.4375,
+    "reachable": true,
+    "outcome": "tie",
+    "verdict": "TIE",
+    "reason": "median_ratio_inside_tie_band"
+   },
+   {
+    "id": "c8.itl_ms_median",
+    "label": "inter-token latency, median, 8 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 7.414147337747851,
+    "b_median": 6.647293577592052,
+    "ratios": [
+     0.9305284715508592,
+     0.8941119770896038,
+     0.9003672194864799,
+     0.8992578609437109,
+     0.8956027048886308,
+     0.9044078361925761,
+     0.8849825257204335,
+     0.8935456803566942,
+     0.8881896279274814,
+     0.9024361187020083
+    ],
+    "median_ratio": 0.8974302829161709,
+    "ci": {
+     "low": 0.8881896279274814,
+     "high": 0.9044078361925761,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c8.output_tokens_per_s",
+    "label": "output tokens per second, 8 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 1051.1171788771821,
+    "b_median": 1164.2769538576072,
+    "ratios": [
+     1.1264159867096704,
+     1.1032909076975947,
+     1.0984828739384622,
+     1.0965194623807497,
+     1.1013378189264387,
+     1.0903194775338456,
+     1.107941086522927,
+     1.1031135325811996,
+     1.1070302635594087,
+     1.12574665504962
+    ],
+    "median_ratio": 1.1032022201393972,
+    "ci": {
+     "low": 1.0965194623807497,
+     "high": 1.12574665504962,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c8.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 8 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "n_pairs": 10,
+    "a_median": 6.543467850859152,
+    "b_median": 7.167350950064856,
+    "ratios": [
+     1.125779336265905,
+     1.0726978397123923,
+     1.0886269138407816,
+     1.1033314981092648,
+     1.0775139588588054,
+     1.0971184265189415,
+     1.0734050255055803,
+     1.0680239870692998,
+     1.0891857880527538,
+     1.0893019601246237
+    ],
+    "median_ratio": 1.0889063509467678,
+    "ci": {
+     "low": 1.0726978397123923,
+     "high": 1.1033314981092648,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "MORE_EFFICIENT",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c32.ttft_ms_median",
+    "label": "time to first token, median, 32 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 57.368762107208624,
+    "b_median": 58.274464995767104,
+    "ratios": [
+     0.9905216301343507,
+     1.0269093538116505,
+     1.0065599149558577,
+     1.0139865255222373,
+     1.043420654984033,
+     1.0107704925130299,
+     0.9966027826226053,
+     0.9802756994772724,
+     1.0182262547098218,
+     1.0323852720470992
+    ],
+    "median_ratio": 1.0123785090176336,
+    "ci": {
+     "low": 0.9905216301343507,
+     "high": 1.0323852720470992,
+     "level": 0.978515625
+    },
+    "p_sign": 0.34375,
+    "p_wilcoxon": 0.10546875,
+    "p_value": 0.34375,
+    "p_adjusted": 0.4375,
+    "reachable": true,
+    "outcome": "tie",
+    "verdict": "TIE",
+    "reason": "median_ratio_inside_tie_band"
+   },
+   {
+    "id": "c32.itl_ms_median",
+    "label": "inter-token latency, median, 32 concurrent",
+    "unit": "ms",
+    "better": "lower",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 11.845070673777553,
+    "b_median": 10.650310194642284,
+    "ratios": [
+     0.9259065157755817,
+     0.9142892703607124,
+     0.9066023149502606,
+     0.8935787066456877,
+     0.8963504571411679,
+     0.8899558911488412,
+     0.910722379599724,
+     0.9046617213459396,
+     0.8883055818771198,
+     0.8805283545654395
+    ],
+    "median_ratio": 0.9005060892435537,
+    "ci": {
+     "low": 0.8883055818771198,
+     "high": 0.9142892703607124,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c32.output_tokens_per_s",
+    "label": "output tokens per second, 32 concurrent",
+    "unit": "tokens/s",
+    "better": "higher",
+    "kind": "speed",
+    "n_pairs": 10,
+    "a_median": 2576.7271438544103,
+    "b_median": 2887.9977837707384,
+    "ratios": [
+     1.116501638323971,
+     1.1361155554319478,
+     1.0991194363782086,
+     1.1263673275148491,
+     1.0955322445085944,
+     1.1119292241021008,
+     1.1028117649893698,
+     1.1126961232442028,
+     1.0934337683950117,
+     1.1026751978683547
+    ],
+    "median_ratio": 1.1073704945457354,
+    "ci": {
+     "low": 1.0955322445085944,
+     "high": 1.1263673275148491,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "FASTER",
+    "reason": "significant_outside_tie_band"
+   },
+   {
+    "id": "c32.tokens_per_joule",
+    "label": "output tokens per joule (GPU-only power), 32 concurrent",
+    "unit": "tokens/J",
+    "better": "higher",
+    "kind": "efficiency",
+    "n_pairs": 10,
+    "a_median": 11.138977878269625,
+    "b_median": 12.228479731927608,
+    "ratios": [
+     1.0982672193486036,
+     1.1106958802728488,
+     1.0740322037792351,
+     1.1028948468523811,
+     1.1014134978742371,
+     1.1290853565007133,
+     1.0817083967190966,
+     1.072934577067744,
+     1.1065269497558103,
+     1.080989379910102
+    ],
+    "median_ratio": 1.0998403586114205,
+    "ci": {
+     "low": 1.0740322037792351,
+     "high": 1.1106958802728488,
+     "level": 0.978515625
+    },
+    "p_sign": 0.001953125,
+    "p_wilcoxon": 0.001953125,
+    "p_value": 0.001953125,
+    "p_adjusted": 0.02734375,
+    "reachable": true,
+    "outcome": "better",
+    "verdict": "MORE_EFFICIENT",
+    "reason": "significant_outside_tie_band"
+   }
+  ],
+  "noise_floor": [
+   {
+    "id": "startup.ready_s",
+    "pairs": 2,
+    "median_abs_change": 0.032343817029559574,
+    "max_abs_change": 0.03799287428723064
+   },
+   {
+    "id": "startup.first_answer_s",
+    "pairs": 2,
+    "median_abs_change": 0.008971946917021079,
+    "max_abs_change": 0.015912650077259505
+   },
+   {
+    "id": "c1.ttft_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.00754460390906897,
+    "max_abs_change": 0.010109244488675673
+   },
+   {
+    "id": "c1.itl_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.005465183722479505,
+    "max_abs_change": 0.008795004020506703
+   },
+   {
+    "id": "c1.output_tokens_per_s",
+    "pairs": 2,
+    "median_abs_change": 0.027251714917246428,
+    "max_abs_change": 0.029527725398973415
+   },
+   {
+    "id": "c1.tokens_per_joule",
+    "pairs": 2,
+    "median_abs_change": 0.021176992399119632,
+    "max_abs_change": 0.03766276581826866
+   },
+   {
+    "id": "c8.ttft_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.0325020442194186,
+    "max_abs_change": 0.032914571342870236
+   },
+   {
+    "id": "c8.itl_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.030818244704477804,
+    "max_abs_change": 0.03375829663222141
+   },
+   {
+    "id": "c8.output_tokens_per_s",
+    "pairs": 2,
+    "median_abs_change": 0.016449287227075393,
+    "max_abs_change": 0.02506943999046718
+   },
+   {
+    "id": "c8.tokens_per_joule",
+    "pairs": 2,
+    "median_abs_change": 0.02477473468098279,
+    "max_abs_change": 0.041450528386481666
+   },
+   {
+    "id": "c32.ttft_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.025196062680926667,
+    "max_abs_change": 0.028269582245074254
+   },
+   {
+    "id": "c32.itl_ms_median",
+    "pairs": 2,
+    "median_abs_change": 0.018902780616275816,
+    "max_abs_change": 0.030194256398049957
+   },
+   {
+    "id": "c32.output_tokens_per_s",
+    "pairs": 2,
+    "median_abs_change": 0.008631999120135125,
+    "max_abs_change": 0.008983413160862153
+   },
+   {
+    "id": "c32.tokens_per_joule",
+    "pairs": 2,
+    "median_abs_change": 0.0021564805797984476,
+    "max_abs_change": 0.0030210423875933756
+   }
+  ]
+ }
+}

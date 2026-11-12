@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Write the sample notebook, the prompt set and the synthetic recording, or check that the committed ones are what
-this script writes.
+"""Write the sample notebook, the prompt set and the synthetic recording, and the image comparison's notebook and
+its synthetic results file, or check that the committed ones are what this script writes.
 
-  python3 notebooks/make_notebook.py            # writes all three
+  python3 notebooks/make_notebook.py            # writes all five
   python3 notebooks/make_notebook.py --check    # exit 1 when a committed file is not what this script writes
 
-The notebook's cells come from rhvp_bench/showing.py; this script only writes them as nbformat 4.5 JSON, every cell
+The notebooks' cells come from rhvp_bench/showing.py and rhvp_compare/cells.py; this script only writes them as
+nbformat 4.5 JSON, every cell
 with a stable id, every code cell with no outputs and `execution_count: null`, in the layout Jupyter itself saves
-(sorted keys, one-space indent, source split into lines). The notebook, prompts.jsonl and recordings/synthetic.json
-are therefore pure functions of the code in this folder. Never edit the .ipynb by hand. Standard library only.
+(sorted keys, one-space indent, source split into lines). Every file it writes is therefore a pure function of the
+code in this folder. Never edit an .ipynb by hand. Standard library only.
 """
 
 import argparse
@@ -21,8 +22,10 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from rhvp_bench import prompts, replay, showing  # noqa: E402 (the folder is put on the path just above)
+from rhvp_compare import cells as compare_cells, example  # noqa: E402
 
 NOTEBOOK = HERE / "inference_timings.ipynb"
+COMPARE_NOTEBOOK = HERE / "compare_images.ipynb"
 NBFORMAT, NBFORMAT_MINOR = 4, 5
 METADATA = {
     "kernelspec": {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"},
@@ -37,9 +40,10 @@ def _cell(cell: showing.Cell) -> dict:
     return entry
 
 
-def notebook_text() -> str:
-    """The whole notebook file."""
-    notebook = {"cells": [_cell(cell) for cell in showing.cells()], "metadata": METADATA, "nbformat": NBFORMAT,
+def notebook_text(cells: list[showing.Cell] | None = None) -> str:
+    """The whole notebook file (the timing notebook's cells by default)."""
+    cells = showing.cells() if cells is None else cells
+    notebook = {"cells": [_cell(cell) for cell in cells], "metadata": METADATA, "nbformat": NBFORMAT,
                 "nbformat_minor": NBFORMAT_MINOR}
     return json.dumps(notebook, indent=1, sort_keys=True, ensure_ascii=False, separators=(",", ": ")) + "\n"
 
@@ -50,7 +54,17 @@ def outputs(notebook: Path, prompt_file: Path, recording: Path) -> dict[Path, st
         notebook: notebook_text(),
         prompt_file: prompts.text(prompts.make()),
         recording: replay.recording_text(replay.synthesize()),
+        COMPARE_NOTEBOOK: notebook_text(compare_cells.cells()),
+        example.PATH: example.text(example.synthesize()),
     }
+
+
+def _name(path: Path) -> str:
+    """The path as shown: relative to this folder when it is inside it."""
+    try:
+        return str(path.resolve().relative_to(HERE))
+    except ValueError:
+        return path.name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,16 +80,16 @@ def main(argv: list[str] | None = None) -> int:
         stale = [path for path, text in files.items()
                  if not path.is_file() or path.read_text(encoding="utf-8") != text]
         for path in stale:
-            print(f"STALE: {path.name} is not what make_notebook.py writes; run python3 notebooks/make_notebook.py")
+            print(f"STALE: {_name(path)} is not what make_notebook.py writes; run python3 notebooks/make_notebook.py")
         if stale:
             return 1
-        print(f"OK: {', '.join(path.name for path in files)} are what make_notebook.py writes")
+        print(f"OK: {', '.join(_name(path) for path in files)} are what make_notebook.py writes")
         return 0
 
     for path, text in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        print(f"wrote {path.name}")
+        print(f"wrote {_name(path)}")
     return 0
 
 

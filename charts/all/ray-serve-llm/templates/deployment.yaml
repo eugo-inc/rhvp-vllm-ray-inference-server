@@ -10,7 +10,9 @@ metadata:
     image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"ray-serve-llm:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"server\")].image"}]'
   {{- end }}
 spec:
-  replicas: 1
+  # 0 while global.compare.enabled: the image comparison's side pods need this
+  # server's GPU and its model volume.
+  replicas: {{ if (.Values.global.compare | default dict).enabled }}0{{ else }}1{{ end }}
   # One GPU and a ReadWriteOnce volume: a rolling update would need a second GPU and
   # the same volume at once, and would never finish.
   strategy:

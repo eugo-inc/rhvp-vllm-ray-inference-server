@@ -29,6 +29,66 @@ global:
     # Hugging Face commit of that repository; empty means its newest commit.
     revision: 7ae557604adf67be50417f59c2c2f167def9a775
 
+  # Compare two inference-server images on this model, on the same GPU, with
+  # the same requests (README, "Compare two images"). Off by default. When on:
+  #   - the pattern's own server is scaled to 0, because the comparison needs
+  #     its GPU and its model volume;
+  #   - a Job in vllm-notebook runs the rounds one at a time (A B, B A, ...),
+  #     each side as a pod in vllm-inference, and writes results.json and
+  #     results.md to the PVC image-compare-results;
+  #   - the notebook compare_images.ipynb shows the results.
+  # Any change below starts a new run (a new Job); a finished run is not run
+  # again. Change it only after the current run has finished.
+  compare:
+    enabled: false
+    # Lower-case letters, digits, "-" or "."; at most 40 characters.
+    runName: vllm-two-releases
+    # Exactly two sides: A, the baseline, first; then B, the candidate. Every
+    # ratio in the results is B/A. preset:
+    #   vllm-openai    an upstream vLLM OpenAI server image (vllm serve)
+    #   ray-serve-llm  this pattern's own server image, for example
+    #                  image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest
+    #   custom         set command and args yourself
+    # args are added after the preset's own; env adds environment variables.
+    # In both, {model_id}, {model_source}, {model_revision} and {port} are
+    # filled in.
+    sides:
+      - name: vllm-0-32-0
+        image: docker.io/vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+        preset: vllm-openai
+      - name: vllm-0-33-0
+        image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
+        preset: vllm-openai
+    rounds:
+      # Scored pairs. With the default 14 metrics and Holm's correction, fewer
+      # than 10 pairs can never give FASTER or SLOWER (the plan warns).
+      pairs: 10
+      # One unscored round per side first: pulls the image, fills the model
+      # cache.
+      warmup: true
+      # Extra pairs of side A against itself, to show the noise floor.
+      aaPairs: 0
+    server:
+      gpuMemoryUtilization: 0.85
+      maxModelLen: 8192
+    load:
+      # GuideLLM, one level after another in each round.
+      concurrencies: [1, 8, 32]
+      promptTokens: 256
+      outputTokens: 128
+      secondsPerLevel: 60
+    analysis:
+      # Declared before the run. A median ratio within 1/(1+tieBand) and
+      # 1+tieBand is a TIE.
+      tieBand: 0.05
+      alpha: 0.05
+      test: sign             # sign or wilcoxon
+      correction: holm       # holm, bonferroni, bh or none
+    energy:
+      # auto: DCGM (NVIDIA GPU Operator) through the cluster's monitoring;
+      # none: no tokens per joule.
+      source: auto
+
 main:
   variant: prod
   multiSourceConfig:

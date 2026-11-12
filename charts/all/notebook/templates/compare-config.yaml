@@ -1,0 +1,30 @@
+{{- if include "notebook.compareEnabled" . }}
+# The image comparison's config file, read by the runner Job (compare-job.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-compare-config-{{ include "notebook.compareHash" . }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+data:
+  compare.json: |
+    {{- include "notebook.compareConfig" . | nindent 4 }}
+---
+# Results of every run: one folder per run, with results.json and results.md. The
+# notebook mounts it read-only at /results.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: image-compare-results
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.compare.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.compare.resultsSize }}
+{{- end }}

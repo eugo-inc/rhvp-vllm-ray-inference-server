@@ -1,0 +1,312 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The comparison notebook's cells: read a results file, show it as tables. Nothing is measured here.
+
+Settings (environment variables, the notebook chart sets the first while global.compare.enabled is true):
+
+- RHVP_COMPARE_RESULTS: the results volume (default /results); every run is a folder with a results.json.
+- RHVP_COMPARE_REPLAY=<results.json>: REPLAY mode, that file only, with the amber REPLAY strip above every result.
+
+Every visible sentence comes from words.py or from the results file, escaped. The styles follow rhvp_bench.draw: each
+theme variable written twice, the plain colour first.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import os
+from pathlib import Path
+
+from rhvp_bench import draw
+
+from . import stats, words
+
+GOOD, BAD, NEUTRAL, OPEN = "#1E7B45", "#B3261E", draw.MUTED, draw.AMBER
+VERDICT_COLOUR = {"FASTER": GOOD, "MORE_EFFICIENT": GOOD, "SLOWER": BAD, "LESS_EFFICIENT": BAD, "TIE": NEUTRAL,
+                  "INCONCLUSIVE": OPEN}
+
+
+# ---- reading ----
+
+def _replay_path() -> Path | None:
+    value = os.environ.get("RHVP_COMPARE_REPLAY", "").strip()
+    return Path(value) if value else None
+
+
+def _results_root() -> Path:
+    return Path(os.environ.get("RHVP_COMPARE_RESULTS", "").strip() or "/results")
+
+
+def load_all() -> tuple[list[dict], list[str]]:
+    """Every readable results file, newest first, and a note per file that could not be read."""
+    replay = _replay_path()
+    paths = [replay] if replay else sorted(_results_root().glob("*/results.json"))
+    found, problems = [], []
+    for path in paths:
+        try:
+            found.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as error:
+            problems.append((words.REPLAY_UNUSABLE if replay else words.UNREADABLE).format(
+                error=type(error).__name__))
+    found.sort(key=lambda r: (r.get("run") or {}).get("started_at") or "", reverse=True)
+    return found, problems
+
+
+def pick(run: str | None = None) -> tuple[dict | None, list[dict], list[str]]:
+    """(the chosen run or None, every run, notices). Without `run`, the newest."""
+    found, problems = load_all()
+    if not found:
+        return None, found, problems
+    if run is None:
+        return found[0], found, problems
+    chosen = next((r for r in found if (r.get("run") or {}).get("id") == run), None)
+    if chosen is None:
+        ids = ", ".join((r.get("run") or {}).get("id", "?") for r in found)
+        problems.append(words.NOT_FOUND.format(run=run, runs=ids))
+    return chosen, found, problems
+
+
+# ---- markup ----
+
+def _t(value: object) -> str:
+    return html.escape(str(value))
+
+
+def strip(text: str) -> str:
+    return draw.doubled(
+        f'<div data-rhvp="strip" style="font-family:{draw.FONT};max-width:{draw.WIDTH};margin:8px 0;'
+        f'padding:6px 12px;font-size:12px;font-weight:600;letter-spacing:.04em;color:{draw.AMBER};'
+        f'border:1px solid {draw.AMBER};border-radius:6px">{_t(text)}</div>')
+
+
+def line(text: str) -> str:
+    return draw.doubled(f'<div style="font-family:{draw.FONT};font-size:13px;line-height:1.7;color:{draw.SOFT};'
+                        f'max-width:{draw.WIDTH}">{_t(text)}</div>')
+
+
+def chip(verdict: str) -> str:
+    colour = VERDICT_COLOUR.get(verdict, NEUTRAL)
+    return (f'<span data-rhvp="verdict" style="font-weight:700;letter-spacing:.03em;color:{colour};'
+            f'border-left:3px solid {colour};padding-left:6px">{_t(verdict)}</span>')
+
+
+def table(headers: tuple[str, ...], rows: list[list[str]], raw_last: bool = False) -> str:
+    """A plain table. Cells are escaped, except the last column's when `raw_last` (verdict chips)."""
+    head = "".join(f'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid {draw.BORDER};'
+                   f'color:{draw.MUTED};font-weight:600">{_t(h)}</th>' for h in headers)
+    body = []
+    for row in rows:
+        cells = []
+        for at, cell in enumerate(row):
+            content = cell if (raw_last and at == len(row) - 1) else _t(cell)
+            cells.append(f'<td style="padding:6px 10px;border-bottom:1px solid {draw.BORDER};'
+                         f'font-variant-numeric:tabular-nums">{content}</td>')
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    return draw.doubled(
+        f'<table data-rhvp="table" style="font-family:{draw.FONT};font-size:13px;color:{draw.INK};'
+        f'border-collapse:collapse;margin:8px 0;max-width:{draw.WIDTH}"><thead><tr>{head}</tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _num(value, unit: str = "") -> str:
+    if not isinstance(value, (int, float)):
+        return words.NO_FIGURE
+    if unit == "s":
+        text = f"{value:.2f}"
+    elif unit == "ms":
+        text = f"{value:.1f}"
+    elif unit in ("tokens/J", "W"):
+        text = f"{value:.3g}"
+    else:
+        text = f"{value:.1f}" if abs(value) < 1000 else f"{value:.0f}"
+    return f"{text} {unit}".strip()
+
+
+def _ratio(row: dict) -> str:
+    if row.get("median_ratio") is None:
+        return words.NO_FIGURE
+    ci = row.get("ci") or {}
+    if ci.get("low") is None:
+        return f"{row['median_ratio']:.3f}"
+    return f"{row['median_ratio']:.3f} [{ci['low']:.3f}, {ci['high']:.3f}]"
+
+
+def _p(value) -> str:
+    return words.NO_FIGURE if value is None else (f"{value:.3g}" if value >= 0.001 else f"{value:.1e}")
+
+
+# ---- the frame around every result ----
+
+def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[str]:
+    parts = []
+    if _replay_path():
+        parts.append(strip(words.REPLAY_STRIP))
+    if results and (results.get("run") or {}).get("synthetic"):
+        parts.append(strip(words.SYNTHETIC_STRIP))
+    parts += [draw.notice(p) for p in problems]
+    if not results:
+        return parts
+    run, plan = results.get("run") or {}, results["plan"]
+    done = sum(1 for r in results.get("rounds") or [] if r.get("status") == "ok")
+    parts.append(line(words.RUN_LINE.format(run=run.get("id"), status=run.get("status"), done=done,
+                                            planned=len(plan["rounds"]), platform=run.get("platform"))))
+    a, b = plan["sides"]
+    parts.append(line(words.SIDE_LINE.format(a=f"{a['name']} ({a['image']})", b=f"{b['name']} ({b['image']})")))
+    failed = [str(r["index"]) for r in results.get("rounds") or [] if r.get("status") != "ok"]
+    if failed:
+        parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
+    return parts
+
+
+def _frame(run: str | None):
+    """(results, parts so far); results None means the parts already say why there is nothing to show."""
+    results, found, problems = pick(run)
+    parts = _head(results, found, problems)
+    if results is None and not problems:
+        parts.append(draw.notice(words.NO_RESULTS, words.NO_RESULTS_LINES))
+    return results, parts
+
+
+def _rows(results: dict) -> dict[str, dict]:
+    return {row["id"]: row for row in (results.get("analysis") or {}).get("metrics") or []}
+
+
+# ---- the cells ----
+
+def runs() -> None:
+    """Which runs the results volume holds (the first code cell)."""
+    results, parts = _frame(None)
+    if results:
+        found, _ = load_all()
+        others = [(r.get("run") or {}).get("id", "?") for r in found[1:]]
+        if others:
+            parts.append(line(words.RUN_OTHERS.format(runs=", ".join(others))))
+    draw.show(*parts)
+
+
+def verdicts(run: str | None = None) -> None:
+    results, parts = _frame(run)
+    if results:
+        method = results["plan"]["analysis"]
+        floor = results["plan"]["floor"]
+        band = method["tie_band"]
+        rows = [[row["label"], _num(row.get("a_median"), row["unit"]), _num(row.get("b_median"), row["unit"]),
+                 _ratio(row), str(row["n_pairs"]), _p(row.get("p_adjusted")), chip(row["verdict"])]
+                for row in _rows(results).values()]
+        parts.append(table(words.VERDICT_HEADERS, rows, raw_last=True))
+        parts.append(line(words.METHOD_LINE.format(
+            test=words.TEST_NAMES.get(method["test"], method["test"]),
+            correction=words.CORRECTION_NAMES.get(method["correction"], method["correction"]),
+            family=floor["family_size"], alpha=method["alpha"], band=f"±{band:.0%}", low=1 / (1 + band),
+            high=1 + band)))
+        if not floor["reachable"]:
+            parts.append(draw.notice(words.FLOOR_NOTE.format(
+                pairs=results["plan"]["pairs"], family=floor["family_size"], floor=floor["min_adjusted_p"],
+                alpha=method["alpha"], needed=floor["pairs_needed"])))
+    draw.show(*parts)
+
+
+def _scored(results: dict, side: str) -> list[dict]:
+    return [r for r in results.get("rounds") or [] if r.get("kind") == "scored" and r.get("side") == side
+            and r.get("status") == "ok"]
+
+
+def _median(values: list[float]) -> float | None:
+    return stats.median(values) if values else None
+
+
+def startup(run: str | None = None) -> None:
+    results, parts = _frame(run)
+    if results:
+        rows = _rows(results)
+        table_rows = []
+        for metric, label in (("startup.ready_s", words.STARTUP_READY), ("startup.first_answer_s",
+                                                                         words.STARTUP_FIRST)):
+            row = rows.get(metric) or {}
+            table_rows.append([label, _num(row.get("a_median"), "s"), _num(row.get("b_median"), "s"),
+                               _ratio(row) if row else words.NO_FIGURE, chip(row.get("verdict", "INCONCLUSIVE"))])
+        parts.append(table(words.STARTUP_HEADERS, table_rows, raw_last=True))
+        phases: dict[str, dict] = {}
+        for side in ("A", "B"):
+            for r in _scored(results, side):
+                for entry in (r.get("startup") or {}).get("breakdown") or []:
+                    if isinstance(entry.get("seconds"), (int, float)):
+                        slot = phases.setdefault(entry["phase"], {"label": entry["label"], "A": [], "B": []})
+                        slot[side].append(entry["seconds"])
+        if phases:
+            parts.append(table(words.PHASE_HEADERS, [
+                [p["label"], _num(_median(p["A"]), "s"), _num(_median(p["B"]), "s"), f"{len(p['A'])}, {len(p['B'])}"]
+                for p in phases.values()]))
+            parts.append(line(words.PHASE_NOTE))
+        else:
+            parts.append(line(words.PHASE_NONE))
+    draw.show(*parts)
+
+
+def energy(run: str | None = None) -> None:
+    results, parts = _frame(run)
+    if results:
+        plan = results["plan"]
+        if plan["energy"]["source"] == "none":
+            parts.append(draw.notice(words.ENERGY_OFF))
+        else:
+            rows = _rows(results)
+            table_rows, missing = [], []
+            for c in plan["load"]["concurrencies"]:
+                row = rows.get(f"c{c}.tokens_per_joule") or {}
+                power = {}
+                for side in ("A", "B"):
+                    values = [lv["energy"]["mean_power_w"] for r in _scored(results, side) for lv in r["levels"]
+                              if lv.get("concurrency") == c and isinstance((lv.get("energy") or {}).get(
+                                  "mean_power_w"), (int, float))]
+                    power[side] = _median(values)
+                if not row.get("n_pairs"):
+                    missing.append(str(c))
+                table_rows.append([str(c), _num(row.get("a_median"), "tokens/J"), _num(row.get("b_median"),
+                                                                                       "tokens/J"),
+                                   _ratio(row) if row else words.NO_FIGURE, _num(power["A"], "W"),
+                                   _num(power["B"], "W"), chip(row.get("verdict", "INCONCLUSIVE"))])
+            parts.append(table(words.ENERGY_HEADERS, table_rows, raw_last=True))
+            parts.append(line(words.ENERGY_LINE.format(
+                source=words.ENERGY_SOURCE.get(plan["energy"]["source"], plan["energy"]["source"]),
+                label=plan["energy"]["label"])))
+            if missing:
+                parts.append(line(words.ENERGY_MISSING.format(what=", ".join(missing))))
+    draw.show(*parts)
+
+
+def provenance(run: str | None = None) -> None:
+    results, parts = _frame(run)
+    if results:
+        plan, prov = results["plan"], results.get("provenance") or {}
+        sides = prov.get("sides") or {}
+        rows = []
+        for side in plan["sides"]:
+            p = sides.get(side["key"]) or {}
+            version = (p.get("server_version") or {}).get("vllm")
+            rows.append([side["key"], side["name"], side["image"], p.get("image_digest") or words.NO_FIGURE,
+                         f"vLLM {version}" if version else words.NO_FIGURE])
+        parts.append(table(words.SIDES_HEADERS, rows))
+        gpu, node, cluster = prov.get("gpu") or {}, prov.get("node") or {}, prov.get("cluster") or {}
+        parts.append(line(words.MACHINE_LINE.format(
+            gpu=gpu.get("product") or words.NO_FIGURE, count=gpu.get("count") or words.NO_FIGURE,
+            driver=gpu.get("driver") or words.NO_FIGURE, node=node.get("instance_type") or words.NO_FIGURE,
+            arch=node.get("arch") or words.NO_FIGURE, openshift=cluster.get("openshift_version") or words.NO_FIGURE)))
+        load = plan["load"]
+        parts.append(line(words.LOAD_LINE.format(
+            version=(prov.get("load_tool") or {}).get("version") or words.NO_FIGURE, prompt=load["prompt_tokens"],
+            output=load["output_tokens"], seconds=load["seconds_per_level"],
+            levels=", ".join(str(c) for c in load["concurrencies"]), seed=load["seed"],
+            server_seed=plan["server"]["seed"])))
+        parts.append(line(words.PLAN_LINE.format(
+            pairs=plan["pairs"], warmup=words.PLAN_WARMUP if plan.get("warmup") else "",
+            aa=words.PLAN_AA.format(n=plan["aa_pairs"]) if plan.get("aa_pairs") else "")))
+        noise = (results.get("analysis") or {}).get("noise_floor")
+        if noise:
+            labels = {m["id"]: m["label"] for m in plan["metrics"]}
+            parts.append(line(words.NOISE_NOTE))
+            parts.append(table(words.NOISE_HEADERS, [
+                [labels.get(n["id"], n["id"]), str(n["pairs"]),
+                 words.NO_FIGURE if n["median_abs_change"] is None else f"{n['median_abs_change']:.1%}",
+                 words.NO_FIGURE if n["max_abs_change"] is None else f"{n['max_abs_change']:.1%}"] for n in noise]))
+    draw.show(*parts)

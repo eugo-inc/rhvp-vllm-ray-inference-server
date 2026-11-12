@@ -1,0 +1,151 @@
+{{- if include "notebook.compareEnabled" . }}
+{{- $hash := include "notebook.compareHash" . }}
+{{- $side := .Values.compare.side }}
+# The image comparison's runner: one Job per config (the name carries the config's
+# hash). It runs the rounds one at a time, each side as a pod in the server
+# namespace, with GuideLLM as its own child process, and writes the results to the
+# PVC image-compare-results. A run whose results.json is complete is not run again,
+# so a Job that Argo CD creates a second time exits at once.
+#
+# The container is the pinned GuideLLM image; an init container copies the
+# rhvp_compare package into it from the notebook image. The PVC is ReadWriteOnce
+# and the notebook mounts it too, so the pod runs on the notebook pod's node.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: compare-{{ required "global.compare.runName is required" .Values.global.compare.runName }}-{{ $hash }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+    rhvp-compare/config: {{ $hash | quote }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.compare.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: image-compare
+        app.kubernetes.io/part-of: vllm-ray-inference-server
+    spec:
+      serviceAccountName: image-compare
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/arch: {{ .Values.arch | quote }}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: notebook
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: copy-runner
+          image: {{ include "notebook.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - cp
+            - -R
+            - /opt/app-root/notebooks/rhvp_compare
+            - /runner/
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: runner
+              mountPath: /runner
+      containers:
+        - name: runner
+          image: {{ include "notebook.compareLoadImage" . | quote }}
+          imagePullPolicy: IfNotPresent
+          workingDir: /runner
+          command:
+            - python
+            - -m
+            - rhvp_compare
+            - run
+            - --backend
+            - kube
+            - --config
+            - /config/compare.json
+            - --results
+            - /results
+          env:
+            - name: PYTHONPATH
+              value: /runner
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /cache/home
+            - name: USER
+              value: runner
+            - name: LOGNAME
+              value: runner
+            - name: HF_HOME
+              value: /cache/hf
+            - name: RHVP_COMPARE_NAMESPACE
+              value: {{ .Values.notebook.serverNamespace | quote }}
+            - name: RHVP_COMPARE_ARCH
+              value: {{ $side.arch | quote }}
+            - name: RHVP_COMPARE_MODELS_PVC
+              value: {{ $side.modelsClaimName | quote }}
+            - name: RHVP_COMPARE_LLM_CONFIGMAP
+              value: {{ $side.llmConfigMap | quote }}
+            - name: RHVP_COMPARE_HF_SECRET
+              value: {{ $side.hfSecretName | quote }}
+            - name: RHVP_COMPARE_HF_KEY
+              value: {{ $side.hfSecretKey | quote }}
+            - name: RHVP_COMPARE_GPU_RESOURCE
+              value: {{ $side.gpuResourceName | quote }}
+            - name: RHVP_COMPARE_GPU_TAINT_KEY
+              value: {{ $side.gpuTaintKey | quote }}
+            - name: RHVP_COMPARE_SHM
+              value: {{ $side.shmSizeLimit | quote }}
+            - name: RHVP_COMPARE_CACHE
+              value: {{ $side.cacheSizeLimit | quote }}
+            - name: RHVP_COMPARE_PENDING_SECONDS
+              value: {{ $side.pendingSeconds | quote }}
+            - name: RHVP_COMPARE_SIDE_RESOURCES
+              value: {{ $side.resources | toJson | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.compare.runnerResources | nindent 12 }}
+          volumeMounts:
+            - name: runner
+              mountPath: /runner
+              readOnly: true
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: results
+              mountPath: /results
+            - name: cache
+              mountPath: /cache
+      volumes:
+        - name: runner
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: config
+          configMap:
+            name: image-compare-config-{{ $hash }}
+        - name: results
+          persistentVolumeClaim:
+            claimName: image-compare-results
+{{- end }}
