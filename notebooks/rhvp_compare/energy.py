@@ -6,9 +6,11 @@ losses are not in it. Every figure carries that label.
 
 Two sources of power samples, each a list of (time, watts):
 
-- DCGM, on OpenShift. The NVIDIA GPU Operator's DCGM exporter publishes `DCGM_FI_DEV_POWER_USAGE` (watts) and,
-  where the GPU supports it, `DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION` (millijoules since boot); the cluster's
-  monitoring scrapes them, and the runner reads the raw samples of a window from the Thanos Querier with a range
+- DCGM, on OpenShift. The NVIDIA GPU Operator's DCGM exporter publishes the board power in watts and, where the GPU
+  supports it, an energy counter since boot. Exporters before 4.9.0 name them `DCGM_FI_DEV_POWER_USAGE` and
+  `DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION` (millijoules); 4.9.0 renames them `DCGM_FI_DEV_BOARD_POWER_WATTS` and
+  `DCGM_FI_DEV_GPU_ENERGY_JOULES_TOTAL` (joules). Both names are read, the older first. The cluster's monitoring
+  scrapes them, and the runner reads the raw samples of a window from the Thanos Querier with a range
   selector (no interpolation). Which series belongs to the round's pod is found by the exporter's pod labels, or by
   the node when it has a single GPU series.
 - nvidia-smi, under docker (or anywhere DCGM is not there): `nvidia-smi --query-gpu=power.draw` every 500 ms in a
@@ -16,7 +18,9 @@ Two sources of power samples, each a list of (time, watts):
 
 For a level's window [start, end] (from GuideLLM's report):
 
-- with two or more energy-counter samples inside the window: mean power = (E_last - E_first) / (t_last - t_first);
+- with two or more energy-counter samples inside the window: mean power = (E_last - E_first) / (t_last - t_first),
+  after dropping repeats of an unchanged counter value (a scrape faster than the exporter's own update repeats the
+  last value, and a repeat at either end would stretch or shrink the time the energy is divided by);
 - otherwise the mean of the power samples inside the window, which needs at least `min_samples` of them;
 - tokens per joule = the level's output tokens per second / mean power (W = J/s), and joules per token its inverse.
 
@@ -35,8 +39,10 @@ from collections.abc import Iterable, Mapping
 from . import logs
 
 LABEL = "GPU-only power"
-POWER = "DCGM_FI_DEV_POWER_USAGE"
-ENERGY_COUNTER = "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION"
+#: (metric name, factor to watts) for power and (metric name, factor to millijoules) for the energy counter, in the
+#: order they are tried: the exporter's names before 4.9.0, then its names from 4.9.0 on.
+POWER_METRICS = (("DCGM_FI_DEV_POWER_USAGE", 1.0), ("DCGM_FI_DEV_BOARD_POWER_WATTS", 1.0))
+ENERGY_METRICS = (("DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION", 1.0), ("DCGM_FI_DEV_GPU_ENERGY_JOULES_TOTAL", 1000.0))
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 
 
@@ -100,11 +106,20 @@ class Power:
     note: str | None
 
 
+def collapse(samples: list[Sample]) -> list[Sample]:
+    """Keep the first sample of every run of equal values: the time each counter value first appeared."""
+    out: list[Sample] = []
+    for sample in samples:
+        if not out or sample.value != out[-1].value:
+            out.append(sample)
+    return out
+
+
 def window_power(power: Iterable[Sample], start: float, end: float, min_samples: int = 2,
                  counter: Iterable[Sample] = ()) -> Power:
-    """Mean GPU power over [start, end]: from the energy counter when it has two samples in the window, else the
-    mean of the power samples (at least `min_samples` of them)."""
-    in_counter = inside(counter, start, end)
+    """Mean GPU power over [start, end]: from the energy counter when it has two distinct samples in the window,
+    else the mean of the power samples (at least `min_samples` of them)."""
+    in_counter = collapse(inside(counter, start, end))
     if len(in_counter) >= 2 and in_counter[-1].t > in_counter[0].t:
         joules = (in_counter[-1].value - in_counter[0].value) / 1000.0
         if joules >= 0:
@@ -189,18 +204,30 @@ def dcgm_samples(thanos: Thanos, pod: str, namespace: str, node: str | None, sta
     selector is used only when the node has exactly one GPU series, so another GPU's power is never read."""
     note = None
     for meaning, selector in selectors(pod, namespace, node):
-        try:
-            power = thanos.range_samples(POWER, selector, start, end)
-        except ValueError as error:
-            return [], [], None, str(error)
+        for name, factor in POWER_METRICS:
+            try:
+                power = thanos.range_samples(name, selector, start, end)
+            except ValueError as error:
+                return [], [], None, str(error)
+            if power:
+                break
         if not power:
             continue
         if len(power) > 1:
             note = f"{len(power)} GPU series matched by {meaning}; none was used"
             continue
-        try:
-            counter = thanos.range_samples(ENERGY_COUNTER, selector, start, end)
-        except ValueError:
-            counter = []
-        return power[0][1], (counter[0][1] if len(counter) == 1 else []), meaning, None
+        watts = [Sample(s.t, s.value * factor) for s in power[0][1]]
+        return watts, _counter(thanos, selector, start, end), f"{meaning}, {name}", None
     return [], [], None, note or "no DCGM power series for this pod or its node in the cluster's monitoring"
+
+
+def _counter(thanos: Thanos, selector: str, start: float, end: float) -> list[Sample]:
+    """The energy counter in millijoules under either name, or [] (then the power samples are used)."""
+    for name, factor in ENERGY_METRICS:
+        try:
+            series = thanos.range_samples(name, selector, start, end)
+        except ValueError:
+            return []
+        if len(series) == 1:
+            return [Sample(s.t, s.value * factor) for s in series[0][1]]
+    return []

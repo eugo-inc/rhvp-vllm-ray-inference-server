@@ -1,8 +1,10 @@
 {{- if include "notebook.compareEnabled" . }}
 # The image comparison's runner (compare-job.yaml) runs as this ServiceAccount. It
 # creates and deletes one side pod at a time in the server namespace, reads their
-# logs, reads the Hugging Face Secret there (only to decide whether a side gets the
-# token, by reference), reads the GPU node's labels and the cluster version for the
+# logs, scales the pattern's server Deployment to 0 and back, reads the Hugging
+# Face Secret there (to decide whether a side gets the token, by reference, and to
+# give GuideLLM the tokenizer of a gated model), writes its status ConfigMap in
+# this namespace, reads the GPU node's labels and the cluster version for the
 # results' provenance, and reads GPU power from the cluster's monitoring.
 apiVersion: v1
 kind: ServiceAccount
@@ -43,6 +45,17 @@ rules:
       - {{ .Values.compare.side.hfSecretName }}
     verbs:
       - get
+{{- if .Values.compare.serverDeployment }}
+  - apiGroups:
+      - apps
+    resources:
+      - deployments/scale
+    resourceNames:
+      - {{ .Values.compare.serverDeployment }}
+    verbs:
+      - get
+      - patch
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -55,6 +68,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: image-compare-sides
+subjects:
+  - kind: ServiceAccount
+    name: image-compare
+    namespace: {{ .Release.Namespace }}
+---
+# The run's status, ConfigMap compare-<run id>, in this namespace. Its name comes
+# from the run, so the rule cannot name it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: image-compare-status
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: image-compare-status
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: image-compare-status
 subjects:
   - kind: ServiceAccount
     name: image-compare

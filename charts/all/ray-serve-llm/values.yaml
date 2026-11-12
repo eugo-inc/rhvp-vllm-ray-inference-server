@@ -10,9 +10,6 @@ global:
     id: qwen2.5-0.5b-instruct
     source: Qwen/Qwen2.5-0.5B-Instruct
     revision: ""
-  # global.compare comes from values-global.yaml; this stub keeps it off.
-  compare:
-    enabled: false
 
 # CPU architecture (kubernetes.io/arch) of the node that builds the image and of
 # the GPU node that runs it. The default AWS GPU node (g6.2xlarge) is amd64.

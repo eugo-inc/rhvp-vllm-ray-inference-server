@@ -30,15 +30,25 @@ global:
     revision: 7ae557604adf67be50417f59c2c2f167def9a775
 
   # Compare two inference-server images on this model, on the same GPU, with
-  # the same requests (README, "Compare two images"). Off by default. When on:
-  #   - the pattern's own server is scaled to 0, because the comparison needs
-  #     its GPU and its model volume;
+  # the same requests (README, "Compare two images"). Off by default.
+  #
+  # A run takes the pattern's own server down for its whole length: plan it as
+  # a maintenance window. The runner scales the server to 0 before the first
+  # round (the comparison needs its GPU and its model volume) and back to 1
+  # when the run ends, whether it finished, failed or was stopped. With the
+  # defaults below a run is 22 rounds; we estimate 2 to 3 hours on one GPU, but
+  # have not timed it on a cluster.
+  #
+  # When on:
   #   - a Job in vllm-notebook runs the rounds one at a time (A B, B A, ...),
-  #     each side as a pod in vllm-inference, and writes results.json and
-  #     results.md to the PVC image-compare-results;
+  #     each side as a pod in vllm-inference, writes results.json and
+  #     results.md to the PVC image-compare-results, and keeps a short status
+  #     in ConfigMap compare-<run id>;
   #   - the notebook compare_images.ipynb shows the results.
   # Any change below starts a new run (a new Job); a finished run is not run
-  # again. Change it only after the current run has finished.
+  # again. Change it only after the current run has finished, or delete the
+  # running Job first: two runs at once take turns on the GPU and slow each
+  # other down. Setting enabled back to false deletes nothing.
   compare:
     enabled: false
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
@@ -60,8 +70,8 @@ global:
         image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
         preset: vllm-openai
     rounds:
-      # Scored pairs. With the default 14 metrics and Holm's correction, fewer
-      # than 10 pairs can never give FASTER or SLOWER (the plan warns).
+      # Scored pairs. With the 4 default primary metrics and Holm's correction,
+      # fewer than 8 pairs can never give FASTER or SLOWER (the plan warns).
       pairs: 10
       # One unscored round per side first: pulls the image, fills the model
       # cache.
@@ -84,6 +94,12 @@ global:
       alpha: 0.05
       test: sign             # sign or wilcoxon
       correction: holm       # holm, bonferroni, bh or none
+      # The primary metrics: only they share the correction, so only their
+      # verdicts are findings; every other metric is reported with an
+      # uncorrected p-value, as a description. null means the default: time to
+      # first answer (startup.first_answer_s) and, at the highest concurrency,
+      # c<N>.ttft_ms_median, c<N>.output_tokens_per_s and c<N>.tokens_per_joule.
+      primary: null
     energy:
       # auto: DCGM (NVIDIA GPU Operator) through the cluster's monitoring;
       # none: no tokens per joule.

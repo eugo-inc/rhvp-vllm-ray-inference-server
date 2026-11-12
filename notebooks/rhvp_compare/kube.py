@@ -5,9 +5,17 @@ token through plain httpx (no Kubernetes client package).
 
 A side pod runs like the pattern's own server: the restricted SCC's arbitrary UID in group 0, one GPU (request =
 limit) with a toleration for the GPU taint, the CPU type's nodeSelector, the model PVC at /models, fresh emptyDirs
-at /cache and /tmp/r, and a memory-backed /dev/shm. The pattern's own server Deployment is scaled to 0 while the
-comparison is enabled, so the GPU and the ReadWriteOnce model PVC are free; the runner also waits until no other
-GPU pod is left in the namespace before each round.
+at /cache and /tmp/r, a memory-backed /dev/shm, and its own time limit (activeDeadlineSeconds), so a side outlives a
+runner that was killed outright by one round at most.
+
+The live server. Before the first round the runner scales the pattern's own server Deployment to 0, so the GPU and
+the ReadWriteOnce model PVC are free, and when the run ends (complete, partial, stopped or failed) it scales it back
+(to RHVP_COMPARE_SERVER_REPLICAS, default 1). Argo CD ignores the Deployment's replicas (variants/prod), so a sync
+during the run does not bring the server back onto the GPU. The runner also waits until no other GPU pod is left in
+the namespace before each round.
+
+Progress. After every round the runner writes ConfigMap compare-<run id> in its own namespace: status.json (see
+summary.py) and result.json, the whole results file while it fits.
 
 The runner reaches a side by its pod IP (no Service). GuideLLM runs as a child process of the runner (see
 guidellm.py), so its report lands straight on the results PVC.
@@ -38,6 +46,9 @@ SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 SIDE_APP = "image-compare-side"
 LABEL_RUN = "rhvp-compare/run"
 PART_OF = "vllm-ray-inference-server"
+#: Labels of the run's status ConfigMap.
+STATUS_COMPONENT = "compare-run"
+STATUS_RUN_LABEL = "compare-run-id"
 #: Waiting reasons that never clear by themselves.
 FATAL_WAITING = ("InvalidImageName", "CreateContainerConfigError", "CreateContainerError")
 #: Waiting reasons that may clear (a slow or flaky registry), up to the pending limit.
@@ -116,6 +127,27 @@ class Kube:
         except (ValueError, UnicodeDecodeError):
             return None
 
+    def replicas(self, namespace: str, deployment: str) -> int | None:
+        response = self._call("GET", f"/apis/apps/v1/namespaces/{namespace}/deployments/{deployment}/scale",
+                              f"read the scale of {deployment}", ok_missing=True)
+        return None if response is None else int((response.json().get("spec") or {}).get("replicas") or 0)
+
+    def scale(self, namespace: str, deployment: str, replicas: int) -> None:
+        self._call("PATCH", f"/apis/apps/v1/namespaces/{namespace}/deployments/{deployment}/scale",
+                   f"scale {deployment} to {replicas}", content=json.dumps({"spec": {"replicas": replicas}}),
+                   headers={"Content-Type": "application/merge-patch+json"})
+
+    def put_configmap(self, namespace: str, name: str, labels: Mapping[str, str], data: Mapping[str, str | None]) -> None:
+        """Create the ConfigMap, or merge `data` into it (a None value removes that key)."""
+        patched = self._call("PATCH", f"/api/v1/namespaces/{namespace}/configmaps/{name}", f"update ConfigMap {name}",
+                             ok_missing=True, content=json.dumps({"data": dict(data)}),
+                             headers={"Content-Type": "application/merge-patch+json"})
+        if patched is None:
+            self._call("POST", f"/api/v1/namespaces/{namespace}/configmaps", f"create ConfigMap {name}",
+                       json={"apiVersion": "v1", "kind": "ConfigMap",
+                             "metadata": {"name": name, "labels": dict(labels)},
+                             "data": {k: v for k, v in data.items() if v is not None}})
+
     def cluster_version(self) -> str | None:
         response = self._call("GET", "/apis/config.openshift.io/v1/clusterversions/version",
                               "read the cluster version", ok_missing=True)
@@ -171,6 +203,19 @@ def image_digest(pod: Mapping) -> str | None:
     return image_id if "@sha256:" in image_id else None
 
 
+def _own_namespace() -> str | None:
+    path = SERVICE_ACCOUNT / "namespace"
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else None
+
+
+def side_deadline(plan: Mapping, round_: Mapping) -> int:
+    """A side pod's own time limit: the start, GuideLLM twice (it is retried once on a hang), the energy settle time
+    and ten minutes more. The runner takes every side down itself; this only bounds a side whose runner was killed."""
+    server, load = plan["server"], plan["load"]
+    start = server["warmup_timeout_s"] if round_["kind"] == "warmup" else server["ready_timeout_s"]
+    return int(start + 2 * load["timeout_s"] + plan["energy"]["settle_s"] + 600)
+
+
 class DcgmSampler:
     """GPU power from DCGM in the cluster's monitoring, read after the load (start and stop do nothing)."""
 
@@ -211,6 +256,9 @@ class KubeBackend:
         self.cache = env.get("RHVP_COMPARE_CACHE", "20Gi")
         self.pending_s = float(env.get("RHVP_COMPARE_PENDING_SECONDS", "900"))
         self.gpu_wait_s = float(env.get("RHVP_COMPARE_GPU_WAIT_SECONDS", "900"))
+        self.server_deployment = env.get("RHVP_COMPARE_SERVER_DEPLOYMENT", "ray-serve-llm")
+        self.server_replicas = int(env.get("RHVP_COMPARE_SERVER_REPLICAS", "1"))
+        self.status_namespace = env.get("RHVP_COMPARE_STATUS_NAMESPACE") or _own_namespace()
         try:
             self.resources = json.loads(env.get("RHVP_COMPARE_SIDE_RESOURCES") or "{}")
         except ValueError:
@@ -221,25 +269,53 @@ class KubeBackend:
         self._thanos: energy.Thanos | None = None
         self.run_id = ""
         self.use_token = False
+        self._token: str | None = None
+        self._scaled_down = False
 
     # ---- before and after the run ----
 
     def prepare(self, plan: Mapping) -> None:
         self.run_id = plan["run_id"]
-        self.kube.pods(self.namespace, f"{LABEL_RUN}={self.run_id}")  # fails early without access
-        self.cleanup()  # pods left by an earlier attempt of this run
+        self._delete_run_pods()  # pods left by an earlier attempt of this run; also fails early without access
         token = self.kube.secret_value(self.namespace, self.hf_secret, self.hf_key) if self.hf_secret else None
         self.use_token = bool(token and token.startswith("hf_"))
+        self._token = token if self.use_token else None
+        if self.server_deployment and self.kube.replicas(self.namespace, self.server_deployment) is not None:
+            self._scaled_down = True  # set first: a scale that fails half-way is still undone
+            self.kube.scale(self.namespace, self.server_deployment, 0)
 
     def describe(self) -> dict:
         version = self.kube.cluster_version()
         return {"cluster": {"openshift_version": version}} if version else {}
 
-    def cleanup(self) -> None:
-        if not self.run_id:
-            return
+    def _delete_run_pods(self) -> None:
         for pod in self.kube.pods(self.namespace, f"{LABEL_RUN}={self.run_id}"):
             self.kube.delete_pod(self.namespace, pod["metadata"]["name"], grace_s=0)
+
+    def cleanup(self) -> None:
+        """Delete the run's side pods and bring the pattern's server back; both are tried, the first error raised."""
+        errors: list[Exception] = []
+        if self.run_id:
+            try:
+                self._delete_run_pods()
+            except Exception as error:
+                errors.append(error)
+        if self._scaled_down:
+            try:
+                self.kube.scale(self.namespace, self.server_deployment, self.server_replicas)
+                self._scaled_down = False
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
+
+    def publish(self, run_id: str, status_text: str, result_text: str | None) -> None:
+        if not self.status_namespace:
+            return
+        self.kube.put_configmap(self.status_namespace, f"compare-{run_id}",
+                                {"app.kubernetes.io/component": STATUS_COMPONENT, STATUS_RUN_LABEL: run_id,
+                                 "app.kubernetes.io/part-of": PART_OF},
+                                {"status.json": status_text, "result.json": result_text})
 
     # ---- one round ----
 
@@ -263,7 +339,8 @@ class KubeBackend:
             if not holders:
                 return
             if self.clock() > deadline:
-                raise runner.RoundError(f"other pods in {self.namespace} still hold the GPU: {', '.join(holders)}")
+                raise runner.RoundError(f"other pods in {self.namespace} still hold the GPU: {', '.join(holders)}",
+                                        runner.GPU_NOT_FREE)
             self.sleep(10)
 
     def pod_body(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
@@ -302,6 +379,7 @@ class KubeBackend:
                 "rhvp-compare/side": round_["side"], "rhvp-compare/round": str(round_["index"])}},
             "spec": {
                 "restartPolicy": "Never", "terminationGracePeriodSeconds": 30, "automountServiceAccountToken": False,
+                "activeDeadlineSeconds": side_deadline(plan, round_),
                 "enableServiceLinks": False,
                 "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
                 "nodeSelector": {"kubernetes.io/arch": self.arch}, "tolerations": tolerations,
@@ -356,19 +434,21 @@ class KubeBackend:
             pod = self._pod(handle, fresh=True)
             problem = self._problem(handle, pod)
             if problem:
-                raise runner.RoundError(problem)
+                raise runner.RoundError(problem, runner.SIDE_FAILED)
             ip = (pod.get("status") or {}).get("podIP")
             if ip:
                 return f"http://[{ip}]:{handle['port']}" if ":" in ip else f"http://{ip}:{handle['port']}"
             if self.clock() > deadline:
-                raise runner.RoundError("the side's pod got no IP address before the time limit")
+                raise runner.RoundError("the side's pod got no IP address before the time limit",
+                                        runner.SIDE_NEVER_READY)
             self.sleep(1.0)
 
     def alive(self, handle: dict) -> str | None:
         return self._problem(handle, self._pod(handle))
 
     def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path:
-        return guidellm.run(plan, target, out_dir)
+        # GuideLLM downloads the model's tokenizer, which needs the token for a gated model (never "none")
+        return guidellm.run(plan, target, out_dir, env={"HF_TOKEN": self._token} if self._token else None)
 
     def sampler(self, plan: Mapping, handle: dict):
         if plan["energy"]["source"] != "dcgm" or not handle.get("gpu"):

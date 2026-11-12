@@ -217,20 +217,45 @@ def _thanos(answers: dict) -> tuple[energy.Thanos, list]:
 
 def test_dcgm_samples_by_exported_pod_labels():
     thanos, seen = _thanos({
-        f'{energy.POWER}{{exported_pod="side",exported_namespace="ns"}}': _matrix(({}, [(10, 200), (11, 210)])),
-        f'{energy.ENERGY_COUNTER}{{exported_pod="side"': _matrix(({}, [(10, 5000), (11, 5205)])),
+        'DCGM_FI_DEV_POWER_USAGE{exported_pod="side",exported_namespace="ns"}': _matrix(({}, [(10, 200), (11, 210)])),
+        'DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{exported_pod="side"': _matrix(({}, [(10, 5000), (11, 5205)])),
     })
     power, counter, matched, note = energy.dcgm_samples(thanos, "side", "ns", "node-1", 10, 11)
-    assert [s.value for s in power] == [200, 210] and len(counter) == 2
-    assert matched == "pod (exported labels)" and note is None
+    assert [s.value for s in power] == [200, 210] and [s.value for s in counter] == [5000, 5205]
+    assert matched == "pod (exported labels), DCGM_FI_DEV_POWER_USAGE" and note is None
     assert seen[0][0].endswith("[2s]") and seen[0][1] == "Bearer t0k"
+
+
+def test_dcgm_samples_under_the_exporters_new_names():
+    # DCGM exporter 4.9.0 renames both series; its energy counter is in joules, not millijoules.
+    thanos, seen = _thanos({
+        'DCGM_FI_DEV_BOARD_POWER_WATTS{exported_pod="side"': _matrix(({}, [(10, 200), (11, 210)])),
+        'DCGM_FI_DEV_GPU_ENERGY_JOULES_TOTAL{exported_pod="side"': _matrix(({}, [(10, 1000.0), (11, 1205.0)])),
+    })
+    power, counter, matched, note = energy.dcgm_samples(thanos, "side", "ns", None, 10, 11)
+    assert [s.value for s in power] == [200, 210] and matched.endswith("DCGM_FI_DEV_BOARD_POWER_WATTS")
+    assert [s.value for s in counter] == pytest.approx([1_000_000, 1_205_000])  # millijoules
+    assert energy.window_power(power, 10, 11, 2, counter).mean_w == pytest.approx(205.0)
+    assert seen[0][0].startswith("DCGM_FI_DEV_POWER_USAGE{")  # the older name is tried first
+
+
+def test_repeated_counter_values_are_dropped_before_the_division():
+    # A scrape faster than the exporter's update repeats the last value: 1000 J from t=10 to t=12, not to t=13.
+    counter = [energy.Sample(10, 0), energy.Sample(11, 500_000), energy.Sample(12, 1_000_000),
+               energy.Sample(13, 1_000_000)]
+    assert energy.collapse(counter) == counter[:3]
+    assert energy.window_power([], 10, 13, 2, counter).mean_w == pytest.approx(500.0)
+    flat = [energy.Sample(10, 5000), energy.Sample(11, 5000)]
+    power = [energy.Sample(10, 90), energy.Sample(11, 110)]
+    result = energy.window_power(power, 10, 11, 2, flat)  # one distinct value: fall back to the power samples
+    assert result.method == "power_mean" and result.mean_w == pytest.approx(100.0)
 
 
 def test_dcgm_node_series_only_when_there_is_one_gpu():
     one = _matrix(({"gpu": "0"}, [(10, 90), (11, 95)]))
     two = _matrix(({"gpu": "0"}, [(10, 90)]), ({"gpu": "1"}, [(10, 300)]))
     thanos, _ = _thanos({'Hostname="node-1"': one})
-    assert energy.dcgm_samples(thanos, "side", "ns", "node-1", 10, 11)[2] == "node"
+    assert energy.dcgm_samples(thanos, "side", "ns", "node-1", 10, 11)[2].startswith("node, ")
     thanos, _ = _thanos({'Hostname="node-1"': two})
     power, _, matched, note = energy.dcgm_samples(thanos, "side", "ns", "node-1", 10, 11)
     assert power == [] and matched is None and "2 GPU series" in note
@@ -274,11 +299,28 @@ def test_image_digest_from_the_pod():
     assert kube.image_digest({}) is None
 
 
-def _side_backend(secret: str | None = None) -> tuple[kube.KubeBackend, list]:
+def _side_backend(secret: str | None = None, server_replicas: int | None = None,
+                  configmaps: dict | None = None) -> tuple[kube.KubeBackend, list]:
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((request.method, request.url.path))
+        body = json.loads(request.content) if request.content else None
+        calls.append((request.method, request.url.path, body))
+        if request.url.path.endswith("/deployments/ray-serve-llm/scale"):
+            if server_replicas is None:
+                return httpx.Response(404, json={"message": "not found"})
+            assert request.method == "GET" or request.headers["content-type"] == "application/merge-patch+json"
+            return httpx.Response(200, json={"spec": {"replicas": server_replicas}})
+        if configmaps is not None and "/configmaps" in request.url.path:
+            name = request.url.path.rsplit("/", 1)[1]
+            if request.method == "PATCH":
+                if name not in configmaps:
+                    return httpx.Response(404, json={"message": "not found"})
+                configmaps[name]["data"].update(body["data"])
+                configmaps[name]["data"] = {k: v for k, v in configmaps[name]["data"].items() if v is not None}
+                return httpx.Response(200, json=configmaps[name])
+            configmaps[body["metadata"]["name"]] = body
+            return httpx.Response(201, json=body)
         if request.url.path.endswith("/secrets/huggingface-secret"):
             if secret is None:
                 return httpx.Response(404, json={"message": "not found"})
@@ -289,9 +331,70 @@ def _side_backend(secret: str | None = None) -> tuple[kube.KubeBackend, list]:
 
     client = kube.Kube(base_url="https://api.example:6443", token="t", verify=False,
                        transport=httpx.MockTransport(handler))
-    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_SIDE_RESOURCES": json.dumps(
+    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb", "RHVP_COMPARE_SIDE_RESOURCES": json.dumps(
         {"requests": {"cpu": "2", "memory": "12Gi"}, "limits": {"memory": "24Gi"}})}
     return kube.KubeBackend(kube=client, env=env, sleep=lambda s: None), calls
+
+
+def test_the_live_server_is_scaled_down_for_the_run_and_back_after():
+    backend, calls = _side_backend(server_replicas=1)
+    backend.prepare(_plan())
+    scale = [(method, body) for method, path, body in calls if path.endswith("/scale")]
+    assert scale == [("GET", None), ("PATCH", {"spec": {"replicas": 0}})]
+    calls.clear()
+    backend.cleanup()
+    assert [(m, b) for m, p, b in calls if p.endswith("/scale")] == [("PATCH", {"spec": {"replicas": 1}})]
+    calls.clear()
+    backend.cleanup()  # once only
+    assert not [c for c in calls if c[1].endswith("/scale")]
+    absent, calls = _side_backend(server_replicas=None)  # no server Deployment: nothing to scale
+    absent.prepare(_plan())
+    absent.cleanup()
+    assert [m for m, p, b in calls if p.endswith("/scale")] == ["GET"]
+
+
+def test_cleanup_brings_the_server_back_even_when_deleting_pods_fails():
+    backend, calls = _side_backend(server_replicas=1)
+    backend.prepare(_plan())
+    backend.kube.pods = lambda ns, selector=None: (_ for _ in ()).throw(RuntimeError("API down"))
+    with pytest.raises(RuntimeError, match="API down"):
+        backend.cleanup()
+    assert calls[-1][1].endswith("/scale") and calls[-1][2] == {"spec": {"replicas": 1}}
+
+
+def test_the_status_configmap_is_created_then_merged():
+    store: dict = {}
+    backend, _ = _side_backend(configmaps=store)
+    backend.publish("run-1", '{"phase":"running"}', '{"big":1}')
+    made = store["compare-run-1"]
+    assert made["metadata"]["labels"] == {"app.kubernetes.io/component": "compare-run", "compare-run-id": "run-1",
+                                          "app.kubernetes.io/part-of": "vllm-ray-inference-server"}
+    assert made["data"] == {"status.json": '{"phase":"running"}', "result.json": '{"big":1}'}
+    backend.publish("run-1", '{"phase":"complete"}', None)  # too big this time: result.json is dropped
+    assert store["compare-run-1"]["data"] == {"status.json": '{"phase":"complete"}'}
+
+
+def test_a_side_pod_has_its_own_time_limit():
+    backend, _ = _side_backend()
+    plan = _plan()
+    backend.prepare(plan)
+    side = plan["sides"][0]
+    warm = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    scored = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    load = 2 * plan["load"]["timeout_s"] + plan["energy"]["settle_s"] + 600
+    assert warm["spec"]["activeDeadlineSeconds"] == int(plan["server"]["warmup_timeout_s"] + load)
+    assert scored["spec"]["activeDeadlineSeconds"] == int(plan["server"]["ready_timeout_s"] + load)
+
+
+@pytest.mark.parametrize("secret, passed", [("hf_abc", True), ("none", False)])
+def test_guidellm_gets_the_token_only_when_real(secret, passed, monkeypatch, tmp_path):
+    backend, _ = _side_backend(secret)
+    plan = _plan()
+    backend.prepare(plan)
+    seen = {}
+    monkeypatch.setattr(guidellm, "run", lambda plan, target, out_dir, env=None: seen.setdefault("env", env))
+    backend.run_load(plan, plan["rounds"][2], "http://side:8000", tmp_path)
+    assert seen["env"] == ({"HF_TOKEN": "hf_abc"} if passed else None)
 
 
 def test_side_pod_like_the_patterns_server():

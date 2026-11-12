@@ -30,9 +30,17 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- toPrettyJson $cfg -}}
 {{- end }}
 
-{{/* A short hash of that config: a changed config is a new Job. */}}
+{{/* A short hash of that config: a changed config is a new ConfigMap. */}}
 {{- define "notebook.compareHash" -}}
 {{- include "notebook.compareConfig" . | sha256sum | trunc 8 -}}
+{{- end }}
+
+{{/* A short hash of everything in the Job's pod template: the config, the compare
+     values, the CPU type, the notebook image and the server namespace. A Job's pod
+     template cannot be changed, so any change to these is a new Job. A new Job with
+     an unchanged config finds its run complete and exits at once. */}}
+{{- define "notebook.compareJobHash" -}}
+{{- list (include "notebook.compareConfig" .) (toJson .Values.compare) .Values.arch (include "notebook.image" .) .Values.notebook.serverNamespace | toJson | sha256sum | trunc 8 -}}
 {{- end }}
 
 {{/* The GuideLLM image the runner runs in: global.compare.load.image, or the pinned

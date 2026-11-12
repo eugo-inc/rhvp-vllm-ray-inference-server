@@ -1,11 +1,14 @@
 {{- if include "notebook.compareEnabled" . }}
 {{- $hash := include "notebook.compareHash" . }}
 {{- $side := .Values.compare.side }}
-# The image comparison's runner: one Job per config (the name carries the config's
-# hash). It runs the rounds one at a time, each side as a pod in the server
-# namespace, with GuideLLM as its own child process, and writes the results to the
-# PVC image-compare-results. A run whose results.json is complete is not run again,
-# so a Job that Argo CD creates a second time exits at once.
+# The image comparison's runner: one Job per config and pod template (the name
+# carries their hash). It scales the pattern's server to 0, runs the rounds one at
+# a time, each side as a pod in the server namespace, with GuideLLM as its own
+# child process, writes the results to the PVC image-compare-results and a short
+# status to ConfigMap compare-<run id>, and scales the server back when it ends.
+# A run whose results.json is complete is not run again, so a Job that Argo CD
+# creates a second time exits at once. Exit 1 (the Job reads Failed) means a
+# partial run; the termination message and the log's last lines summarise it.
 #
 # The container is the pinned GuideLLM image; an init container copies the
 # rhvp_compare package into it from the notebook image. The PVC is ReadWriteOnce
@@ -13,10 +16,13 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: compare-{{ required "global.compare.runName is required" .Values.global.compare.runName }}-{{ $hash }}
+  name: compare-{{ required "global.compare.runName is required" .Values.global.compare.runName }}-{{ include "notebook.compareJobHash" . }}
   labels:
     {{- include "notebook.labels" . | nindent 4 }}
     rhvp-compare/config: {{ $hash | quote }}
+  annotations:
+    # The rendered config, readable without the ConfigMap.
+    rhvp-compare/config: {{ include "notebook.compareConfig" . | fromJson | toJson | quote }}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: {{ .Values.compare.activeDeadlineSeconds }}
@@ -28,6 +34,7 @@ spec:
     spec:
       serviceAccountName: image-compare
       restartPolicy: Never
+      terminationGracePeriodSeconds: {{ .Values.compare.terminationGracePeriodSeconds }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -80,6 +87,7 @@ spec:
             - /config/compare.json
             - --results
             - /results
+          terminationMessagePolicy: FallbackToLogsOnError
           env:
             - name: PYTHONPATH
               value: /runner
@@ -117,6 +125,18 @@ spec:
               value: {{ $side.pendingSeconds | quote }}
             - name: RHVP_COMPARE_SIDE_RESOURCES
               value: {{ $side.resources | toJson | quote }}
+            - name: RHVP_COMPARE_SERVER_DEPLOYMENT
+              value: {{ .Values.compare.serverDeployment | quote }}
+            - name: RHVP_COMPARE_SERVER_REPLICAS
+              value: {{ .Values.compare.serverReplicas | quote }}
+            - name: RHVP_COMPARE_STATUS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: RHVP_COMPARE_DEADLINE_SECONDS
+              value: {{ .Values.compare.activeDeadlineSeconds | quote }}
+            - name: RHVP_COMPARE_TERMINATION_LOG
+              value: /dev/termination-log
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

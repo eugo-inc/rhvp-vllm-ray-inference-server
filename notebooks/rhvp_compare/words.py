@@ -25,8 +25,10 @@ SECTION_TEXT = {
     1: ("One row per metric. B/A is the median, over the pairs, of side B's figure divided by side A's in the same "
         "pair; the interval next to it is a distribution-free confidence interval for that median. The verdict "
         "follows a rule fixed before the first round: inside the tie band it is TIE; outside it, B is FASTER or "
-        "SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) only when the p-value, corrected for the "
-        "number of metrics, is at most alpha; otherwise INCONCLUSIVE."),
+        "SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) only when the p-value is at most alpha; "
+        "otherwise INCONCLUSIVE. Only the primary metrics, declared before the first round, count as findings: "
+        "their p-values are corrected for the number of primary metrics. The secondary metrics below them use "
+        "the same rule on an uncorrected p-value, so their verdicts only describe the run."),
     2: ("Time to ready runs from just before the runner asks for the side's pod until the server lists the model; "
         "time to first answer, until the first generated text of a streamed request comes back. Both are timed by "
         "the runner, the same way for every image, and the warm-up rounds (which pull the image and download the "
@@ -57,16 +59,21 @@ REPLAY_UNUSABLE = "REPLAY is on, but its results file could not be read ({error}
 
 RUN_LINE = "Run {run} · {status} · {done} of {planned} rounds measured · {platform}"
 RUN_FAILED_ROUNDS = "Rounds that failed: {rounds}."
+RUN_CODE = "Why the run did not finish: {code}."
 RUN_OTHERS = "Other runs in the results volume: {runs}."
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----
 
 VERDICT_HEADERS = ("Metric", "A median", "B median", "B/A median [interval]", "Pairs", "p, corrected", "Verdict")
-FLOOR_NOTE = ("With {pairs} pairs and {family} metrics the smallest p-value the correction can give is {floor:.3g}, "
-              "above alpha {alpha:g}: no metric can be FASTER or SLOWER in this run. {needed} pairs would be "
-              "needed.")
-METHOD_LINE = ("Exact {test} test on the per-pair ratios, {correction} correction over {family} metrics, alpha "
+SECONDARY_HEADERS = ("Metric", "A median", "B median", "B/A median [interval]", "Pairs", "p, not corrected",
+                     "Verdict")
+PRIMARY_TITLE = "Primary metrics"
+SECONDARY_TITLE = "Secondary metrics: descriptive only, not corrected for the number of metrics"
+FLOOR_NOTE = ("With {pairs} pairs and {family} primary metrics the smallest p-value the correction can give is "
+              "{floor:.3g}, above alpha {alpha:g}: no primary metric can be FASTER or SLOWER in this run. {needed} "
+              "pairs would be needed.")
+METHOD_LINE = ("Exact {test} test on the per-pair ratios, {correction} correction over {family} primary metrics, alpha "
                "{alpha:g}, tie band {band} (B/A between {low:.3f} and {high:.3f}); all declared before the first "
                "round.")
 TEST_NAMES = {"sign": "sign", "wilcoxon": "Wilcoxon signed-rank"}

@@ -23,7 +23,12 @@ POLL_S = 0.5
 
 
 class StartFailed(Exception):
-    """The server died, never got a node, or did not answer in time. The message is safe to show."""
+    """The server died, never got a node, or did not answer in time. The message is safe to show; `never_ready` is
+    True for the time limit and False when the side itself failed."""
+
+    def __init__(self, message: str, never_ready: bool = False) -> None:
+        super().__init__(message)
+        self.never_ready = never_ready
 
 
 def _check(alive: Callable[[], str | None], deadline: float, step: str) -> None:
@@ -31,7 +36,7 @@ def _check(alive: Callable[[], str | None], deadline: float, step: str) -> None:
     if problem:
         raise StartFailed(problem)
     if time.monotonic() > deadline:
-        raise StartFailed(f"no {step} before the time limit")
+        raise StartFailed(f"no {step} before the time limit", never_ready=True)
 
 
 def wait_ready(client: httpx.Client, model: str, t0: float, deadline: float,

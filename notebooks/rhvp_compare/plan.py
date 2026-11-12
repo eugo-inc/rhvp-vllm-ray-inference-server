@@ -10,6 +10,12 @@ Round order. With `pairs: n` the scored rounds are n pairs in ABBA order: A B, B
 B, pair 2 is B then A, and so on). An optional warm-up runs each side once first, unscored: it pulls the image and
 fills the model cache, so no scored round pays for a download. Optional A/A pairs come last: side A twice, to show
 how far two rounds of one image land apart (the noise floor).
+
+Primary and secondary metrics. A few metrics, declared before the run, are primary: only they share the
+multiple-comparison correction, so ten pairs can still give a FASTER or SLOWER verdict. By default they are the time
+to first answer and, at the highest concurrency level, the median time to first token, the output tokens per second
+and the output tokens per joule. Every other metric is secondary: it gets the same test, interval and tie band, but
+its p-value is not corrected, so its verdict is descriptive, not a finding. `analysis.primary` lists other ids.
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ DEFAULTS: dict = {
     "load": {"image": GUIDELLM_IMAGE, "concurrencies": [1, 8, 32], "promptTokens": 256, "outputTokens": 128,
              "secondsPerLevel": 60, "seed": 42, "requestFormat": "/v1/completions", "timeoutSeconds": None},
     "analysis": {"tieBand": 0.05, "alpha": 0.05, "test": "sign", "correction": "holm", "minPairs": 3,
-                 "ciLevel": 0.95},
+                 "ciLevel": 0.95, "primary": None},
     "energy": {"source": "auto", "settleSeconds": 45,
                "thanosUrl": "https://thanos-querier.openshift-monitoring.svc:9091", "minSamples": 2},
 }
@@ -140,9 +146,23 @@ def round_order(pairs: int, warmup: bool, aa_pairs: int) -> list[dict]:
     return out
 
 
+PRIMARY, SECONDARY = "primary", "secondary"
+
+
+def default_primary(concurrencies: list[int], energy: bool) -> list[str]:
+    """The default primary metrics: time to first answer, and at the highest concurrency level the median time to
+    first token, the output tokens per second and (when energy is measured) the output tokens per joule."""
+    top = max(concurrencies)
+    out = ["startup.first_answer_s", f"c{top}.ttft_ms_median", f"c{top}.output_tokens_per_s"]
+    if energy:
+        out.append(f"c{top}.tokens_per_joule")
+    return out
+
+
 def metric_family(concurrencies: list[int], energy: bool) -> list[dict]:
     """The declared metrics, in report order. Each has an id (the key in every round's `metrics` map), a label, a
-    unit, the direction that is better, and its kind (speed or efficiency, which picks the verdict words)."""
+    unit, the direction that is better, and its kind (speed or efficiency, which picks the verdict words). `role`
+    is set by `build` (primary or secondary)."""
     out = [
         {"id": "startup.ready_s", "label": "time to ready", "unit": "s", "better": stats.LOWER, "kind": "speed",
          "concurrency": None},
@@ -241,7 +261,21 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
     if not (side_a["gpu"] and side_b["gpu"]):
         source = "none"  # a side without a GPU has no GPU power to read
     metrics = metric_family(levels, source != "none")
-    family = len(metrics)
+    ids = [m["id"] for m in metrics]
+    primary = analysis.get("primary")
+    if primary is None:
+        primary = default_primary(levels, source != "none")
+    elif (not isinstance(primary, list) or not primary or not all(isinstance(p, str) for p in primary)
+          or len(set(primary)) != len(primary)):
+        raise PlanError("analysis.primary must be a non-empty list of metric ids without repeats, or null for the "
+                        "default")
+    unknown = [p for p in primary if p not in ids]
+    if unknown:
+        raise PlanError(f"analysis.primary names metrics this run does not have: {', '.join(unknown)}; the metrics "
+                        f"are {', '.join(ids)}")
+    for metric in metrics:
+        metric["role"] = PRIMARY if metric["id"] in primary else SECONDARY
+    family = len(primary)
     floor = stats.floor_p(pairs, family, correction)
 
     plan = {
@@ -292,6 +326,9 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
             "test": test, "correction": correction, "tie_band": tie_band, "alpha": alpha, "min_pairs": min_pairs,
             "ci_level": ci_level, "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
             "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band",
+            "primary": [m["id"] for m in metrics if m["role"] == PRIMARY],
+            "family_rule": "the correction runs over the primary metrics only; secondary metrics get the same test, "
+            "interval and tie band with an uncorrected p-value, and their verdicts are descriptive",
         },
         "metrics": metrics,
         "floor": {"family_size": family, "min_adjusted_p": floor, "reachable": floor <= alpha,

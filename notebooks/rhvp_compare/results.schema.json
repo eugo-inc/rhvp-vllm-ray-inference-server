@@ -2,301 +2,1387 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:rhvp-image-compare:results:1",
   "title": "Image comparison results",
-  "description": "One run of the image comparison: the plan declared before the first round, every round as measured, and the paired analysis. Written by rhvp_compare after every round; `run.status` says whether the run finished. Times are UTC (RFC 3339); durations are seconds unless the key says ms. Side A is the baseline, side B the candidate; every ratio is B/A.",
+  "description": "One run of the image comparison: the plan declared before the first round, every round as measured, and the paired analysis. Written by rhvp_compare after every round to <results root>/<run.id>/results.json (on OpenShift the results volume, mounted at /results); `run.status` says whether the run finished and `run.error_code` why it did not. Times are UTC (RFC 3339); durations are seconds unless the key says ms. Side A is the baseline, side B the candidate; every ratio is B/A. $defs/status describes the separate status.json document (ConfigMap compare-<run id>).",
   "type": "object",
-  "required": ["schema", "run", "plan", "provenance", "rounds", "analysis"],
+  "required": [
+    "schema",
+    "run",
+    "plan",
+    "provenance",
+    "rounds",
+    "analysis"
+  ],
   "properties": {
-    "schema": {"const": "rhvp-image-compare/1", "description": "The schema name and major version. A reader checks it first."},
+    "schema": {
+      "const": "rhvp-image-compare/1",
+      "description": "The schema name and major version. A reader checks it first."
+    },
     "run": {
       "type": "object",
-      "required": ["id", "name", "status", "started_at", "finished_at", "platform", "notes", "errors"],
+      "required": [
+        "id",
+        "name",
+        "status",
+        "error_code",
+        "started_at",
+        "finished_at",
+        "platform",
+        "notes",
+        "errors"
+      ],
       "properties": {
-        "id": {"type": "string", "description": "runName plus the first 8 hex digits of the config's sha256: a changed config is a new run."},
-        "name": {"type": "string"},
-        "status": {"enum": ["running", "complete", "partial", "failed"], "description": "complete: every planned round finished; partial: the run ended with failed or missing rounds; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."},
-        "started_at": {"type": "string"},
-        "finished_at": {"type": ["string", "null"]},
-        "platform": {"enum": ["openshift", "docker"]},
-        "synthetic": {"type": "boolean", "description": "true only in made-up example files (the notebook's REPLAY file); such a file is not a measurement."},
-        "notes": {"type": "array", "items": {"type": "string"}},
-        "errors": {"type": "array", "items": {"type": "string"}}
+        "id": {
+          "type": "string",
+          "description": "runName plus the first 8 hex digits of the config's sha256: a changed config is a new run."
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "complete",
+            "partial",
+            "failed"
+          ],
+          "description": "complete: every planned round finished; partial: the run ended with failed or missing rounds; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."
+        },
+        "error_code": {
+          "enum": [
+            null,
+            "ROUNDS_FAILED",
+            "STOPPED",
+            "RUN_TIMEOUT",
+            "RUNNER_FAILED"
+          ],
+          "description": "null when every planned round finished. ROUNDS_FAILED: every round ran and some failed (partial); STOPPED: stopped by SIGTERM, for example a deleted Job (partial); RUN_TIMEOUT: stopped near the Job's time limit (partial); RUNNER_FAILED: the run failed outside a round, for example before the first one (failed). A config that cannot be run (PLAN_INVALID) writes no results file; that code appears only in the log summary and the termination message."
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "openshift",
+            "docker"
+          ]
+        },
+        "synthetic": {
+          "type": "boolean",
+          "description": "true only in made-up example files (the notebook's REPLAY file); such a file is not a measurement."
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-    "plan": {"$ref": "#/$defs/plan"},
+    "plan": {
+      "$ref": "#/$defs/plan"
+    },
     "provenance": {
       "type": "object",
-      "required": ["harness", "load_tool", "seeds", "sides", "gpu", "node", "cluster"],
+      "required": [
+        "harness",
+        "load_tool",
+        "seeds",
+        "sides",
+        "gpu",
+        "node",
+        "cluster"
+      ],
       "properties": {
-        "harness": {"type": "object", "required": ["name", "version"]},
+        "harness": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ]
+        },
         "load_tool": {
           "type": "object",
-          "required": ["name", "image", "version"],
-          "properties": {"name": {"const": "guidellm"}, "image": {"type": "string"}, "version": {"type": ["string", "null"], "description": "As GuideLLM's report states it."}}
+          "required": [
+            "name",
+            "image",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "const": "guidellm"
+            },
+            "image": {
+              "type": "string"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "As GuideLLM's report states it."
+            }
+          }
         },
-        "seeds": {"type": "object", "required": ["load", "server"], "properties": {"load": {"type": "integer"}, "server": {"type": "integer"}}},
+        "seeds": {
+          "type": "object",
+          "required": [
+            "load",
+            "server"
+          ],
+          "properties": {
+            "load": {
+              "type": "integer"
+            },
+            "server": {
+              "type": "integer"
+            }
+          }
+        },
         "sides": {
           "type": "object",
-          "required": ["A", "B"],
-          "properties": {"A": {"$ref": "#/$defs/side_provenance"}, "B": {"$ref": "#/$defs/side_provenance"}}
+          "required": [
+            "A",
+            "B"
+          ],
+          "properties": {
+            "A": {
+              "$ref": "#/$defs/side_provenance"
+            },
+            "B": {
+              "$ref": "#/$defs/side_provenance"
+            }
+          }
         },
         "gpu": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "The GPU the sides ran on, from the node's GPU feature labels (OpenShift) or nvidia-smi (docker).",
           "properties": {
-            "product": {"type": ["string", "null"]},
-            "driver": {"type": ["string", "null"]},
-            "cuda_driver": {"type": ["string", "null"]},
-            "memory_mib": {"type": ["integer", "null"]},
-            "count": {"type": ["integer", "null"]},
-            "source": {"type": "string"}
+            "product": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "driver": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cuda_driver": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "memory_mib": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "count": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            }
           }
         },
         "node": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "properties": {
-            "name": {"type": ["string", "null"]},
-            "arch": {"type": ["string", "null"]},
-            "instance_type": {"type": ["string", "null"]},
-            "os_image": {"type": ["string", "null"]},
-            "kernel": {"type": ["string", "null"]},
-            "container_runtime": {"type": ["string", "null"]}
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "arch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "instance_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "os_image": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kernel": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "container_runtime": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         },
-        "cluster": {"type": ["object", "null"], "properties": {"openshift_version": {"type": ["string", "null"]}}}
+        "cluster": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "openshift_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
       }
     },
-    "rounds": {"type": "array", "items": {"$ref": "#/$defs/round"}, "description": "Measured rounds in run order. A round that failed is kept with its error."},
+    "rounds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/round"
+      },
+      "description": "Measured rounds in run order. A round that failed is kept with its error."
+    },
     "analysis": {
-      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/analysis"}],
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/analysis"
+        }
+      ],
       "description": "Recomputed from plan and rounds after every round, by rhvp_compare.analyze or any tool that writes the same shape."
     }
   },
   "$defs": {
-    "number_or_null": {"type": ["number", "null"]},
+    "number_or_null": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "side": {
       "type": "object",
-      "required": ["key", "name", "image", "preset", "args", "env", "gpu"],
+      "required": [
+        "key",
+        "name",
+        "image",
+        "preset",
+        "args",
+        "env",
+        "gpu"
+      ],
       "properties": {
-        "key": {"enum": ["A", "B"]},
-        "name": {"type": "string"},
-        "image": {"type": "string"},
-        "preset": {"enum": ["vllm-openai", "ray-serve-llm", "guidellm-mock", "custom"]},
-        "command": {"type": ["array", "null"], "items": {"type": "string"}},
-        "args": {"type": "array", "items": {"type": "string"}},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}},
-        "gpu": {"type": "boolean"}
+        "key": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "preset": {
+          "enum": [
+            "vllm-openai",
+            "ray-serve-llm",
+            "guidellm-mock",
+            "custom"
+          ]
+        },
+        "command": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "gpu": {
+          "type": "boolean"
+        }
       }
     },
     "side_provenance": {
       "type": "object",
-      "required": ["image", "image_digest", "server_version"],
+      "required": [
+        "image",
+        "image_digest",
+        "server_version"
+      ],
       "properties": {
-        "image": {"type": "string", "description": "The reference from the config."},
-        "image_digest": {"type": ["string", "null"], "description": "repository@sha256:..., as the node pulled it."},
-        "server_version": {"$ref": "#/$defs/server_version"}
+        "image": {
+          "type": "string",
+          "description": "The reference from the config."
+        },
+        "image_digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "repository@sha256:..., as the node pulled it."
+        },
+        "server_version": {
+          "$ref": "#/$defs/server_version"
+        }
       }
     },
     "server_version": {
-      "type": ["object", "null"],
-      "required": ["vllm", "source"],
-      "properties": {"vllm": {"type": "string"}, "source": {"enum": ["endpoint", "log"], "description": "endpoint: GET /version; log: the server's start-up log."}}
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "vllm",
+        "source"
+      ],
+      "properties": {
+        "vllm": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "endpoint",
+            "log"
+          ],
+          "description": "endpoint: GET /version; log: the server's start-up log."
+        }
+      }
     },
     "metric": {
       "type": "object",
-      "required": ["id", "label", "unit", "better", "kind", "concurrency"],
+      "required": [
+        "id",
+        "label",
+        "unit",
+        "better",
+        "kind",
+        "concurrency",
+        "role"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^(startup\\.(ready_s|first_answer_s)|c[0-9]+\\.(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule))$"},
-        "label": {"type": "string"},
-        "unit": {"type": "string"},
-        "better": {"enum": ["lower", "higher"]},
-        "kind": {"enum": ["speed", "efficiency"], "description": "Picks the verdict words: FASTER/SLOWER for speed, MORE_EFFICIENT/LESS_EFFICIENT for efficiency."},
-        "concurrency": {"type": ["integer", "null"]}
+        "id": {
+          "type": "string",
+          "pattern": "^(startup\\.(ready_s|first_answer_s)|c[0-9]+\\.(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule))$"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "speed",
+            "efficiency"
+          ],
+          "description": "Picks the verdict words: FASTER/SLOWER for speed, MORE_EFFICIENT/LESS_EFFICIENT for efficiency."
+        },
+        "concurrency": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "secondary"
+          ],
+          "description": "primary: in the corrected family (plan.analysis.primary); secondary: the same test, interval and tie band with an uncorrected p-value, so its verdict is descriptive."
+        }
       }
     },
     "plan": {
       "type": "object",
       "description": "Everything fixed before the first round, so the metric family, test, correction, alpha and tie band are on record as declared.",
-      "required": ["schema", "run_name", "run_id", "platform", "model", "sides", "rounds", "pairs", "aa_pairs", "warmup", "server", "load", "energy", "analysis", "metrics", "floor"],
+      "required": [
+        "schema",
+        "run_name",
+        "run_id",
+        "platform",
+        "model",
+        "sides",
+        "rounds",
+        "pairs",
+        "aa_pairs",
+        "warmup",
+        "server",
+        "load",
+        "energy",
+        "analysis",
+        "metrics",
+        "floor"
+      ],
       "properties": {
-        "model": {"type": "object", "required": ["id", "source", "revision"]},
-        "sides": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/side"}},
+        "model": {
+          "type": "object",
+          "required": [
+            "id",
+            "source",
+            "revision"
+          ]
+        },
+        "sides": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/side"
+          }
+        },
         "rounds": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["index", "side", "kind", "pair"],
-            "properties": {"index": {"type": "integer"}, "side": {"enum": ["A", "B"]}, "kind": {"enum": ["warmup", "scored", "aa"]}, "pair": {"type": ["integer", "null"]}}
+            "required": [
+              "index",
+              "side",
+              "kind",
+              "pair"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer"
+              },
+              "side": {
+                "enum": [
+                  "A",
+                  "B"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "warmup",
+                  "scored",
+                  "aa"
+                ]
+              },
+              "pair": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
           }
         },
-        "pairs": {"type": "integer", "minimum": 1},
-        "aa_pairs": {"type": "integer", "minimum": 0},
-        "warmup": {"type": "boolean"},
-        "server": {"type": "object", "required": ["port", "ready_timeout_s", "warmup_timeout_s", "gpu_memory_utilization", "max_model_len", "seed", "first_answer_tokens"]},
-        "load": {"type": "object", "required": ["tool", "image", "concurrencies", "prompt_tokens", "output_tokens", "seconds_per_level", "seed", "request_format", "tokenizer", "timeout_s"]},
+        "pairs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "aa_pairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warmup": {
+          "type": "boolean"
+        },
+        "server": {
+          "type": "object",
+          "required": [
+            "port",
+            "ready_timeout_s",
+            "warmup_timeout_s",
+            "gpu_memory_utilization",
+            "max_model_len",
+            "seed",
+            "first_answer_tokens"
+          ]
+        },
+        "load": {
+          "type": "object",
+          "required": [
+            "tool",
+            "image",
+            "concurrencies",
+            "prompt_tokens",
+            "output_tokens",
+            "seconds_per_level",
+            "seed",
+            "request_format",
+            "tokenizer",
+            "timeout_s"
+          ]
+        },
         "energy": {
           "type": "object",
-          "required": ["source", "label", "settle_s", "thanos_url", "min_samples"],
-          "properties": {"source": {"enum": ["dcgm", "nvidia-smi", "none"]}, "label": {"const": "GPU-only power"}}
+          "required": [
+            "source",
+            "label",
+            "settle_s",
+            "thanos_url",
+            "min_samples"
+          ],
+          "properties": {
+            "source": {
+              "enum": [
+                "dcgm",
+                "nvidia-smi",
+                "none"
+              ]
+            },
+            "label": {
+              "const": "GPU-only power"
+            }
+          }
         },
         "analysis": {
           "type": "object",
-          "required": ["baseline", "candidate", "ratio", "test", "correction", "tie_band", "alpha", "min_pairs", "ci_level"],
+          "required": [
+            "baseline",
+            "candidate",
+            "ratio",
+            "test",
+            "correction",
+            "tie_band",
+            "alpha",
+            "min_pairs",
+            "ci_level",
+            "primary"
+          ],
           "properties": {
-            "test": {"enum": ["sign", "wilcoxon"]},
-            "correction": {"enum": ["holm", "bonferroni", "bh", "none"]},
-            "tie_band": {"type": "number", "minimum": 0},
-            "alpha": {"type": "number", "exclusiveMinimum": 0},
-            "min_pairs": {"type": "integer", "minimum": 1},
-            "ci_level": {"type": "number"}
+            "test": {
+              "enum": [
+                "sign",
+                "wilcoxon"
+              ]
+            },
+            "correction": {
+              "enum": [
+                "holm",
+                "bonferroni",
+                "bh",
+                "none"
+              ]
+            },
+            "tie_band": {
+              "type": "number",
+              "minimum": 0
+            },
+            "alpha": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "min_pairs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ci_level": {
+              "type": "number"
+            },
+            "primary": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "The primary metric ids, declared before the first round."
+            },
+            "family_rule": {
+              "type": "string"
+            }
           }
         },
-        "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}, "description": "The declared family; the correction counts every one of them."},
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric"
+          },
+          "description": "Every metric the run reports, in report order; the correction counts only the primary ones."
+        },
         "floor": {
           "type": "object",
-          "required": ["family_size", "min_adjusted_p", "reachable", "pairs_needed"],
-          "description": "The smallest adjusted p-value the planned pairs can give (all pairs one way): when it is above alpha no metric can be FASTER or SLOWER.",
-          "properties": {"family_size": {"type": "integer"}, "min_adjusted_p": {"type": "number"}, "reachable": {"type": "boolean"}, "pairs_needed": {"type": ["integer", "null"]}}
+          "required": [
+            "family_size",
+            "min_adjusted_p",
+            "reachable",
+            "pairs_needed"
+          ],
+          "description": "The smallest adjusted p-value the planned pairs can give a primary metric (all pairs one way): when it is above alpha no primary metric can be FASTER or SLOWER. family_size is the number of primary metrics.",
+          "properties": {
+            "family_size": {
+              "type": "integer"
+            },
+            "min_adjusted_p": {
+              "type": "number"
+            },
+            "reachable": {
+              "type": "boolean"
+            },
+            "pairs_needed": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
         }
       }
     },
     "latency_summary": {
       "type": "object",
-      "required": ["median", "p90", "mean", "count"],
-      "properties": {"median": {"$ref": "#/$defs/number_or_null"}, "p90": {"$ref": "#/$defs/number_or_null"}, "mean": {"$ref": "#/$defs/number_or_null"}, "count": {"type": ["number", "null"]}}
+      "required": [
+        "median",
+        "p90",
+        "mean",
+        "count"
+      ],
+      "properties": {
+        "median": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "p90": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "mean": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "count": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
     },
     "energy": {
       "type": "object",
-      "required": ["source", "label", "method", "samples", "mean_power_w", "energy_j", "tokens_per_joule", "joules_per_token", "note"],
+      "required": [
+        "source",
+        "label",
+        "method",
+        "samples",
+        "mean_power_w",
+        "energy_j",
+        "tokens_per_joule",
+        "joules_per_token",
+        "note"
+      ],
       "properties": {
-        "source": {"enum": ["dcgm", "nvidia-smi", "none"]},
-        "label": {"const": "GPU-only power"},
-        "method": {"enum": ["energy_counter", "power_mean", null], "description": "energy_counter: from the DCGM total-energy counter over the window; power_mean: the mean of the power samples in the window."},
-        "samples": {"type": "integer"},
-        "mean_power_w": {"$ref": "#/$defs/number_or_null"},
-        "energy_j": {"$ref": "#/$defs/number_or_null"},
-        "tokens_per_joule": {"$ref": "#/$defs/number_or_null"},
-        "joules_per_token": {"$ref": "#/$defs/number_or_null"},
-        "note": {"type": ["string", "null"]}
+        "source": {
+          "enum": [
+            "dcgm",
+            "nvidia-smi",
+            "none"
+          ]
+        },
+        "label": {
+          "const": "GPU-only power"
+        },
+        "method": {
+          "enum": [
+            "energy_counter",
+            "power_mean",
+            null
+          ],
+          "description": "energy_counter: from the DCGM total-energy counter over the window; power_mean: the mean of the power samples in the window."
+        },
+        "samples": {
+          "type": "integer"
+        },
+        "mean_power_w": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "energy_j": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "tokens_per_joule": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "joules_per_token": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "level": {
       "type": "object",
       "description": "One concurrency level of one round, from GuideLLM's report.",
-      "required": ["concurrency", "started_at", "finished_at", "start_epoch", "end_epoch", "duration_s", "requests", "ttft_ms", "itl_ms", "output_tokens", "output_tokens_per_s", "requests_per_s", "usable", "note"],
+      "required": [
+        "concurrency",
+        "started_at",
+        "finished_at",
+        "start_epoch",
+        "end_epoch",
+        "duration_s",
+        "requests",
+        "ttft_ms",
+        "itl_ms",
+        "output_tokens",
+        "output_tokens_per_s",
+        "requests_per_s",
+        "usable",
+        "note"
+      ],
       "properties": {
-        "concurrency": {"type": ["integer", "null"]},
-        "started_at": {"type": ["string", "null"]},
-        "finished_at": {"type": ["string", "null"]},
-        "start_epoch": {"$ref": "#/$defs/number_or_null"},
-        "end_epoch": {"$ref": "#/$defs/number_or_null"},
-        "duration_s": {"$ref": "#/$defs/number_or_null"},
-        "requests": {"type": "object", "required": ["successful", "errored", "incomplete"]},
-        "ttft_ms": {"$ref": "#/$defs/latency_summary"},
-        "itl_ms": {"$ref": "#/$defs/latency_summary"},
-        "output_tokens": {"type": ["integer", "null"]},
-        "output_tokens_per_s": {"$ref": "#/$defs/number_or_null", "description": "Over the level's window, all requests (incomplete ones at the end included), as GuideLLM's server throughput."},
-        "requests_per_s": {"$ref": "#/$defs/number_or_null"},
-        "usable": {"type": "boolean", "description": "false when any request errored or none finished; the level's figures then stay out of the comparison."},
-        "note": {"type": ["string", "null"]},
-        "energy": {"$ref": "#/$defs/energy"}
+        "concurrency": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_epoch": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "end_epoch": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "duration_s": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "requests": {
+          "type": "object",
+          "required": [
+            "successful",
+            "errored",
+            "incomplete"
+          ]
+        },
+        "ttft_ms": {
+          "$ref": "#/$defs/latency_summary"
+        },
+        "itl_ms": {
+          "$ref": "#/$defs/latency_summary"
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_tokens_per_s": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "Over the level's window, all requests (incomplete ones at the end included), as GuideLLM's server throughput."
+        },
+        "requests_per_s": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "usable": {
+          "type": "boolean",
+          "description": "false when any request errored or none finished; the level's figures then stay out of the comparison."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "energy": {
+          "$ref": "#/$defs/energy"
+        }
       }
     },
     "breakdown_entry": {
       "type": "object",
-      "required": ["phase", "label", "seconds", "at_s", "source"],
+      "required": [
+        "phase",
+        "label",
+        "seconds",
+        "at_s",
+        "source"
+      ],
       "properties": {
-        "phase": {"type": "string"},
-        "label": {"type": "string"},
-        "seconds": {"$ref": "#/$defs/number_or_null", "description": "A phase the server timed itself, in its own words."},
-        "at_s": {"$ref": "#/$defs/number_or_null", "description": "When the line was written, in seconds since the round asked for the server (node clock)."},
-        "source": {"const": "log"},
-        "count": {"type": "integer", "description": "How many lines were added up into seconds."}
+        "phase": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "seconds": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "A phase the server timed itself, in its own words."
+        },
+        "at_s": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "When the line was written, in seconds since the round asked for the server (node clock)."
+        },
+        "source": {
+          "const": "log"
+        },
+        "count": {
+          "type": "integer",
+          "description": "How many lines were added up into seconds."
+        }
       }
     },
     "round": {
       "type": "object",
-      "required": ["index", "side", "kind", "pair", "status", "error", "started_at", "finished_at", "node", "image_digest", "server_version", "startup", "levels", "metrics", "artifacts"],
+      "required": [
+        "index",
+        "side",
+        "kind",
+        "pair",
+        "status",
+        "error",
+        "error_code",
+        "started_at",
+        "finished_at",
+        "node",
+        "image_digest",
+        "server_version",
+        "startup",
+        "levels",
+        "metrics",
+        "artifacts"
+      ],
       "properties": {
-        "index": {"type": "integer"},
-        "side": {"enum": ["A", "B"]},
-        "kind": {"enum": ["warmup", "scored", "aa"]},
-        "pair": {"type": ["integer", "null"]},
-        "status": {"enum": ["ok", "failed"]},
-        "error": {"type": ["string", "null"]},
-        "started_at": {"type": "string"},
-        "finished_at": {"type": ["string", "null"]},
-        "node": {"type": ["string", "null"]},
-        "image_digest": {"type": ["string", "null"]},
-        "server_version": {"$ref": "#/$defs/server_version"},
+        "index": {
+          "type": "integer"
+        },
+        "side": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "warmup",
+            "scored",
+            "aa"
+          ]
+        },
+        "pair": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "failed"
+          ],
+          "description": "ok, or failed with error and error_code."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_code": {
+          "enum": [
+            null,
+            "GPU_NOT_FREE",
+            "SIDE_FAILED",
+            "SIDE_NEVER_READY",
+            "LOAD_FAILED",
+            "STOPPED",
+            "RUNNER_ERROR"
+          ],
+          "description": "null when the round is ok. GPU_NOT_FREE: another pod or program still held the GPU; SIDE_FAILED: the side failed (bad image, pull failure, no node, or the server exited); SIDE_NEVER_READY: no model listed, or no answer, before the time limit; LOAD_FAILED: GuideLLM failed or timed out after its one retry, or its report is unusable; STOPPED: the runner was stopped during the round; RUNNER_ERROR: anything else (the platform's API, a fault in the runner)."
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_version": {
+          "$ref": "#/$defs/server_version"
+        },
         "startup": {
-          "type": ["object", "null"],
-          "required": ["ready_s", "first_answer_s", "clock", "breakdown"],
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "ready_s",
+            "first_answer_s",
+            "clock",
+            "breakdown"
+          ],
           "properties": {
-            "ready_s": {"type": "number", "description": "From just before the runner asked for the server until GET /v1/models listed the model."},
-            "first_answer_s": {"type": "number", "description": "From the same moment until the first generated text of a streamed completion."},
-            "clock": {"type": "string"},
-            "breakdown": {"type": "array", "items": {"$ref": "#/$defs/breakdown_entry"}}
+            "ready_s": {
+              "type": "number",
+              "description": "From just before the runner asked for the server until GET /v1/models listed the model."
+            },
+            "first_answer_s": {
+              "type": "number",
+              "description": "From the same moment until the first generated text of a streamed completion."
+            },
+            "clock": {
+              "type": "string"
+            },
+            "breakdown": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/breakdown_entry"
+              }
+            }
           }
         },
-        "levels": {"type": "array", "items": {"$ref": "#/$defs/level"}},
+        "levels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/level"
+          }
+        },
         "metrics": {
           "type": "object",
           "description": "The round's figure for each metric id in plan.metrics that it measured (positive numbers only). The analysis reads only this map.",
-          "additionalProperties": {"type": "number", "exclusiveMinimum": 0}
+          "additionalProperties": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
         },
         "artifacts": {
           "type": "object",
           "description": "Paths relative to the run's folder.",
-          "properties": {"server_log": {"type": "string"}, "load_report": {"type": "string"}}
+          "properties": {
+            "server_log": {
+              "type": "string"
+            },
+            "load_report": {
+              "type": "string"
+            }
+          }
         },
-        "notes": {"type": "array", "items": {"type": "string"}}
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "analysis_row": {
       "type": "object",
-      "required": ["id", "label", "unit", "better", "kind", "n_pairs", "a_median", "b_median", "ratios", "median_ratio", "ci", "p_sign", "p_wilcoxon", "p_value", "p_adjusted", "reachable", "outcome", "verdict", "reason"],
+      "required": [
+        "id",
+        "label",
+        "unit",
+        "better",
+        "kind",
+        "role",
+        "n_pairs",
+        "a_median",
+        "b_median",
+        "ratios",
+        "median_ratio",
+        "ci",
+        "p_sign",
+        "p_wilcoxon",
+        "p_value",
+        "p_adjusted",
+        "reachable",
+        "outcome",
+        "verdict",
+        "reason"
+      ],
       "properties": {
-        "id": {"type": "string"},
-        "label": {"type": "string"},
-        "unit": {"type": "string"},
-        "better": {"enum": ["lower", "higher"]},
-        "kind": {"enum": ["speed", "efficiency"]},
-        "n_pairs": {"type": "integer", "description": "Pairs where both rounds measured this metric."},
-        "a_median": {"$ref": "#/$defs/number_or_null"},
-        "b_median": {"$ref": "#/$defs/number_or_null"},
-        "ratios": {"type": "array", "items": {"type": "number"}, "description": "B/A per pair, in pair order."},
-        "median_ratio": {"$ref": "#/$defs/number_or_null"},
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "speed",
+            "efficiency"
+          ]
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "secondary"
+          ]
+        },
+        "n_pairs": {
+          "type": "integer",
+          "description": "Pairs where both rounds measured this metric."
+        },
+        "a_median": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "b_median": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "ratios": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "B/A per pair, in pair order."
+        },
+        "median_ratio": {
+          "$ref": "#/$defs/number_or_null"
+        },
         "ci": {
           "type": "object",
-          "required": ["low", "high", "level"],
+          "required": [
+            "low",
+            "high",
+            "level"
+          ],
           "description": "Distribution-free interval for the median ratio (order statistics); its actual coverage is at least level, or null bounds when too few pairs.",
-          "properties": {"low": {"$ref": "#/$defs/number_or_null"}, "high": {"$ref": "#/$defs/number_or_null"}, "level": {"$ref": "#/$defs/number_or_null"}}
+          "properties": {
+            "low": {
+              "$ref": "#/$defs/number_or_null"
+            },
+            "high": {
+              "$ref": "#/$defs/number_or_null"
+            },
+            "level": {
+              "$ref": "#/$defs/number_or_null"
+            }
+          }
         },
-        "p_sign": {"type": "number", "description": "Exact two-sided sign test on the ratios (ratios of exactly 1 left out)."},
-        "p_wilcoxon": {"type": "number", "description": "Exact two-sided Wilcoxon signed-rank test on log ratios."},
-        "p_value": {"type": "number", "description": "The test plan.analysis.test names."},
-        "p_adjusted": {"type": "number", "description": "p_value after plan.analysis.correction over the whole family."},
-        "reachable": {"type": "boolean", "description": "Whether this metric's pairs could reach alpha at all after the correction."},
-        "outcome": {"enum": ["better", "tie", "worse", "inconclusive"], "description": "B against A, in the metric's own direction."},
-        "verdict": {"enum": ["FASTER", "TIE", "SLOWER", "MORE_EFFICIENT", "LESS_EFFICIENT", "INCONCLUSIVE"], "description": "The outcome in words for the metric's kind: B is FASTER/SLOWER (speed) or MORE_EFFICIENT/LESS_EFFICIENT (efficiency) than A."},
-        "reason": {"enum": ["too_few_pairs", "median_ratio_inside_tie_band", "significant_outside_tie_band", "not_significant_outside_tie_band", "outside_tie_band_but_too_few_pairs_to_reach_alpha"]}
+        "p_sign": {
+          "type": "number",
+          "description": "Exact two-sided sign test on the ratios (ratios of exactly 1 left out)."
+        },
+        "p_wilcoxon": {
+          "type": "number",
+          "description": "Exact two-sided Wilcoxon signed-rank test on log ratios."
+        },
+        "p_value": {
+          "type": "number",
+          "description": "The test plan.analysis.test names."
+        },
+        "p_adjusted": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "p_value after plan.analysis.correction over the primary metrics; null for a secondary metric, whose verdict uses p_value uncorrected."
+        },
+        "reachable": {
+          "type": "boolean",
+          "description": "Whether this metric's pairs could reach alpha at all (after the correction, for a primary metric)."
+        },
+        "outcome": {
+          "enum": [
+            "better",
+            "tie",
+            "worse",
+            "inconclusive"
+          ],
+          "description": "B against A, in the metric's own direction."
+        },
+        "verdict": {
+          "enum": [
+            "FASTER",
+            "TIE",
+            "SLOWER",
+            "MORE_EFFICIENT",
+            "LESS_EFFICIENT",
+            "INCONCLUSIVE"
+          ],
+          "description": "The outcome in words for the metric's kind: B is FASTER/SLOWER (speed) or MORE_EFFICIENT/LESS_EFFICIENT (efficiency) than A."
+        },
+        "reason": {
+          "enum": [
+            "too_few_pairs",
+            "median_ratio_inside_tie_band",
+            "significant_outside_tie_band",
+            "not_significant_outside_tie_band",
+            "outside_tie_band_but_too_few_pairs_to_reach_alpha"
+          ]
+        }
       }
     },
     "analysis": {
       "type": "object",
-      "required": ["tool", "method", "metrics", "noise_floor"],
+      "required": [
+        "tool",
+        "method",
+        "metrics",
+        "outcomes",
+        "noise_floor"
+      ],
       "properties": {
-        "tool": {"type": "object", "required": ["name", "version"], "description": "What wrote this section."},
-        "method": {"type": "object", "required": ["test", "correction", "tie_band", "alpha", "family_size", "pairs_planned", "pairs_usable_min", "min_adjusted_p"]},
-        "metrics": {"type": "array", "items": {"$ref": "#/$defs/analysis_row"}},
+        "tool": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "description": "What wrote this section."
+        },
+        "method": {
+          "type": "object",
+          "required": [
+            "test",
+            "correction",
+            "tie_band",
+            "alpha",
+            "family_size",
+            "pairs_planned",
+            "pairs_usable_min",
+            "min_adjusted_p"
+          ],
+          "description": "plan.analysis, plus family_size (the number of primary metrics), the pairs planned, the fewest usable pairs of a primary metric, and the smallest adjusted p-value those pairs allow."
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/analysis_row"
+          }
+        },
+        "outcomes": {
+          "type": "object",
+          "required": [
+            "primary",
+            "secondary"
+          ],
+          "description": "How many metrics got each verdict, primary and secondary apart.",
+          "properties": {
+            "primary": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "secondary": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          }
+        },
         "noise_floor": {
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "description": "From the A/A pairs (side A twice): how far two rounds of one image land apart. null when the run had no A/A pairs.",
           "items": {
             "type": "object",
-            "required": ["id", "pairs", "median_abs_change", "max_abs_change"],
-            "properties": {"id": {"type": "string"}, "pairs": {"type": "integer"}, "median_abs_change": {"$ref": "#/$defs/number_or_null", "description": "exp(median |log ratio|) - 1 over the A/A pairs: the typical relative change between two rounds of one image."}, "max_abs_change": {"$ref": "#/$defs/number_or_null"}}
+            "required": [
+              "id",
+              "pairs",
+              "median_abs_change",
+              "max_abs_change"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "pairs": {
+                "type": "integer"
+              },
+              "median_abs_change": {
+                "$ref": "#/$defs/number_or_null",
+                "description": "exp(median |log ratio|) - 1 over the A/A pairs: the typical relative change between two rounds of one image."
+              },
+              "max_abs_change": {
+                "$ref": "#/$defs/number_or_null"
+              }
+            }
           }
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "description": "status.json in ConfigMap compare-<run id> (labels app.kubernetes.io/component=compare-run and compare-run-id=<run id>), next to result.json (the whole results file, left out above about 900 kB). Rewritten after every round; written by summary.status.",
+      "required": [
+        "schema",
+        "run_id",
+        "phase",
+        "error_code",
+        "completed_pairs",
+        "total_pairs",
+        "rounds_done",
+        "rounds_total",
+        "rounds_failed",
+        "eta_seconds",
+        "started_at",
+        "finished_at",
+        "sides",
+        "primary",
+        "outcomes",
+        "results_file"
+      ],
+      "properties": {
+        "schema": {
+          "const": "rhvp-image-compare-status/1"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "running",
+            "complete",
+            "partial",
+            "failed"
+          ],
+          "description": "run.status."
+        },
+        "error_code": {
+          "$ref": "#/properties/run/properties/error_code"
+        },
+        "completed_pairs": {
+          "type": "integer",
+          "description": "Scored pairs with both rounds run (ok or failed)."
+        },
+        "total_pairs": {
+          "type": "integer"
+        },
+        "rounds_done": {
+          "type": "integer"
+        },
+        "rounds_total": {
+          "type": "integer"
+        },
+        "rounds_failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "side",
+              "kind",
+              "error_code"
+            ]
+          }
+        },
+        "eta_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "While running: the mean round length so far times the rounds left; otherwise null."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sides": {
+          "type": "object"
+        },
+        "primary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "verdict",
+              "median_ratio",
+              "ci",
+              "p_adjusted",
+              "n_pairs"
+            ]
+          }
+        },
+        "outcomes": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "results_file": {
+          "type": "string",
+          "description": "The results file's path under the results root."
         }
       }
     }

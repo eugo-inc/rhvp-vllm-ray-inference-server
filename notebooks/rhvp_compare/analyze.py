@@ -4,10 +4,12 @@
 This is the boundary a replacement tool plugs into. It reads only:
 
 - `plan.analysis` (test, correction, alpha, tie band, minimum pairs, interval level),
-- `plan.metrics` (the declared family: id, label, unit, better, kind),
+- `plan.metrics` (the declared metrics: id, label, unit, better, kind, role),
 - `rounds[]` with `kind`, `pair`, `side`, `status` and the flat `metrics` map of each round,
 
-and returns the `analysis` object that results.schema.json describes. Anything that reads the same fields and writes
+and returns the `analysis` object that results.schema.json describes. The correction runs over the primary metrics
+only (role "primary"); a secondary metric's p-value is left uncorrected and its verdict is descriptive. A results file
+written before roles existed counts every metric as primary. Anything that reads the same fields and writes
 an `analysis` of the same shape can replace this module and stats.py together. Standard library only.
 """
 
@@ -55,13 +57,17 @@ def _side_median(rounds: list[Mapping], side: str, metric: str) -> float | None:
     return stats.median(values) if values else None
 
 
+def _role(metric: Mapping) -> str:
+    return metric.get("role") or "primary"
+
+
 def analyze(results: Mapping) -> dict:
     """The `analysis` section for a results file (complete or partial)."""
     plan = results["plan"]
     method = plan["analysis"]
     metrics = plan["metrics"]
     rounds = list(results.get("rounds") or [])
-    family = len(metrics)
+    family = sum(1 for m in metrics if _role(m) == "primary")
 
     rows = []
     for metric in metrics:
@@ -72,7 +78,7 @@ def analyze(results: Mapping) -> dict:
         interval = stats.median_interval(ratio_list, method["ci_level"])
         rows.append({
             "id": metric["id"], "label": metric["label"], "unit": metric["unit"], "better": metric["better"],
-            "kind": metric["kind"], "n_pairs": len(ratio_list),
+            "kind": metric["kind"], "role": _role(metric), "n_pairs": len(ratio_list),
             "a_median": _side_median(rounds, "A", metric["id"]), "b_median": _side_median(rounds, "B", metric["id"]),
             "ratios": ratio_list,
             "median_ratio": stats.median(ratio_list) if ratio_list else None,
@@ -81,14 +87,20 @@ def analyze(results: Mapping) -> dict:
             "p_value": sign.p if method["test"] == "sign" else wilcoxon.p,
         })
 
-    adjusted = stats.adjust([row["p_value"] for row in rows], method["correction"])
-    for row, p_adj in zip(rows, adjusted):
-        reachable = stats.floor_p(row["n_pairs"], family, method["correction"]) <= method["alpha"]
+    primary = [row for row in rows if row["role"] == "primary"]
+    for row, p_adj in zip(primary, stats.adjust([row["p_value"] for row in primary], method["correction"])):
+        row["p_adjusted"] = p_adj
+    for row in rows:
+        if row["role"] == "primary":
+            p_adj, reachable = row["p_adjusted"], (stats.floor_p(row["n_pairs"], family, method["correction"])
+                                                  <= method["alpha"])
+        else:  # descriptive: the same rule on the uncorrected p-value
+            p_adj, reachable = row["p_value"], stats.floor_p(row["n_pairs"], 1, "none") <= method["alpha"]
         decided = stats.verdict(row["median_ratio"], p_adj, row["better"], method["tie_band"], method["alpha"],
                                 row["n_pairs"], method["min_pairs"], reachable)
         words = stats.EFFICIENCY_WORDS if row["kind"] == "efficiency" else stats.SPEED_WORDS
-        row.update({"p_adjusted": p_adj, "reachable": reachable, "outcome": decided.outcome,
-                    "verdict": words[decided.outcome], "reason": decided.reason})
+        row.update({"p_adjusted": p_adj if row["role"] == "primary" else None, "reachable": reachable,
+                    "outcome": decided.outcome, "verdict": words[decided.outcome], "reason": decided.reason})
 
     noise_rows = []
     if any(r.get("kind") == "aa" for r in rounds):
@@ -98,7 +110,10 @@ def analyze(results: Mapping) -> dict:
             noise_rows.append({"id": metric["id"], "pairs": floor.pairs, "median_abs_change": floor.median_abs_change,
                                "max_abs_change": floor.max_abs_change})
 
-    usable = [row["n_pairs"] for row in rows]
+    usable = [row["n_pairs"] for row in primary]
+    outcomes: dict[str, dict[str, int]] = {"primary": {}, "secondary": {}}
+    for row in rows:
+        outcomes[row["role"]][row["verdict"]] = outcomes[row["role"]].get(row["verdict"], 0) + 1
     return {
         "tool": dict(TOOL),
         "method": {**method, "family_size": family,
@@ -106,5 +121,6 @@ def analyze(results: Mapping) -> dict:
                    "pairs_usable_min": min(usable) if usable else 0,
                    "min_adjusted_p": stats.floor_p(min(usable) if usable else 0, family, method["correction"])},
         "metrics": rows,
+        "outcomes": outcomes,
         "noise_floor": noise_rows or None,
     }

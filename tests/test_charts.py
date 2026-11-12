@@ -387,7 +387,7 @@ def test_notebook_build(notebook, notebook_variant):
 @pytest.fixture(scope="module")
 def compare(render) -> dict[str, list[dict]]:
     return {name: docs(render / f"charts/{name}.yaml")
-            for name in ("ray-serve-llm-compare", "notebook-compare", "notebook-compare-noenergy")}
+            for name in ("notebook-compare", "notebook-compare-noenergy", "notebook-compare-sides")}
 
 
 COMPARE_KINDS = {"Job", "PersistentVolumeClaim", "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
@@ -402,8 +402,13 @@ def test_compare_is_off_by_default(server, notebook):
     assert "RHVP_COMPARE_RESULTS" not in env_map(container(deploy, "notebook"))
 
 
-def test_compare_scales_the_server_to_zero(compare):
-    assert one(compare["ray-serve-llm-compare"], "Deployment", "ray-serve-llm")["spec"]["replicas"] == 0
+def test_compare_leaves_the_server_replicas_to_the_runner(server, cg):
+    # The runner scales the server to 0 for a run and back when it ends; Git keeps 1 and Argo CD ignores replicas.
+    assert one(server, "Deployment", "ray-serve-llm")["spec"]["replicas"] == 1
+    apps = {d["metadata"]["name"]: d for d in cg["default"] if d["kind"] == "Application"}
+    replicas = [i for i in apps["ray-serve-llm"]["spec"]["ignoreDifferences"] if i.get("jsonPointers")]
+    assert replicas == [{"group": "apps", "kind": "Deployment", "name": "ray-serve-llm",
+                         "jsonPointers": ["/spec/replicas"]}]
 
 
 def test_compare_job(compare):
@@ -411,12 +416,16 @@ def test_compare_job(compare):
     [job] = [d for d in items if d["kind"] == "Job"]
     config = one(items, "ConfigMap")
     digest = config["metadata"]["name"].rsplit("-", 1)[1]
-    assert job["metadata"]["name"] == f"compare-{GLOBAL['global']['compare']['runName']}-{digest}"
+    assert job["metadata"]["labels"]["rhvp-compare/config"] == digest
+    assert re.fullmatch(rf"compare-{GLOBAL['global']['compare']['runName']}-[0-9a-f]{{8}}", job["metadata"]["name"])
     assert len(job["metadata"]["name"]) <= 63
+    assert json.loads(job["metadata"]["annotations"]["rhvp-compare/config"]) == json.loads(
+        config["data"]["compare.json"])
     spec = job["spec"]
     assert spec["backoffLimit"] == 0 and "ttlSecondsAfterFinished" not in spec
     pod = spec["template"]["spec"]
     assert pod["serviceAccountName"] == "image-compare" and pod["restartPolicy"] == "Never"
+    assert pod["terminationGracePeriodSeconds"] == 300
     assert pod["securityContext"] == {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}}
     affinity = pod["affinity"]["podAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]
     assert affinity == {"labelSelector": {"matchLabels": {"app.kubernetes.io/name": "notebook"}},
@@ -432,6 +441,12 @@ def test_compare_job(compare):
     assert env["RHVP_COMPARE_NAMESPACE"] == "vllm-inference" and env["PYTHONPATH"] == "/runner"
     assert env["RHVP_COMPARE_MODELS_PVC"] == "ray-serve-llm-models"
     assert json.loads(env["RHVP_COMPARE_SIDE_RESOURCES"])["limits"]["memory"] == "24Gi"
+    assert env["RHVP_COMPARE_SERVER_DEPLOYMENT"] == "ray-serve-llm" and env["RHVP_COMPARE_SERVER_REPLICAS"] == "1"
+    assert env["RHVP_COMPARE_DEADLINE_SECONDS"] == str(spec["activeDeadlineSeconds"])
+    assert env["RHVP_COMPARE_TERMINATION_LOG"] == "/dev/termination-log"
+    assert runner["terminationMessagePolicy"] == "FallbackToLogsOnError"
+    status_ns = next(e for e in runner["env"] if e["name"] == "RHVP_COMPARE_STATUS_NAMESPACE")
+    assert status_ns["valueFrom"] == {"fieldRef": {"fieldPath": "metadata.namespace"}}
     for c in pod["initContainers"] + pod["containers"]:
         assert c["securityContext"] == {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
     assert "runAsUser" not in json.dumps(job)
@@ -440,6 +455,17 @@ def test_compare_job(compare):
     assert volumes["results"]["persistentVolumeClaim"]["claimName"] == "image-compare-results"
     pvc = one(items, "PersistentVolumeClaim", "image-compare-results")
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
+
+
+def test_compare_job_name_follows_the_pod_template(compare):
+    # A Job's pod template cannot change: bigger side pods must be a new Job, with the same config (and run id).
+    [job] = [d for d in compare["notebook-compare"] if d["kind"] == "Job"]
+    [bigger] = [d for d in compare["notebook-compare-sides"] if d["kind"] == "Job"]
+    assert job["metadata"]["name"] != bigger["metadata"]["name"]
+    assert one(compare["notebook-compare"], "ConfigMap")["metadata"]["name"] == one(
+        compare["notebook-compare-sides"], "ConfigMap")["metadata"]["name"]
+    env = env_map(bigger["spec"]["template"]["spec"]["containers"][0])
+    assert json.loads(env["RHVP_COMPARE_SIDE_RESOURCES"])["limits"]["memory"] == "32Gi"
 
 
 def test_compare_config_is_global_compare_plus_the_model(compare):
@@ -463,7 +489,14 @@ def test_compare_rbac(compare):
     assert role["rules"] == [
         {"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete", "get", "list", "watch"]},
         {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
-        {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["huggingface-secret"], "verbs": ["get"]}]
+        {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["huggingface-secret"], "verbs": ["get"]},
+        {"apiGroups": ["apps"], "resources": ["deployments/scale"], "resourceNames": ["ray-serve-llm"],
+         "verbs": ["get", "patch"]}]
+    status = one(items, "Role", "image-compare-status")
+    assert "namespace" not in status["metadata"]  # the release namespace, vllm-notebook
+    assert status["rules"] == [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["create", "get", "patch"]}]
+    assert one(items, "RoleBinding", "image-compare-status")["subjects"] == [
+        {"kind": "ServiceAccount", "name": "image-compare", "namespace": "vllm-notebook"}]
     binding = one(items, "RoleBinding", "image-compare-sides")
     assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "image-compare", "namespace": "vllm-notebook"}]
     cluster_role = one(items, "ClusterRole", "vllm-notebook-image-compare")
@@ -539,7 +572,8 @@ def test_image_triggered_apps_ignore_image_drift(cg):
     triggered = {"ray-serve-llm": ("ray-serve-llm", "server"), "notebook": ("notebook", "notebook")}
     for name, (deployment, container) in triggered.items():
         spec = apps[name]["spec"]
-        ignore = {(i.get("group", ""), i["kind"]): i for i in spec["ignoreDifferences"]}
+        ignore = {(i.get("group", ""), i["kind"]): i for i in spec["ignoreDifferences"] if not i.get("jsonPointers")
+                  or i["kind"] != "Deployment"}
         # Only the image-triggered container: the oauth-proxy sidecar's image must stay compared.
         assert ignore[("apps", "Deployment")]["name"] == deployment
         assert ignore[("apps", "Deployment")]["jqPathExpressions"] == [

@@ -12,7 +12,9 @@ metadata:
 spec:
   # 0 while global.compare.enabled: the image comparison's side pods need this
   # server's GPU and its model volume.
-  replicas: {{ if (.Values.global.compare | default dict).enabled }}0{{ else }}1{{ end }}
+  # The image comparison's runner scales this to 0 for a run and back to 1 when it
+  # ends; Argo CD ignores replicas (variants/prod/values-prod.yaml).
+  replicas: 1
   # One GPU and a ReadWriteOnce volume: a rolling update would need a second GPU and
   # the same volume at once, and would never finish.
   strategy:

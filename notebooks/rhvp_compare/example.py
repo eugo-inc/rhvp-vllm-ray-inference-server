@@ -86,7 +86,8 @@ def synthesize() -> dict:
                               "at_s": None, "source": "log", "count": 1})
         record = {
             "index": planned["index"], "side": side, "kind": planned["kind"], "pair": planned["pair"],
-            "status": "ok", "error": None, "started_at": _iso(started), "finished_at": None, "node": "gpu-node-1",
+            "status": "ok", "error": None, "error_code": None, "started_at": _iso(started), "finished_at": None,
+            "node": "gpu-node-1",
             "image_digest": f"registry.example/inference-server@sha256:{('a' if side == 'A' else 'b') * 64}",
             "server_version": {"vllm": "0.0.0-example", "source": "endpoint"},
             "startup": {"ready_s": round(ready, 3), "first_answer_s": round(first, 3),
@@ -112,7 +113,8 @@ def synthesize() -> dict:
         rounds.append(record)
     results = {
         "schema": plans.SCHEMA,
-        "run": {"id": plan["run_id"], "name": plan["run_name"], "status": "complete", "started_at": _iso(START),
+        "run": {"id": plan["run_id"], "name": plan["run_name"], "status": "complete", "error_code": None,
+                "started_at": _iso(START),
                 "finished_at": _iso(clock), "platform": "openshift", "synthetic": True,
                 "notes": ["Synthetic: written by notebooks/rhvp_compare/example.py, never measured."], "errors": []},
         "plan": plan,

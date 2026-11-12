@@ -267,7 +267,7 @@ class DockerBackend:
                 return
             if time.monotonic() > deadline:
                 raise runner.RoundError("another program holds the GPU" if code == 0 else
-                                        f"nvidia-smi could not read the GPU (exit {code})")
+                                        f"nvidia-smi could not read the GPU (exit {code})", runner.GPU_NOT_FREE)
             time.sleep(10)
 
     def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
@@ -295,7 +295,7 @@ class DockerBackend:
     def endpoint(self, handle: Mapping, deadline: float) -> str:
         problem = self.alive(handle)
         if problem:
-            raise runner.RoundError(problem)
+            raise runner.RoundError(problem, runner.SIDE_FAILED)
         return f"http://{handle['name']}:{handle['port']}"
 
     def alive(self, handle: Mapping) -> str | None:

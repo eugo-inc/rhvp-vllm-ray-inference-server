@@ -44,7 +44,8 @@ def markdown(results: Mapping) -> str:
     lines = [f"# Image comparison: {plan['run_id']}", ""]
     if run.get("synthetic"):
         lines += ["**Synthetic: made up by a script, never measured. Not a result.**", ""]
-    lines.append(f"Status: {run.get('status', 'unknown')}. Started {run.get('started_at') or '-'}, finished "
+    code = f" ({run['error_code']})" if run.get("error_code") else ""
+    lines.append(f"Status: {run.get('status', 'unknown')}{code}. Started {run.get('started_at') or '-'}, finished "
                  f"{run.get('finished_at') or '-'}. Platform: {plan.get('platform', '-')}.")
     revision = f" at revision {model['revision']}" if model.get("revision") else ""
     lines += ["", f"Model: `{model['source']}`{revision}, served as `{model['id']}`.", ""]
@@ -69,23 +70,30 @@ def markdown(results: Mapping) -> str:
                  f"Load: GuideLLM, {load['prompt_tokens']} prompt and {load['output_tokens']} output tokens per "
                  f"request, {load['seconds_per_level']:.0f} s at each of "
                  f"{', '.join(str(c) for c in load['concurrencies'])} concurrent streams, seed {load['seed']}.")
-    lines.append(f"Method: B/A per pair; exact {method['test']} test, {method['correction']} correction over "
-                 f"{len(plan['metrics'])} metrics, alpha {method['alpha']}; tie band ±{method['tie_band']:.0%} "
+    primary_count = sum(1 for m in plan["metrics"] if m.get("role", "primary") == "primary")
+    lines.append(f"Method: B/A per pair; exact {method['test']} test, {method['correction']} correction over the "
+                 f"{primary_count} primary metrics, alpha {method['alpha']}; tie band ±{method['tie_band']:.0%} "
                  f"(declared before the run). Energy: {plan['energy']['label']}, source "
                  f"{plan['energy']['source']}.")
     rows = analysis.get("metrics") or []
-    if rows:
-        lines += ["", "| Metric | A median | B median | B/A median [CI] | pairs | p adj. | Verdict |",
+    for role, title, p_head in (("primary", "Primary metrics (corrected for multiple comparisons)", "p adj."),
+                                ("secondary", "Secondary metrics (descriptive: p not corrected, so a verdict here "
+                                              "is not a finding)", "p")):
+        chosen = [row for row in rows if row.get("role", "primary") == role]
+        if not chosen:
+            continue
+        lines += ["", f"{title}:", "", f"| Metric | A median | B median | B/A median [CI] | pairs | {p_head} | Verdict |",
                   "|---|---|---|---|---|---|---|"]
-        for row in rows:
+        for row in chosen:
+            p_value = row.get("p_adjusted") if role == "primary" else row.get("p_value")
             lines.append(f"| {row['label']} | {_num(row['a_median'], row['unit'])} | "
                          f"{_num(row['b_median'], row['unit'])} | {_ratio(row)} | {row['n_pairs']} | "
-                         f"{_p(row.get('p_adjusted'))} | {row['verdict']} |")
+                         f"{_p(p_value)} | {row['verdict']} |")
     floor = plan.get("floor") or {}
     if floor and not floor.get("reachable", True):
-        lines += ["", f"Note: with {plan['pairs']} pairs and {floor['family_size']} metrics the smallest possible "
-                  f"adjusted p-value is {floor['min_adjusted_p']:.3g}, above alpha {method['alpha']}, so no metric "
-                  f"can be FASTER or SLOWER in this run; {floor['pairs_needed']} pairs are needed."]
+        lines += ["", f"Note: with {plan['pairs']} pairs and {floor['family_size']} primary metrics the smallest "
+                  f"possible adjusted p-value is {floor['min_adjusted_p']:.3g}, above alpha {method['alpha']}, so no "
+                  f"primary metric can be FASTER or SLOWER in this run; {floor['pairs_needed']} pairs are needed."]
     noise = analysis.get("noise_floor") or []
     if noise:
         lines += ["", "A/A noise floor (side A against itself): typical and largest change between two rounds.", "",
@@ -98,6 +106,6 @@ def markdown(results: Mapping) -> str:
     failed = [r for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         lines += ["", "Rounds that did not finish:"]
-        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {r.get('error') or r.get('status')}"
-                  for r in failed]
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {r.get('error_code') or 'failed'}: "
+                  f"{r.get('error') or r.get('status')}" for r in failed]
     return "\n".join(lines) + "\n"

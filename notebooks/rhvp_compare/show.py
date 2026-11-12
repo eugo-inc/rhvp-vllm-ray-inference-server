@@ -152,9 +152,12 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                                             planned=len(plan["rounds"]), platform=run.get("platform"))))
     a, b = plan["sides"]
     parts.append(line(words.SIDE_LINE.format(a=f"{a['name']} ({a['image']})", b=f"{b['name']} ({b['image']})")))
-    failed = [str(r["index"]) for r in results.get("rounds") or [] if r.get("status") != "ok"]
+    failed = [f"{r['index']} ({r['error_code']})" if r.get("error_code") else str(r["index"])
+              for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
+    if run.get("error_code"):
+        parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
     return parts
 
 
@@ -190,10 +193,16 @@ def verdicts(run: str | None = None) -> None:
         method = results["plan"]["analysis"]
         floor = results["plan"]["floor"]
         band = method["tie_band"]
-        rows = [[row["label"], _num(row.get("a_median"), row["unit"]), _num(row.get("b_median"), row["unit"]),
-                 _ratio(row), str(row["n_pairs"]), _p(row.get("p_adjusted")), chip(row["verdict"])]
-                for row in _rows(results).values()]
-        parts.append(table(words.VERDICT_HEADERS, rows, raw_last=True))
+        everything = list(_rows(results).values())
+        for role, title, headers, p_key in (("primary", words.PRIMARY_TITLE, words.VERDICT_HEADERS, "p_adjusted"),
+                                            ("secondary", words.SECONDARY_TITLE, words.SECONDARY_HEADERS,
+                                             "p_value")):
+            rows = [[row["label"], _num(row.get("a_median"), row["unit"]), _num(row.get("b_median"), row["unit"]),
+                     _ratio(row), str(row["n_pairs"]), _p(row.get(p_key)), chip(row["verdict"])]
+                    for row in everything if row.get("role", "primary") == role]
+            if rows:
+                parts.append(line(title))
+                parts.append(table(headers, rows, raw_last=True))
         parts.append(line(words.METHOD_LINE.format(
             test=words.TEST_NAMES.get(method["test"], method["test"]),
             correction=words.CORRECTION_NAMES.get(method["correction"], method["correction"]),

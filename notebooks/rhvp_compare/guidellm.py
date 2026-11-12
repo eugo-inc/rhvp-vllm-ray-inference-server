@@ -91,6 +91,9 @@ def run(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None
             _stop(process)
             raise LoadError(f"GuideLLM did not finish within {timeout_s:g} s and was stopped; see guidellm.log",
                             timed_out=True) from None
+        except BaseException:  # the runner was told to stop: take GuideLLM down with it
+            _stop(process)
+            raise
     if code != 0 or not report.is_file():
         raise LoadError(f"GuideLLM exited with code {code}; see guidellm.log")
     return report

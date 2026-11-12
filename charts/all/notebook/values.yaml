@@ -61,8 +61,19 @@ compare:
   # notebook share it, so the Job's pod runs on the notebook pod's node.
   resultsSize: 5Gi
   storageClassName: ""
-  # The longest a whole comparison may run before the Job is stopped.
+  # The longest a whole comparison may run before the Job is stopped (the run
+  # then ends as partial, code RUN_TIMEOUT).
   activeDeadlineSeconds: 172800
+  # How long the runner has to stop cleanly after SIGTERM (a deleted Job, or the
+  # time limit above): it cuts the current round short, deletes its side pod,
+  # scales the pattern's server back and saves the results as partial.
+  terminationGracePeriodSeconds: 300
+  # The pattern's own server, in notebook.serverNamespace. The runner scales it
+  # to 0 before the first round and back to serverReplicas when the run ends,
+  # however it ends. Empty serverDeployment leaves the server alone (then free
+  # the GPU yourself).
+  serverDeployment: ray-serve-llm
+  serverReplicas: 1
   # The runner Job's pod (the GuideLLM image, with rhvp_compare copied in from
   # the notebook image). GuideLLM runs in it.
   runnerResources:
