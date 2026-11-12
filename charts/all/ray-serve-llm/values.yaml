@@ -65,12 +65,13 @@ server:
   terminationGracePeriodSeconds: 120
   probes:
     # Startup and readiness check the ready file, which the server writes only
-    # after the model is loaded and the app is RUNNING. Both check every 2 s, so
-    # the pod turns Ready up to about 4 s after the file appears (one startup
-    # period, then one readiness period); the notebook's start-to-Ready figure
-    # cannot show differences smaller than that. Startup budget: periodSeconds *
-    # failureThreshold = 2 * 1800 = 3600 s. Readiness: the pod leaves the Service
-    # after about 2 * 15 = 30 s without the file.
+    # after the model is loaded and the app is RUNNING. The startup probe checks
+    # every 2 s, and the kubelet runs the readiness probe as soon as the startup
+    # probe passes, so the pod turns Ready up to about 2 s after the file appears;
+    # the notebook's start-to-Ready figure cannot show differences smaller than
+    # that. Startup budget: periodSeconds * failureThreshold = 2 * 1800 = 3600 s.
+    # Readiness: the pod leaves the Service after about 2 * 15 = 30 s without the
+    # file.
     startup:
       periodSeconds: 2
       failureThreshold: 1800
