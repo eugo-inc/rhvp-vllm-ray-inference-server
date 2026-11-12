@@ -151,6 +151,9 @@ it to sync.
 ### Prerequisites
 
 - OpenShift 4.18 or newer, and cluster-admin access.
+- A cluster that does not already run Node Feature Discovery or the NVIDIA GPU Operator. The pattern installs both
+  itself, with its own OperatorGroups and settings, and can clash with existing installs of them. It has not been
+  tried on a cluster that runs OpenShift AI.
 - A StorageClass that provisions volumes dynamically, for the model PVC.
 - The internal image registry set to `Managed`, and the `Build` and `ImageRegistry` cluster capabilities enabled.
   The cluster builds both images itself. To check:
@@ -356,11 +359,13 @@ needs extra steps; see Troubleshooting.
   1. Download any notebook work you want to keep.
   2. Uninstall it under the old name: `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`
      (see [Uninstall](#uninstall)).
-  3. Once the uninstall has finished, merge the rename into your branch, if you have not already, and push it. Step
-     6 takes the pattern name from `global.pattern` in your clone, and Argo CD deploys from your fork, so the rename
-     must be in both. Merging only after the uninstall keeps the old install from syncing the rename and starting a
-     second server in the new namespaces. This order follows from the charts and the installer; it has not been
-     tried on a cluster.
+  3. Once the uninstall has finished, merge the rename into your branch, if you have not already, and push it. The
+     uninstall has finished when the Pattern resource is gone and the operator has removed the apps:
+     `oc get patterns -A` no longer lists `rhvp-vllm-ray-inference-server`, and `oc get applications.argoproj.io -A`
+     lists none of its apps. Step 6 takes the pattern name from `global.pattern` in your clone, and Argo CD deploys
+     from your fork, so the rename must be in both. Merging only after the uninstall keeps the old install from
+     syncing the rename and starting a second server in the new namespaces. This order follows from the charts and
+     the installer; it has not been tried on a cluster.
   4. Check for the old namespaces and delete them (see "Old namespaces" below).
   5. Rename your secrets file, if you have one:
      ```sh
@@ -383,7 +388,8 @@ needs extra steps; see Troubleshooting.
   oc delete namespace rhvp-inference rhvp-notebook
   ```
   Then check `oc get pv` for a volume whose claim was `rhvp-inference/ray-serve-llm-models`. A volume with the
-  reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`.
+  reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`. That deletes only
+  the Kubernetes object: the backing disk (an EBS volume on AWS) stays until you delete it in your storage backend.
 
 ## Before changing structure, study how existing patterns do it
 

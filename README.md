@@ -177,6 +177,9 @@ version 580 or newer.
 ## Prerequisites
 
 - OpenShift 4.18 or newer, and cluster-admin access.
+- A cluster that does not already run Node Feature Discovery or the NVIDIA GPU Operator. The pattern installs both
+  itself, with its own OperatorGroups and settings, and can clash with existing installs of them. It has not been
+  tried on a cluster that runs OpenShift AI.
 - A StorageClass that provisions volumes dynamically, for the model cache.
 - The internal image registry set to `Managed`: the cluster builds both images itself. It starts as `Removed` on
   bare metal and vSphere. To check:
@@ -239,9 +242,12 @@ uninstall it first and merge the rename after:
 1. Download any notebook work you want to keep.
 2. Uninstall it with `PATTERN_NAME=rhvp-vllm-ray-inference-server ./pattern.sh make uninstall`.
 3. Once the uninstall has finished, merge the rename into your branch, if you have not already, and push it. The
-   install in step 6 takes the pattern name from your clone and deploys from your fork, so it needs the rename in
-   both. Merging only after the uninstall keeps the old install from syncing the rename and starting a second
-   server. This order follows from the charts and the installer; it has not been tried on a cluster.
+   uninstall has finished when the Pattern resource is gone and the operator has removed the apps:
+   `oc get patterns -A` no longer lists `rhvp-vllm-ray-inference-server`, and `oc get applications.argoproj.io -A`
+   lists none of its apps. The install in step 6 takes the pattern name from your clone and deploys from your fork,
+   so it needs the rename in both. Merging only after the uninstall keeps the old install from syncing the rename
+   and starting a second server. This order follows from the charts and the installer; it has not been tried on a
+   cluster.
 4. Check for the old namespaces and the old model's claim. Delete what is left; this deletes the downloaded model.
    ```sh
    oc get namespace rhvp-inference rhvp-notebook
@@ -249,7 +255,8 @@ uninstall it first and merge the rename after:
    oc delete namespace rhvp-inference rhvp-notebook
    ```
    Then check `oc get pv` for a volume whose claim was `rhvp-inference/ray-serve-llm-models`. A volume with the
-   reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`.
+   reclaim policy `Retain` stays after its claim is deleted; delete it with `oc delete pv <name>`. That deletes only
+   the Kubernetes object: the backing disk (an EBS volume on AWS) stays until you delete it in your storage backend.
 5. Rename your secrets file from `values-secret-rhvp-vllm-ray-inference-server.yaml` to
    `values-secret-vllm-ray-inference-server.yaml`.
 6. Install again with `./pattern.sh make install`. The new install builds both images and downloads the model again.
