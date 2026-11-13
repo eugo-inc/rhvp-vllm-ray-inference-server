@@ -194,12 +194,16 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
 to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). That run
-came before the refusal of a second run, the scale read-back and the early restore on a stop, which are covered by
-unit tests only. Not checked yet: any round against a real inference server (every end-to-end run used GuideLLM's
-mock server, without a GPU); tokens per joule from real power samples (both power readers are tested only against
-hand-written answers in the documented formats, and the DCGM label names the reader matches on have not been
-checked against a real DCGM exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry,
-Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
+came before the refusal of a second run, the scale read-back and the early restore on a stop, which on Kubernetes
+are covered by unit tests only (under docker, the refusal and the stop path have run against the mock server).
+Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`): two 2-pair smoke runs of the
+example's two vLLM images with smaller settings. The second finished all 6 rounds, measured by GuideLLM, with tokens
+per joule from nvidia-smi, one of them after a second start past vLLM's start-up memory check (README, "On one
+machine"); the first, from before that second start, lost a round to that check.
+Not checked yet: the Kubernetes backend with a real server; tokens per joule from DCGM (its reader is tested only
+against hand-written answers, and the DCGM label names it matches on have not been checked against a real DCGM
+exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the
+Job); the example's own settings; and the length of a run (an estimate of 2 to 3 hours with the defaults).
 
 ## How to deploy
 
