@@ -32,12 +32,23 @@ NO_TARGET = ("server.autoscaling.targetOngoingRequests must be set when maxRepli
              "default target is 10^9 ongoing requests per replica, so the replica count would never grow")
 MOVED = ("server.minReplicas and server.maxReplicas moved to server.autoscaling.minReplicas and "
          "server.autoscaling.maxReplicas")
-#: Why replicas that share a GPU must each claim at most their share of its memory (inference-server/serve_app.py
-#: refuses the same at start): vLLM refuses to start when the GPU's free memory is below gpu_memory_utilization
-#: times its total memory.
-SHARED_GPU_MEMORY = ("server.engineKwargs.gpu_memory_utilization ({memory}) must not exceed server.gpuPerReplica "
-                     "({share}) when up to {high} replicas share a GPU: each vLLM replica claims that fraction of the "
-                     "whole GPU's memory when it starts, so a later replica would not fit")
+#: Replicas that share a GPU each claim at most this part of their share of its memory: vLLM refuses to start when
+#: the GPU's free memory is below gpu_memory_utilization times its total memory, and a starting replica needs a
+#: little memory of its own before that check. inference-server/serve_app.py (SHARED_GPU_MARGIN) refuses the same
+#: at start, and the comparison caps two replicas on one GPU at the same 0.95 (notebooks/rhvp_compare/plan.py,
+#: SHARED_GPU_LIMIT).
+SHARED_GPU_MARGIN = 0.95
+SHARED_GPU_MEMORY = ("server.engineKwargs.gpu_memory_utilization ({memory}) must be at most 0.95 times "
+                     "server.gpuPerReplica ({share}) when up to {high} replicas share a GPU: each vLLM replica claims "
+                     "that fraction of the whole GPU's memory when it starts, and needs a little more before it can, "
+                     "so at the full share a later replica would not fit")
+#: The server's rules for gpu_per_replica against a replica's workers (tensor_parallel_size times
+#: pipeline_parallel_size); gpuPerReplica 1 is the chart's default and is not written, so the server then uses the
+#: worker count.
+GPU_PER_WORKERS = ("server.gpuPerReplica ({share}) must be 1 or equal engineKwargs.tensor_parallel_size times "
+                   "pipeline_parallel_size ({workers}): each of a replica's workers needs a whole GPU")
+ONE_WORKER_SHARE = ("server.gpuPerReplica ({share}) must be at most 1 when a replica has one worker "
+                    "(engineKwargs.tensor_parallel_size and pipeline_parallel_size 1)")
 
 
 def _number(value) -> bool:
@@ -127,13 +138,23 @@ def check_server(values: Mapping) -> list[str]:
     if not (_number(share) and share > 0):
         out.append(f"server.gpuPerReplica must be a number above 0; got {_show(share)} ({_kind(share)})")
         return out
+    engine = server.get("engineKwargs") or {}
+    workers = 1
+    for key in ("tensor_parallel_size", "pipeline_parallel_size"):
+        workers *= engine.get(key) if _number(engine.get(key)) else 1
+    if share != 1 and workers > 1 and share != workers:
+        out.append(GPU_PER_WORKERS.format(share=_show(share), workers=_show(workers)))
+        return out
+    if workers <= 1 and share > 1:
+        out.append(ONE_WORKER_SHARE.format(share=_show(share)))
+        return out
     gpus = server.get("gpuCount")
     if _number(gpus) and high * share > gpus + 1e-6:
         out.append(f"server.autoscaling.maxReplicas ({_show(high)}) times server.gpuPerReplica ({_show(share)}) is "
                    f"more than server.gpuCount ({_show(gpus)})")
         return out
     memory = (server.get("engineKwargs") or {}).get("gpu_memory_utilization")
-    if share < 1 and high > 1 and _number(memory) and memory > share + 1e-9:
+    if share < 1 and high > 1 and _number(memory) and memory > SHARED_GPU_MARGIN * share + 1e-9:
         out.append(SHARED_GPU_MEMORY.format(memory=_show(memory), share=_show(share), high=_show(high)))
         return out
     port = server.get("metricsPort")

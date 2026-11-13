@@ -92,6 +92,9 @@ READY_FILE_NAME = "rhvp-ready"
 STATUS_POLL_INTERVAL_S = 10.0
 # While Ray Serve may change the replica count: the resolution of the rhvp-scale lines' ts.
 SCALE_POLL_INTERVAL_S = 1.0
+# Replicas that share a GPU each claim at most this part of their share of its memory (gpu_memory_utilization at
+# most 0.95 * gpu_per_replica); the chart and scripts/pattern_settings.py refuse the same before a sync.
+SHARED_GPU_MARGIN = 0.95
 # Replica states that count towards the target when Ray reports no target.
 LIVE_REPLICA_STATES = ("STARTING", "UPDATING", "RECOVERING", "RUNNING", "PENDING_MIGRATION")
 
@@ -328,13 +331,15 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     elif workers == 1 and share > 1:
         raise ConfigError(f"gpu_per_replica ({share}) must be at most 1 for a replica with one worker")
     gmu = engine_kwargs.get("gpu_memory_utilization")
-    if share < 1 and max_r > 1 and _is_number(gmu) and gmu > share + 1e-9:
+    if share < 1 and max_r > 1 and _is_number(gmu) and gmu > SHARED_GPU_MARGIN * share + 1e-9:
         # vLLM refuses to start when the GPU's free memory is below gpu_memory_utilization times its total
-        # memory, so replicas that share a GPU must each claim no more than their share.
+        # memory, and a starting replica needs a little memory of its own first, so replicas that share a GPU
+        # must each claim a little less than their share.
         raise ConfigError(
-            f"engine_kwargs.gpu_memory_utilization ({gmu}) must not exceed gpu_per_replica ({share}) when "
-            f"up to {max_r} replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's "
-            f"memory when it starts, so a later replica would not fit"
+            f"engine_kwargs.gpu_memory_utilization ({gmu}) must be at most {SHARED_GPU_MARGIN} times "
+            f"gpu_per_replica ({share}) when up to {max_r} replicas share a GPU: each vLLM replica claims that "
+            f"fraction of the whole GPU's memory when it starts, and needs a little more before it can, so at the "
+            f"full share a later replica would not fit"
         )
     out["gpu_per_replica"] = share
 

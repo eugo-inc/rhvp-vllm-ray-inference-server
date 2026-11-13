@@ -638,9 +638,11 @@ The chart render and `scripts/validate-values.sh` refuse these settings, each wi
 - `maxReplicas` above 1 without `targetOngoingRequests`. Ray Serve LLM's own default target is 10^9 requests in
   flight per replica, so the replica count would never grow.
 - `maxReplicas` times `gpuPerReplica` above `gpuCount`.
-- Replicas that share a GPU (`gpuPerReplica` below 1) with `engineKwargs.gpu_memory_utilization` above
-  `gpuPerReplica`. Each vLLM replica claims that fraction of the whole GPU's memory when it starts, so a later replica
-  would not fit.
+- `gpuPerReplica` above 1 for a replica with one worker, or, with `tensor_parallel_size` times
+  `pipeline_parallel_size` above 1, a `gpuPerReplica` other than 1 or that product: each worker needs a whole GPU.
+- Replicas that share a GPU (`gpuPerReplica` below 1) with `engineKwargs.gpu_memory_utilization` above 0.95 times
+  `gpuPerReplica`. Each vLLM replica claims that fraction of the whole GPU's memory when it starts, and needs a little
+  more before it can, so at the full share a later replica would not fit.
 
 With `tensor_parallel_size` above 1, each replica needs that many GPUs. The chart does not check this; the server
 checks it when it starts, and exits with code 2 when Ray sees too few GPUs.

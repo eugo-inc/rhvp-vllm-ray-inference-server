@@ -58,11 +58,13 @@ server:
     # without it the replica count would never grow. null leaves it unset.
     targetOngoingRequests: null
   # GPUs each replica asks Ray for. maxReplicas * gpuPerReplica must not
-  # exceed gpuCount. Below 1 (for example 0.5) replicas share one GPU, which
-  # adds no GPU compute; that is for testing only. Replicas that share a GPU
-  # must each claim at most their share of its memory:
-  # engineKwargs.gpu_memory_utilization at most gpuPerReplica (checked), and a
-  # little below it in practice, such as 0.4 for 0.5.
+  # exceed gpuCount. Above 1 only for a replica with several workers, and then
+  # equal to tensor_parallel_size * pipeline_parallel_size (checked). Below 1
+  # (for example 0.5) replicas share one GPU, which adds no GPU compute; that
+  # is for testing only, and has not yet started a replica on a real GPU.
+  # Replicas that share a GPU must each claim a little less than their share
+  # of its memory: engineKwargs.gpu_memory_utilization at most 0.95 times
+  # gpuPerReplica (checked), such as 0.4 for 0.5.
   gpuPerReplica: 1
   # Ray's Prometheus metrics (vLLM's gauges among them, as ray_vllm_*). The
   # server always exports them on this port; the container port and the Service

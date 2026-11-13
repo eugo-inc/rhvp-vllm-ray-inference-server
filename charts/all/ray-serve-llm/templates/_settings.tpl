@@ -53,16 +53,31 @@
 {{- if not (and (include "ray-serve-llm.isNumber" $gpr) (gt (float64 $gpr) 0.0)) -}}
 {{- fail (printf "server.gpuPerReplica must be a number above 0; got %v (%s)" $gpr (kindOf $gpr)) -}}
 {{- end -}}
+{{- /* The server's rules for gpu_per_replica against a replica's workers; gpuPerReplica 1 is not
+       written to llm.yaml (configmap.yaml), so the server then uses the worker count. */ -}}
+{{- $ek := $srv.engineKwargs | default dict -}}
+{{- $tp := $ek.tensor_parallel_size -}}
+{{- if not (include "ray-serve-llm.isNumber" $tp) -}}{{- $tp = 1 -}}{{- end -}}
+{{- $pp := $ek.pipeline_parallel_size -}}
+{{- if not (include "ray-serve-llm.isNumber" $pp) -}}{{- $pp = 1 -}}{{- end -}}
+{{- $workers := mulf $tp $pp -}}
+{{- if and (ne (float64 $gpr) 1.0) (gt $workers 1.0) (ne (float64 $gpr) $workers) -}}
+{{- fail (printf "server.gpuPerReplica (%v) must be 1 or equal engineKwargs.tensor_parallel_size times pipeline_parallel_size (%v): each of a replica's workers needs a whole GPU" $gpr $workers) -}}
+{{- end -}}
+{{- if and (le $workers 1.0) (gt (float64 $gpr) 1.0) -}}
+{{- fail (printf "server.gpuPerReplica (%v) must be at most 1 when a replica has one worker (engineKwargs.tensor_parallel_size and pipeline_parallel_size 1)" $gpr) -}}
+{{- end -}}
 {{- if gt (mulf $max $gpr) (addf $srv.gpuCount 0.000001) -}}
 {{- fail (printf "server.autoscaling.maxReplicas (%v) times server.gpuPerReplica (%v) is more than server.gpuCount (%v)" $max $gpr $srv.gpuCount) -}}
 {{- end -}}
 {{- /* Replicas that share a GPU: vLLM refuses to start when the GPU's free memory is below
-       gpu_memory_utilization times its total memory, so each must claim at most its share
-       (serve_app.py refuses the same at start). */ -}}
-{{- $gmu := ($srv.engineKwargs | default dict).gpu_memory_utilization -}}
+       gpu_memory_utilization times its total memory, and a starting replica needs a little
+       memory of its own first, so each must claim at most 0.95 of its share (serve_app.py
+       refuses the same at start; the comparison's plan.py SHARED_GPU_LIMIT is the same 0.95). */ -}}
+{{- $gmu := $ek.gpu_memory_utilization -}}
 {{- if and (lt (float64 $gpr) 1.0) (gt (float64 $max) 1.0) (include "ray-serve-llm.isNumber" $gmu) -}}
-{{- if gt (float64 $gmu) (addf $gpr 0.000000001) -}}
-{{- fail (printf "server.engineKwargs.gpu_memory_utilization (%v) must not exceed server.gpuPerReplica (%v) when up to %v replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's memory when it starts, so a later replica would not fit" $gmu $gpr $max) -}}
+{{- if gt (float64 $gmu) (addf (mulf $gpr 0.95) 0.000000001) -}}
+{{- fail (printf "server.engineKwargs.gpu_memory_utilization (%v) must be at most 0.95 times server.gpuPerReplica (%v) when up to %v replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's memory when it starts, and needs a little more before it can, so at the full share a later replica would not fit" $gmu $gpr $max) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (and (include "ray-serve-llm.isWhole" $srv.metricsPort) (ge (float64 $srv.metricsPort) 1.0) (le (float64 $srv.metricsPort) 65535.0) (ne (float64 $srv.metricsPort) (float64 $srv.httpPort))) -}}

@@ -228,9 +228,19 @@ refuse autoscaling-no-target ray-serve-llm vllm-inference "targetOngoingRequests
 refuse autoscaling-over-gpus ray-serve-llm vllm-inference "is more than server.gpuCount" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4
 refuse autoscaling-shared-gpu-memory ray-serve-llm vllm-inference \
-  "server.engineKwargs.gpu_memory_utilization (0.85) must not exceed server.gpuPerReplica (0.5)" \
+  "server.engineKwargs.gpu_memory_utilization (0.85) must be at most 0.95 times server.gpuPerReplica (0.5)" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
   --set-json server.gpuPerReplica=0.5
+refuse autoscaling-shared-gpu-full-share ray-serve-llm vllm-inference \
+  "server.engineKwargs.gpu_memory_utilization (0.5) must be at most 0.95 times server.gpuPerReplica (0.5)" \
+  --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
+  --set-json server.gpuPerReplica=0.5 --set-json server.engineKwargs.gpu_memory_utilization=0.5
+refuse gpu-per-replica-one-worker ray-serve-llm vllm-inference \
+  "server.gpuPerReplica (2) must be at most 1 when a replica has one worker" \
+  --set server.gpuPerReplica=2 --set server.gpuCount=2
+refuse gpu-per-replica-workers ray-serve-llm vllm-inference \
+  "server.gpuPerReplica (0.5) must be 1 or equal engineKwargs.tensor_parallel_size times pipeline_parallel_size (2)" \
+  --set-json server.gpuPerReplica=0.5 --set server.engineKwargs.tensor_parallel_size=2 --set server.gpuCount=2
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
 refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be pairs or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge

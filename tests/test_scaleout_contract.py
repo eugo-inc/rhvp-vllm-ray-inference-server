@@ -100,6 +100,12 @@ def test_values_check_names_every_mode():
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),
     ({"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5}},
      pattern_settings.SHARED_GPU_MEMORY.format(memory="0.85", share="0.5", high="2")),
+    ({"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5,
+                 "engineKwargs": {"gpu_memory_utilization": 0.5}}},
+     pattern_settings.SHARED_GPU_MEMORY.format(memory="0.5", share="0.5", high="2")),
+    ({"server": {"gpuPerReplica": 2, "gpuCount": 2}}, pattern_settings.ONE_WORKER_SHARE.format(share="2")),
+    ({"server": {"gpuPerReplica": 0.5, "engineKwargs": {"tensor_parallel_size": 2}, "gpuCount": 2}},
+     pattern_settings.GPU_PER_WORKERS.format(share="0.5", workers="2")),
     ({"server": {"gpuPerReplica": 0}}, "server.gpuPerReplica must be a number above 0"),
     ({"server": {"gpuPerReplica": "0.5"}}, "server.gpuPerReplica must be a number above 0; got 0.5 (string)"),
     ({"server": {"metricsPort": 8000}}, "server.metricsPort must be a port number"),
@@ -120,6 +126,14 @@ def test_values_check_refuses(over, message):
     assert len(problems) == 1 and message in problems[0], problems
 
 
+def test_the_shared_gpu_margin_is_the_same_everywhere():
+    """The chart, the values check, the server and the comparison's plan all keep 5% of a shared GPU free."""
+    sys.path.insert(0, str(REPO / "inference-server"))  # serve_app imports rhvp_scale from its own folder
+    serve_app = load_module("serve_app", REPO / "inference-server/serve_app.py")
+    assert pattern_settings.SHARED_GPU_MARGIN == serve_app.SHARED_GPU_MARGIN == plans.SHARED_GPU_LIMIT == 0.95
+    assert "(mulf $gpr 0.95)" in (REPO / "charts/all/ray-serve-llm/templates/_settings.tpl").read_text()
+
+
 def test_kuberay_message_is_plain():
     assert "kuberay mode is designed but not built yet" in pattern_settings.KUBERAY_NOT_BUILT
 
@@ -130,6 +144,10 @@ def test_kuberay_message_is_plain():
     {"server": {"autoscaling": {"maxReplicas": 4, "targetOngoingRequests": 8}, "gpuCount": 4}},
     {"server": {"autoscaling": {"maxReplicas": 3, "targetOngoingRequests": 2}, "gpuPerReplica": 1 / 3,
                 "engineKwargs": {"gpu_memory_utilization": 0.3}}},
+    {"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5,
+                "engineKwargs": {"gpu_memory_utilization": 0.475}}},
+    {"server": {"gpuPerReplica": 2, "gpuCount": 2, "engineKwargs": {"tensor_parallel_size": 2}}},
+    {"server": {"gpuCount": 2, "engineKwargs": {"tensor_parallel_size": 2}}},
     {"global": {"scaleOut": {"mode": "keda"}}, "modelStorage": {"accessMode": "ReadWriteMany"}},
     {"compileCache": {"mode": "shared"}},
     {"global": {"compare": {"mode": "scaleout"}}},
@@ -171,6 +189,10 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("autoscaling-over-gpus",
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),
     ("autoscaling-shared-gpu-memory", pattern_settings.SHARED_GPU_MEMORY.format(memory="0.85", share="0.5", high="2")),
+    ("autoscaling-shared-gpu-full-share",
+     pattern_settings.SHARED_GPU_MEMORY.format(memory="0.5", share="0.5", high="2")),
+    ("gpu-per-replica-one-worker", pattern_settings.ONE_WORKER_SHARE.format(share="2")),
+    ("gpu-per-replica-workers", pattern_settings.GPU_PER_WORKERS.format(share="0.5", workers="2")),
     ("keda-threshold", "scaleOut.waitingRequestsPerPod must be a number above 0; got 0"),
     ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
     ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
