@@ -62,6 +62,8 @@ REPLAY_UNUSABLE = "REPLAY is on, but its results file could not be read ({error}
 RUN_LINE = "Run {run} · {status} · {done} of {planned} rounds measured · {platform}"
 RUN_FAILED_ROUNDS = "Rounds that failed: {rounds}."
 RUN_CODE = "Why the run did not finish: {code}."
+RUN_RETRIED = ("Rounds whose side was started once more after vLLM's start-up memory check failed (timed from "
+               "the last start): {rounds}.")
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = "Pairs lost to one side failing, per metric: {lost}. Those metrics are INCONCLUSIVE."

@@ -929,7 +929,8 @@
         "startup",
         "levels",
         "metrics",
-        "artifacts"
+        "artifacts",
+        "start_retries"
       ],
       "properties": {
         "index": {
@@ -1057,6 +1058,10 @@
             },
             "load_report": {
               "type": "string"
+            },
+            "server_log_attempt_1": {
+              "type": "string",
+              "description": "The server log of the start that stopped at vLLM's start-up memory check, when the side was started again."
             }
           }
         },
@@ -1065,6 +1070,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "start_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1: a second such failure fails the round (SIDE_FAILED). The start-up figures are timed from the last start."
         }
       }
     },

@@ -521,7 +521,7 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | Code | Meaning |
 |---|---|
 | `GPU_NOT_FREE` | another pod still held the GPU after 15 minutes |
-| `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited |
+| `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
 | `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
 | `STOPPED` | the runner was stopped during the round |
@@ -548,6 +548,11 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
 - Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
   namespace).
+- On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
+  (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
+  starts that side once more in the same round and times its start from the new start; the round's
+  `start_retries`, `results.md` and the notebook say so. A second such exit fails the round (`SIDE_FAILED`). Keep
+  the machine as quiet as you can during a run.
 
 ### Comparing with this pattern's own server
 

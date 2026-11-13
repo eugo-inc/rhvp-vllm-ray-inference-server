@@ -111,6 +111,12 @@ def markdown(results: Mapping) -> str:
         lines += ["", "Rounds that did not finish:"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {r.get('error_code') or 'failed'}: "
                   f"{r.get('error') or r.get('status')}" for r in failed]
+    retried = [r for r in results.get("rounds") or [] if r.get("start_retries")]
+    if retried:
+        lines += ["", "Rounds whose side was started again after vLLM's start-up memory check failed "
+                  "(timed from the last start):"]
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): started {r['start_retries'] + 1} times, "
+                  f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]

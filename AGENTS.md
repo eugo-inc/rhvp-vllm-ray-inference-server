@@ -168,7 +168,9 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
   older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each round creates a side
   pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs GuideLLM
-  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. When
+  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. A
+  side whose server exits at vLLM's start-up memory check (`Error in memory profiling` in its log) is started once
+  more in the same round (`runner.START_RETRIES`, the round's `start_retries`). When
   the run ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the
   scale back, and records `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a

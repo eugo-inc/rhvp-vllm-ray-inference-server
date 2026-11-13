@@ -165,6 +165,9 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
               for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
+    retried = [f"{r['index']} (side {r['side']})" for r in results.get("rounds") or [] if r.get("start_retries")]
+    if retried:
+        parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
     unusable = [f"round {u['index']} side {u['side']} at {u['concurrency']} streams"
                 for u in summary.levels_unusable(results)]
     if unusable:

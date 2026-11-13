@@ -57,6 +57,9 @@ LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the round
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
+#: How many more times a side is started in one round when its server stopped at vLLM's start-up memory check
+#: (logs.memory_profiling_failed); recorded in the round's start_retries. A second such failure is SIDE_FAILED.
+START_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
@@ -353,7 +356,8 @@ class Runner:
         record: dict = {"index": round_["index"], "side": round_["side"], "kind": round_["kind"],
                         "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
-                        "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {}}
+                        "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
+                        "start_retries": 0}
         held: dict = {"handle": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
@@ -387,28 +391,57 @@ class Runner:
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
-        """Wait for the GPU, start the side, time its start, load it; any failure raises."""
-        self.backend.gpu_free(self.plan, side)
+        """Wait for the GPU, start the side, time its start, load it; any failure raises. A server that stopped at
+        vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that start."""
         timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
-        record["_started_epoch"] = self.wall()
-        t0 = self.clock()
-        handle = held["handle"] = self.backend.start(self.plan, round_, side, spec)
-        deadline = t0 + timeout
-        target = self.backend.endpoint(handle, deadline)
-        alive = lambda: self.backend.alive(handle)  # noqa: E731
         model = self.plan["model"]["id"]
-        with self.client(target) as client:
-            ready_s = probe.wait_ready(client, model, t0, deadline, alive)
-            first_s = probe.first_answer(client, model, t0, deadline, alive,
-                                         self.plan["server"]["first_answer_tokens"],
-                                         self.plan["load"]["request_format"])
-            record["_reported_version"] = probe.reported_version(client)
+        while True:
+            self.backend.gpu_free(self.plan, side)
+            record["_started_epoch"] = self.wall()
+            t0 = self.clock()
+            handle = held["handle"] = self.backend.start(self.plan, round_, side, spec)
+            deadline = t0 + timeout
+            target = self.backend.endpoint(handle, deadline)
+            alive = lambda: self.backend.alive(handle)  # noqa: E731
+            try:
+                with self.client(target) as client:
+                    ready_s = probe.wait_ready(client, model, t0, deadline, alive)
+                    first_s = probe.first_answer(client, model, t0, deadline, alive,
+                                                 self.plan["server"]["first_answer_tokens"],
+                                                 self.plan["load"]["request_format"])
+                    record["_reported_version"] = probe.reported_version(client)
+                break
+            except probe.StartFailed as error:
+                if error.never_ready or record["start_retries"] >= START_RETRIES:
+                    raise
+                if not self._start_again(handle, record, out_dir, rel, error):
+                    raise
+                held["handle"] = None  # torn down; the next start sets it
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["metrics"].update({"startup.ready_s": ready_s, "startup.first_answer_s": first_s})
         if round_["kind"] != plans.WARMUP:
             record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
             record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+
+    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception) -> bool:
+        """When the server's log shows vLLM's memory-profiling check failing: keep that log as server.attempt-N.log,
+        take the side down and return True (the round starts it again). Anything else: False, and the round fails."""
+        try:
+            text = self.backend.logs(handle)
+        except Exception:
+            return False
+        if not logs.memory_profiling_failed(text):
+            return False
+        record["start_retries"] += 1
+        name = f"server.attempt-{record['start_retries']}.log"
+        (out_dir / name).write_text(text, encoding="utf-8")
+        record["artifacts"][f"server_log_attempt_{record['start_retries']}"] = f"{rel}/{name}"
+        record.setdefault("notes", []).append(
+            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side was started once "
+            f"more, and its start is timed from then ({name} is the first try's log)")
+        self.backend.stop(handle)
+        return True
 
     def _load(self, round_: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None
