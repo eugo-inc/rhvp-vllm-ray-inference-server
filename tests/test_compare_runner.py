@@ -1096,7 +1096,8 @@ def test_a_surge_whose_guidellm_timed_out_runs_the_round_once_more_and_the_round
     assert {"startup.ready_s", "scale.first_answer_s", "surge.slo_attainment"} <= set(r3["metrics"])
     assert r3["startup"]["ready_s"] >= 0 and 5 <= r3["scale"]["step_at_s"] < 5.5
     assert r3["scale"]["new_replica_share"] == 0.25
-    assert any("run once more from a new first replica, with the same requests" in note for note in r3["notes"])
+    assert any("that try was discarded, to run the round once more from a new first replica, with the same requests"
+               in note for note in r3["notes"])
     assert "stalled" in (the_runner.dir / r3["artifacts"]["guidellm_try_1"]).read_text()
     assert "finished" in (the_runner.dir / "rounds/03-A-scored/guidellm.log").read_text()
     for key in ("server_log_try_1", "server_log_2_try_1", "server_log", "server_log_2", "load_report"):
@@ -1172,6 +1173,49 @@ def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
     assert backend.surges[1] == 2 and backend.started.count((1, "A", 2)) == 2
     assert backend.started.count((1, "A", 1)) == 2 and failed["load_retries"] == 1
     assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 1), (1, 2), (1, 2)]
+
+
+class StopFailsInDiscard(ScaleBackend):
+    """The stop of round 3's replica `which` fails once while the round's first try is being discarded; with `term`,
+    a SIGTERM arrives during that stop instead."""
+
+    def __init__(self, *args, which: int = 2, term: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.which, self.term, self.fired = which, term, False
+
+    def stop(self, handle):
+        if (handle["round"]["index"], handle["replica"]) == (3, self.which) and self.surges.get(3) == 1 \
+                and self.loads[-1].stopped and not self.fired:
+            self.fired = True
+            if self.term:
+                os.kill(os.getpid(), signal.SIGTERM)  # the runner's handler raises Stopped here
+                time.sleep(30)
+                raise AssertionError("SIGTERM did not cut the discard short")
+            raise runner.RoundError("docker stop failed: 500")
+        super().stop(handle)
+
+
+@pytest.mark.parametrize("which, term", [(2, False), (1, False), (2, True), (1, True)])
+def test_a_discard_cut_short_records_each_start_once_as_discarded(tmp_path, which, term):
+    # Round 3: replica 2's first start stops at vLLM's memory check and is started again, GuideLLM stalls, and the try
+    # is discarded; then the stop of one of its replicas fails, or a SIGTERM lands during it. The round fails, its
+    # teardown finishes the discard, and the round still says what happened: one launch record per start, all of them
+    # marked discarded, the time-out recorded, and every container stopped.
+    clock = FakeClock()
+    backend = StopFailsInDiscard(clock, which=which, term=term, dies={(3, 2): 1}, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["status"], r3["error_code"]) == ("failed", "STOPPED" if term else "RUNNER_ERROR")
+    assert [s for s in backend.started if s[0] == 3] == [(3, "A", 1), (3, "A", 2), (3, "A", 2)]  # no second try
+    assert [(l["replica"], l["discarded"], l["start_retries"]) for l in r3["launches"]] == [(1, True, 0), (2, True, 1)]
+    assert sum(l["start_retries"] for l in r3["launches"]) == r3["start_retries"] == 1
+    assert r3["load_retries"] == 1 and any("that try was discarded" in note for note in r3["notes"])
+    assert backend.stopped.count((3, 1)) == 1 and backend.stopped.count((3, 2)) == 2  # the retried start, then the try
+    assert r3["startup"] is None and r3["metrics"] == {} and "scale" not in r3
+    assert r3["artifacts"] and all(key.endswith("_try_1") for key in r3["artifacts"]), r3["artifacts"]
+    assert all((the_runner.dir / path).is_file() for path in r3["artifacts"].values())
+    assert results["run"]["error_code"] == ("STOPPED" if term else "ROUNDS_FAILED")
 
 
 def test_a_scale_round_starts_its_new_replica_once_more_after_vllms_memory_check(tmp_path):

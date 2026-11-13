@@ -425,7 +425,7 @@ class Runner:
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
                         "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
                         "launches": [], "start_retries": 0, "load_retries": 0}
-        held: dict = {"handle": None, "replicas": [], "load": None, "router": None}
+        held: dict = {"handle": None, "replicas": [], "load": None, "router": None, "discarding": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
             try:
@@ -453,6 +453,9 @@ class Runner:
             if self._stopping:  # also a stop that came in after the round's own work: the server back first
                 self._begin_stop()
             self._stop_scale_helpers(held, record)
+            if held["discarding"]:  # a discard (_discard_try) that failed or was stopped partway: finish it here
+                for replica in list(reversed(held["replicas"])):
+                    self._discard_replica(replica, spec, record, out_dir, rel, held, quiet=True)
             for replica in reversed(held["replicas"][1:]):  # the added replica first, the first replica last
                 self._after_replica(replica, spec, record, out_dir, rel)
             if held["handle"] is not None:
@@ -475,9 +478,12 @@ class Runner:
         held["replicas"].append({"replica": replica, "handle": handle, "started_at": started_at, "epoch": epoch})
         return handle
 
-    def _launch(self, replica: Mapping, spec: Mapping, record: dict, discarded: bool = False) -> None:
+    def _launch(self, replica: dict, spec: Mapping, record: dict, discarded: bool = False) -> None:
         """The replica's launch record: what the runner ran, and what the backend can read of what the server saw.
-        `discarded`: a replica of a scale round's try that was run again (`_discard_try`)."""
+        `discarded`: a replica of a scale round's try that was run again (`_discard_try`). Written once per start: a
+        replica already recorded is skipped."""
+        if replica.get("recorded"):
+            return
         facts: dict = {}
         read = getattr(self.backend, "launch_facts", None)
         if read is not None:
@@ -494,6 +500,7 @@ class Runner:
             gpus=facts.get("gpus") if isinstance(facts.get("gpus"), str) else None,
             gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None,
             discarded=discarded))
+        replica["recorded"] = True
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
@@ -560,10 +567,25 @@ class Runner:
 
     def _discard_try(self, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict, error: Exception,
                      tries: int) -> None:
-        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, take both replicas down with their
-        launch records marked discarded (their memory-check retries stay in them and in the round's start_retries),
-        keep every file of that try as *.try-N.* (artifact keys *_try_N), and clear what the try had recorded, so the
-        round starts again from the GPU check."""
+        """After a surge whose GuideLLM timed out: record that the try is discarded (the round's load_retries and a
+        note, first, so a round whose discard fails or is stopped partway still says why its launch records are
+        marked discarded), clear what the try had recorded, stop GuideLLM and the router, keep every file of that try
+        as *.try-N.* (artifact keys *_try_N), and take both replicas down with their launch records marked discarded
+        (their memory-check retries stay in them and in the round's start_retries). The round then starts again from
+        the GPU check.
+
+        While `held["discarding"]` is set, every replica in `held` belongs to the discarded try, and the round's
+        teardown (measure) finishes a discard that a failed stop or a SIGTERM cut short (`_discard_replica`): each
+        start is recorded once, marked discarded, and a replica whose stop failed is stopped once more. A failed stop
+        here fails the round, as that replica may still hold the GPU and its container name."""
+        record["load_retries"] = tries
+        record.setdefault("notes", []).append(
+            f"{error}; that try was discarded, to run the round once more from a new first replica, with the same "
+            f"requests (its files are the *.try-{tries}.* files, its launch records are marked discarded)")
+        held["discarding"] = tries
+        record.pop("scale", None)
+        record.pop("_reported_version", None)
+        record["startup"], record["levels"], record["metrics"] = None, [], {}
         self._stop_scale_helpers(held, record)
         held["load"] = held["router"] = None
 
@@ -582,8 +604,16 @@ class Runner:
         keep("guidellm.log", "guidellm")
         keep("router.log", "router")
         for replica in list(reversed(held["replicas"])):  # the added replica first, the first replica last
-            n = replica["replica"]
-            self._launch(replica, spec, record, discarded=True)
+            self._discard_replica(replica, spec, record, out_dir, rel, held)
+        held["discarding"] = None
+
+    def _discard_replica(self, replica: dict, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict,
+                         quiet: bool = False) -> None:
+        """One replica of a discarded try: its launch record marked discarded and its log as <stem>.try-N.log, each
+        once, then its teardown. `quiet` (the round's own teardown): a failed stop becomes a note."""
+        n, tries = replica["replica"], held["discarding"]
+        self._launch(replica, spec, record, discarded=True)
+        if not replica.get("log_kept"):
             stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
             try:
                 (out_dir / f"{stem}.try-{tries}.log").write_text(self.backend.logs(replica["handle"]),
@@ -591,16 +621,17 @@ class Runner:
                 record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{stem}.try-{tries}.log"
             except Exception as read_error:
                 record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(read_error).__name__}")
+            replica["log_kept"] = True
+        try:
             self.backend.stop(replica["handle"])
-            held["replicas"].remove(replica)
-        held["handle"] = None
-        record.pop("scale", None)
-        record.pop("_reported_version", None)
-        record["startup"], record["levels"], record["metrics"] = None, [], {}
-        record["load_retries"] = tries
-        record.setdefault("notes", []).append(
-            f"{error}; the round was run once more from a new first replica, with the same requests (that try's "
-            f"files are the *.try-{tries}.* files, its launch records are marked discarded)")
+        except Exception as stop_error:
+            if not quiet:
+                raise
+            record.setdefault("notes", []).append(
+                f"teardown of replica {n} of the discarded try: {type(stop_error).__name__}: {stop_error}")
+        held["replicas"].remove(replica)
+        if n == 1:
+            held["handle"] = None
 
     def _surge(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict, target: str) -> None:
