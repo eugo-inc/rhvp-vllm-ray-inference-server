@@ -58,7 +58,8 @@ def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env
            gpu_uuids: Sequence[str] | None = None) -> dict:
     """One launch record. `replica` is 1 for a round's first server start and counts up for each replica a
     scale-out round adds. `command` is what the runner set in place of the image's entrypoint (None: the image's own
-    ran). `env` is the environment the server process saw, as read from `env_source`; None records nothing.
+    ran). `entrypoint` is "image" also when that command is the image's own entrypoint (as for preset ray-serve-llm),
+    which only a backend that reads the image (`image_entrypoint`) can tell. `env` is the environment the server process saw, as read from `env_source`; None records nothing.
     `start_retries` is how many times this replica was started again after vLLM's start-up memory check stopped it
     (the record describes the last start). `gpus` is the GPU request the platform got for this start (docker: "all"
     or device ids), `gpu_uuids` the UUIDs of the GPUs that request reached; None when the backend does not say."""
@@ -75,7 +76,7 @@ def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env
     return {
         "replica": replica,
         "started_at": started_at,
-        "entrypoint": "override" if command else "image",
+        "entrypoint": "override" if command and list(command) != list(image_entrypoint or []) else "image",
         "command": list(command) if command else None,
         "args": list(args),
         "image_entrypoint": list(image_entrypoint) if image_entrypoint is not None else None,

@@ -1391,7 +1391,7 @@
             "image",
             "override"
           ],
-          "description": "image: the image's own entrypoint ran; override: the side's command ran in its place, bypassing whatever the entrypoint sets."
+          "description": "image: the image's own entrypoint ran (with no command set, or with a command equal to image_entrypoint); override: the side's command ran in its place, bypassing whatever the entrypoint sets. Where image_entrypoint is null (the image was not read, as on OpenShift), a command counts as override even when it is the image's own entrypoint."
         },
         "command": {
           "type": [

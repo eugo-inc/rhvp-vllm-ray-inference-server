@@ -293,6 +293,12 @@ def test_launch_record_matches_the_schema():
     assert override["entrypoint"] == "override" and override["env"] == {"VLLM_FOO": "1"}
     image = launch.record(2, None, ["--model", "m"], None, "process")
     assert image["entrypoint"] == "image" and image["env_source"] == "none" and image["env"] == {}
+    # Preset ray-serve-llm sets the server image's own ENTRYPOINT as its command: that runs the image's entrypoint.
+    own = launch.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none",
+                        image_entrypoint=["/opt/app-root/src/entrypoint.sh"])
+    assert own["entrypoint"] == "image"
+    unknown = launch.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none")
+    assert unknown["entrypoint"] == "override"
     validator = jsonschema.Draft202012Validator({"$defs": SCHEMA["$defs"], "$ref": "#/$defs/launch"})
     for item in (override, image):
         validator.validate(item)
