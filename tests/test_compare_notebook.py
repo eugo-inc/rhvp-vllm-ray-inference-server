@@ -206,3 +206,35 @@ def test_the_scale_out_cell_with_no_forced_step_and_no_gpu(monkeypatch):
     text = _shown(monkeypatch, results, show.scale_out)
     assert words.SCALE_NONE in text and words.SCALE_SHARE not in text
     assert words.SCALE_GPU_NONE in text and words.SCALE_GPU_SHARED not in text
+
+
+def test_sides_with_different_compile_caches_are_named_next_to_the_primary_metrics(monkeypatch):
+    # A warm cache alone shortens a start, and the start-up times are primary metrics: a run whose two sides differ
+    # in compileCache says so in results.md and the notebook, next to the verdicts, and both show each side's setting.
+    for results in (example.synthesize(), example.synthesize_scale_out()):
+        results["plan"]["sides"][0]["compile_cache"] = "cold"
+        results["plan"]["sides"][1]["compile_cache"] = "warm"
+        markdown = report.markdown(results)
+        assert "| Side | Name | Image | Digest | Server version | Compile cache |" in markdown
+        assert re.search(r"^\| A \|.*\| cold \|$", markdown, re.MULTILINE)
+        assert re.search(r"^\| B \|.*\| warm \|$", markdown, re.MULTILINE)
+        primary, rest = markdown.split("Primary metrics", 1)[1].split("Secondary metrics", 1)
+        assert "different compile caches: side A cold, side B warm" in primary, primary
+        assert "different compile caches" not in rest
+        differ = words.CACHE_DIFFER.format(a="cold", b="warm")
+        assert differ in _shown(monkeypatch, results, show.verdicts)
+        assert differ in _shown(monkeypatch, results, show.startup)
+        provenance = _shown(monkeypatch, results, show.provenance)
+        assert "Compile cache" in provenance and "warm" in provenance
+    scale = _shown(monkeypatch, results, show.scale_out)
+    assert words.CACHE_DIFFER.format(a="cold", b="warm") in scale
+
+
+def test_sides_with_the_same_compile_cache(monkeypatch):
+    results = example.synthesize()
+    assert "compile caches" not in report.markdown(results)  # both cold, the default: nothing to say
+    assert "compile caches" not in _shown(monkeypatch, results, show.verdicts)
+    for side in results["plan"]["sides"]:
+        side["compile_cache"] = "warm"
+    assert "Both sides started their scored rounds with warm compile caches" in report.markdown(results)
+    assert words.CACHE_BOTH_WARM in _shown(monkeypatch, results, show.verdicts)

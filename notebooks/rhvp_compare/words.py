@@ -35,7 +35,9 @@ SECTION_TEXT = {
     2: ("Time to ready runs from just before the runner asks for the side's pod until the server lists the model; "
         "time to first answer, until the first generated text of a streamed request comes back. Both are timed by "
         "the runner, the same way for every image, and the warm-up rounds (which pull the image and download the "
-        "model) are left out. The phases below come from the servers' own log lines, as each server words them."),
+        "model) are left out. A side set to compileCache warm starts its scored rounds with the compile caches its "
+        "warm-up round left; the table in section 5 shows each side's setting. The phases below come from the "
+        "servers' own log lines, as each server words them."),
     3: ("Output tokens per joule at each concurrency level: the level's output tokens per second divided by the mean "
         "GPU power over the level's time window. The power is GPU-only power, the board power the GPU reports; the "
         "rest of the machine is not in it."),
@@ -80,6 +82,12 @@ LEVEL_SURGE = "round {index} side {side}, the surge"
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = "Pairs lost to one side failing, per metric: {lost}. Those metrics are INCONCLUSIVE."
 RUN_OTHERS = "Other runs in the results volume: {runs}."
+#: sides[].compileCache, as the tables show it.
+CACHE_NAMES = {"cold": "cold", "warm": "warm"}
+CACHE_DIFFER = ("The two sides started with different compile caches: side A {a}, side B {b}. The start-up figures "
+                "and their verdicts compare the two cache settings together with the two images.")
+CACHE_BOTH_WARM = ("Both sides started their scored rounds with warm compile caches, kept from their warm-up "
+                   "rounds.")
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----
@@ -154,7 +162,7 @@ SCALE_NONE = "No scored round of this run reached the forced step."
 
 # ---- section 5: provenance ----
 
-SIDES_HEADERS = ("Side", "Name", "Image", "As pulled", "Server version")
+SIDES_HEADERS = ("Side", "Name", "Image", "As pulled", "Server version", "Compile cache")
 MACHINE_LINE = "GPU: {gpu} · count {count} · driver {driver} · node type {node} · {arch} · OpenShift {openshift}"
 LOAD_LINE = ("Load: GuideLLM {version}, {prompt} prompt and {output} output tokens per request, {seconds:g} s at "
              "each of {levels} concurrent streams, seed {seed}. Server seed {server_seed}.")

@@ -61,14 +61,15 @@ def markdown(results: Mapping) -> str:
                  f"{run.get('finished_at') or '-'}. Platform: {plan.get('platform', '-')}.")
     revision = f" at revision {model['revision']}" if model.get("revision") else ""
     lines += ["", f"Model: `{model['source']}`{revision}, served as `{model['id']}`.", ""]
-    lines += ["| Side | Name | Image | Digest | Server version |", "|---|---|---|---|---|"]
+    lines += ["| Side | Name | Image | Digest | Server version | Compile cache |", "|---|---|---|---|---|---|"]
     sides_prov = prov.get("sides") or {}
-    for side in plan["sides"]:
+    caches = [side.get("compile_cache") or "cold" for side in plan["sides"]]
+    for side, cache in zip(plan["sides"], caches):
         p = sides_prov.get(side["key"]) or {}
         version = p.get("server_version") or {}
         shown = " ".join(f"{k} {v}" for k, v in version.items() if k != "source" and v) or "-"
         lines.append(f"| {side['key']} | {side['name']} | `{side['image']}` | `{p.get('image_digest') or '-'}` | "
-                     f"{shown} |")
+                     f"{shown} | {cache} |")
     gpu = prov.get("gpu") or {}
     node = prov.get("node") or {}
     lines += ["", f"GPU: {gpu.get('product') or '-'} (count {gpu.get('count') or '-'}, driver "
@@ -114,6 +115,13 @@ def markdown(results: Mapping) -> str:
             lines.append(f"| {row['label']} | {_num(row['a_median'], row['unit'])} | "
                          f"{_num(row['b_median'], row['unit'])} | {_ratio(row)} | {row['n_pairs']} | "
                          f"{_p(p_value)} | {row['verdict']} |")
+        if role == "primary" and caches[0] != caches[1]:
+            lines += ["", f"**The two sides started with different compile caches: side A {caches[0]}, side B "
+                          f"{caches[1]}.** The start-up figures and their verdicts compare the two cache settings "
+                          "together with the two images."]
+        elif role == "primary" and caches == ["warm", "warm"]:
+            lines += ["", "Both sides started their scored rounds with warm compile caches, kept from their warm-up "
+                          "rounds."]
     floor = plan.get("floor") or {}
     if floor and not floor.get("reachable", True):
         lines += ["", f"Note: with {plan['pairs']} pairs and {floor['family_size']} primary metrics the smallest "

@@ -763,7 +763,9 @@ pattern's server with autoscaling on. Energy is not measured in this mode.
 With `scaleOut.sharedGpu: true` (the default) both replicas of a side share one GPU: `server.gpuMemoryUtilization`
 defaults to 0.4 then, and the plan refuses more than 0.475. A side with `compileCache: warm` (docker only, and only
 with the warm-up round) keeps its compile caches from its warm-up round in a docker volume, so its scored rounds
-start with them; `cold`, the default, starts every replica with empty caches.
+start with them; `cold`, the default, starts every replica with empty caches. `results.md` and the notebook show each
+side's setting, and when the two sides differ they say so next to the primary metrics: the start-up figures then
+compare the two cache settings together with the two images. The setting works in mode `pairs` too.
 
 `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
 mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`; by

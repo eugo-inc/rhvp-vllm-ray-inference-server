@@ -203,6 +203,22 @@ def _frame(run: str | None):
     return results, parts
 
 
+def _caches(plan: dict) -> tuple[str, str]:
+    """Each side's compileCache (cold when the results file predates the setting)."""
+    a, b = plan["sides"]
+    return a.get("compile_cache") or "cold", b.get("compile_cache") or "cold"
+
+
+def _cache_note(plan: dict) -> str | None:
+    """A notice when the two sides started with different compile caches, a line when both were warm, else None."""
+    a, b = _caches(plan)
+    if a != b:
+        return draw.notice(words.CACHE_DIFFER.format(a=words.CACHE_NAMES.get(a, a), b=words.CACHE_NAMES.get(b, b)))
+    if a == "warm":
+        return line(words.CACHE_BOTH_WARM)
+    return None
+
+
 def _rows(results: dict) -> dict[str, dict]:
     return {row["id"]: row for row in (results.get("analysis") or {}).get("metrics") or []}
 
@@ -236,6 +252,8 @@ def verdicts(run: str | None = None) -> None:
             if rows:
                 parts.append(line(title))
                 parts.append(table(headers, rows, raw_last=True))
+                if role == "primary" and _cache_note(results["plan"]):
+                    parts.append(_cache_note(results["plan"]))
         parts.append(line(words.METHOD_LINE.format(
             test=words.TEST_NAMES.get(method["test"], method["test"]),
             correction=words.CORRECTION_NAMES.get(method["correction"], method["correction"]),
@@ -268,6 +286,8 @@ def startup(run: str | None = None) -> None:
             table_rows.append([label, _num(row.get("a_median"), "s"), _num(row.get("b_median"), "s"),
                                _ratio(row) if row else words.NO_FIGURE, verdict_cell(row)])
         parts.append(table(words.STARTUP_HEADERS, table_rows, raw_last=True))
+        if _cache_note(results["plan"]):
+            parts.append(_cache_note(results["plan"]))
         if any(rows.get(m, {}).get("role") == "secondary" for m in ("startup.ready_s", "startup.first_answer_s")):
             parts.append(line(words.SECONDARY_NOTE))
         phases = _phase_table(results, words.PHASE_HEADERS, lambda r: (r.get("startup") or {}).get("breakdown"))
@@ -360,6 +380,8 @@ def scale_out(run: str | None = None) -> None:
              _num((rows.get(m["id"]) or {}).get("b_median"), m["unit"]),
              _ratio(rows[m["id"]]) if m["id"] in rows else words.NO_FIGURE, verdict_cell(rows.get(m["id"]) or {})]
             for m in declared], raw_last=True))
+        if _cache_note(plan):
+            parts.append(_cache_note(plan))
         if any((rows.get(m) or {}).get("role") == "secondary" for m in ids):
             parts.append(line(words.SECONDARY_NOTE))
         stepped = {side: [r for r in _scored(results, side) if (r.get("scale") or {}).get("new_replica")]
@@ -416,11 +438,11 @@ def provenance(run: str | None = None) -> None:
         plan, prov = results["plan"], results.get("provenance") or {}
         sides = prov.get("sides") or {}
         rows = []
-        for side in plan["sides"]:
+        for side, cache in zip(plan["sides"], _caches(plan)):
             p = sides.get(side["key"]) or {}
             version = (p.get("server_version") or {}).get("vllm")
             rows.append([side["key"], side["name"], side["image"], p.get("image_digest") or words.NO_FIGURE,
-                         f"vLLM {version}" if version else words.NO_FIGURE])
+                         f"vLLM {version}" if version else words.NO_FIGURE, words.CACHE_NAMES.get(cache, cache)])
         parts.append(table(words.SIDES_HEADERS, rows))
         gpu, node, cluster = prov.get("gpu") or {}, prov.get("node") or {}, prov.get("cluster") or {}
         parts.append(line(words.MACHINE_LINE.format(
