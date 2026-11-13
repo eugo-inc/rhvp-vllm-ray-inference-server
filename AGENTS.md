@@ -299,9 +299,11 @@ Three parts, each off by default. With every default, the local charts render ex
   `oc annotate` step, and so does the README's recovery for a runner killed outright (Argo CD ignores the
   annotation, so nothing else removes it). `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace
   period.
-- **`kuberay`** is a third value of `global.scaleOut.mode`, designed but not built. `scripts/pattern_settings.py`
-  (through `scripts/validate-values.sh`) and `charts/all/ray-serve-llm/templates/_settings.tpl` refuse it, and
-  any unknown mode, with the same message; keep the two in step (`tests/test_scaleout_contract.py`).
+
+`global.scaleOut.mode` takes `none` or `keda`. `scripts/pattern_settings.py` (through `scripts/validate-values.sh`) and
+`charts/all/ray-serve-llm/templates/_settings.tpl` refuse any other value with the same message; keep the two in step
+(`tests/test_scaleout_contract.py`). Serving one model across several machines with Ray, as one Ray cluster, is out of
+scope here; OpenShift AI offers KubeRay for that.
 
 Switching keda mode off removes nothing: the apps sync without pruning, so the ScaledObject keeps scaling the
 server until someone deletes it (README, "Scale out", has the commands), and the operator, `openshift-keda` and the
@@ -621,9 +623,6 @@ GPU knob, a build or a new serving mode:
 - **In-cluster builds under Argo CD.** https://github.com/validatedpatterns-sandbox/qna-chat-amd
   - `charts/all/llm/templates/llm-buildconfig.yaml`: a BuildConfig with `dockerfilePath`.
   - `values-hub.yaml`: `ignoreDifferences` for image-triggered Deployments and BuildConfig `.spec.paused`.
-- **A future RayService variant through the KubeRay operator.**
-  https://github.com/kuberay-project/kuberay/blob/master/ray-operator/config/samples/ray-service.llm-serve.yaml
-  This is `ray.serve.llm:build_openai_app` as a RayService. The repo moved there from `ray-project/kuberay`.
 - **The framework itself.** The pattern-author skill in `.claude/skills/pattern-author/` (`SKILL.md`,
   `reference.md`) covers the clustergroup values schema, the values-file order, sharedValueFiles and imperative
   jobs. `.cursor/skills/pattern-author/` holds the same skill.

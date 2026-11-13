@@ -19,8 +19,8 @@
 #    after the catalog's normalization (platform wrapper removed, owners as a list).
 # 4. Checks the scale-out settings (scripts/pattern_settings.py) for each case of step 1:
 #    the server chart's values.yaml with that case's values files merged over it. It
-#    refuses global.scaleOut.mode kuberay (designed, not built yet) and any unknown mode,
-#    the same way the server chart's render does.
+#    refuses any global.scaleOut.mode other than none or keda, the same way the server
+#    chart's render does.
 #
 # Every schema is downloaded from a pinned commit and checked against its sha256.
 # Needs python3 with PyYAML and jsonschema (PYTHON=... picks the interpreter), and

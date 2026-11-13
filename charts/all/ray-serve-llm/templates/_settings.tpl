@@ -24,10 +24,8 @@
 {{- $scale := .Values.global.scaleOut | default dict -}}
 {{- $mode := "none" -}}
 {{- if hasKey $scale "mode" }}{{ $mode = $scale.mode }}{{ end -}}
-{{- if eq (toString $mode) "kuberay" -}}
-{{- fail "global.scaleOut.mode: kuberay mode is designed but not built yet; use none or keda" -}}
-{{- else if not (and (kindIs "string" $mode) (has $mode (list "none" "keda"))) -}}
-{{- fail (printf "global.scaleOut.mode must be none or keda (kuberay is designed but not built yet); got %v" $mode) -}}
+{{- if not (and (kindIs "string" $mode) (has $mode (list "none" "keda"))) -}}
+{{- fail (printf "global.scaleOut.mode must be none or keda; got %v" $mode) -}}
 {{- end -}}
 {{- $srv := .Values.server -}}
 {{- if or (hasKey $srv "minReplicas") (hasKey $srv "maxReplicas") -}}

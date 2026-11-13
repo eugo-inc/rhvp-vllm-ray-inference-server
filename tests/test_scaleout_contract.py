@@ -77,7 +77,6 @@ def test_defaults_change_nothing():
 
 def test_values_check_names_every_mode():
     assert pattern_settings.SCALE_OUT_MODES == ("none", "keda")
-    assert pattern_settings.SCALE_OUT_DESIGNED == ("kuberay",)
     assert pattern_settings.COMPARE_MODES == plans.MODES == ("pairs", "scaleout")
     assert pattern_settings.COMPILE_CACHE_MODES == ("none", "node", "shared")
 
@@ -86,8 +85,7 @@ def test_values_check_names_every_mode():
 
 
 @pytest.mark.parametrize("over, message", [
-    ({"global": {"scaleOut": {"mode": "kuberay"}}}, pattern_settings.KUBERAY_NOT_BUILT),
-    ({"global": {"scaleOut": {"mode": "hpa"}}}, "global.scaleOut.mode must be none or keda"),
+    ({"global": {"scaleOut": {"mode": "hpa"}}}, "global.scaleOut.mode must be none or keda; got hpa"),
     ({"global": {"scaleOut": {"mode": False}}}, "global.scaleOut.mode must be none or keda"),
     ({"global": {"compare": {"mode": "surge"}}}, "global.compare.mode must be pairs or scaleout; got surge"),
     ({"server": {"minReplicas": 2}}, pattern_settings.MOVED),
@@ -159,10 +157,6 @@ def test_the_shared_gpu_reserve_grows_with_the_replica_count(replicas, share, me
     assert fits != refused
 
 
-def test_kuberay_message_is_plain():
-    assert "kuberay mode is designed but not built yet" in pattern_settings.KUBERAY_NOT_BUILT
-
-
 @pytest.mark.parametrize("over", [
     {"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5,
                 "engineKwargs": {"gpu_memory_utilization": 0.45}}},
@@ -182,7 +176,8 @@ def test_values_check_accepts(over):
 
 
 def test_values_check_runs_in_validate_values(tmp_path):
-    """validate-values.sh refuses kuberay in values-global.yaml (needs its pinned schemas from the network)."""
+    """validate-values.sh refuses an unknown scale-out mode in values-global.yaml (needs its pinned schemas from the
+    network)."""
     copy_root = tmp_path / "repo"
     for rel in subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
                               check=True).stdout.split():
@@ -195,21 +190,20 @@ def test_values_check_runs_in_validate_values(tmp_path):
     text = (copy_root / "values-global.yaml").read_text()
     assert text.count("  scaleOut:\n    mode: none\n") == 1
     (copy_root / "values-global.yaml").write_text(text.replace("  scaleOut:\n    mode: none\n",
-                                                               "  scaleOut:\n    mode: kuberay\n"))
+                                                               "  scaleOut:\n    mode: hpa\n"))
     proc = subprocess.run([str(copy_root / "scripts/validate-values.sh")], capture_output=True, text=True,
                           env={**os.environ, "PYTHON": sys.executable}, timeout=300)
     if "sha256" in proc.stderr or "urlopen" in proc.stderr or "URLError" in proc.stderr:
         pytest.skip("validate-values.sh could not download its schemas")
     assert proc.returncode == 1
-    assert f"scale-out settings, AWS: {pattern_settings.KUBERAY_NOT_BUILT}" in proc.stderr
+    assert "scale-out settings, AWS: global.scaleOut.mode must be none or keda; got hpa" in proc.stderr
 
 
 # ---- the charts refuse the same settings --------------------------------------------------------
 
 
 @pytest.mark.parametrize("case, message", [
-    ("scaleout-kuberay", pattern_settings.KUBERAY_NOT_BUILT),
-    ("scaleout-unknown", "global.scaleOut.mode must be none or keda (kuberay is designed but not built yet); got hpa"),
+    ("scaleout-unknown", "global.scaleOut.mode must be none or keda; got hpa"),
     ("autoscaling-no-target", pattern_settings.NO_TARGET),
     ("autoscaling-over-gpus",
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),

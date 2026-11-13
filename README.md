@@ -620,10 +620,11 @@ vLLM replica, and its charts render as they did before scale out existed.
 | Inside the pod | `server.autoscaling.maxReplicas` above 1, in `charts/all/ray-serve-llm/values.yaml` | vLLM replicas in the one server pod | Ray Serve's own autoscaler |
 | Across pods | `global.scaleOut.mode: keda`, in `values-global.yaml` | whole server pods | OpenShift: Red Hat's Custom Metrics Autoscaler, the supported build of KEDA |
 
-`global.scaleOut.mode` takes `none` (the default), `keda` or `kuberay`. `kuberay`, where KubeRay's Ray autoscaler
-adds Ray worker pods, is designed but not built: the values check (`scripts/validate-values.sh`) and the chart render
-both refuse it with a message, rather than falling back to `none`. The layer inside the pod does not depend on
-`global.scaleOut.mode`, and the two layers can be combined; that combination has not been tried.
+`global.scaleOut.mode` takes `none` (the default) or `keda`. The values check (`scripts/validate-values.sh`) and the
+chart render both refuse any other value with a message, rather than falling back to `none`. Serving one model across
+several machines with Ray, as one Ray cluster, is out of scope here; OpenShift AI offers KubeRay for that. The layer
+inside the pod does not depend on `global.scaleOut.mode`, and the two layers can be combined; that combination has not
+been tried.
 
 ### Inside the pod: more vLLM replicas
 
@@ -865,7 +866,6 @@ mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.
 - The benchmark's mode ran end to end with docker against GuideLLM's mock servers only. A surge in which some
   requests missed the goals has not run end to end (unit tests only), and the OpenShift scale round is not built.
-- `kuberay` mode is not built.
 
 ## Changing the model
 

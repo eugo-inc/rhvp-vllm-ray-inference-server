@@ -16,11 +16,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-#: global.scaleOut.mode values that are built.
+#: global.scaleOut.mode values; none is the default.
 SCALE_OUT_MODES = ("none", "keda")
-#: global.scaleOut.mode values that are designed but not built yet: refused with KUBERAY_NOT_BUILT.
-SCALE_OUT_DESIGNED = ("kuberay",)
-KUBERAY_NOT_BUILT = "global.scaleOut.mode: kuberay mode is designed but not built yet; use none or keda"
 #: global.compare.mode values; pairs is the default.
 COMPARE_MODES = ("pairs", "scaleout")
 #: compileCache.mode values; none is the default.
@@ -97,11 +94,8 @@ def check_global(values: Mapping) -> list[str]:
     """The two mode switches in global: global.scaleOut.mode and global.compare.mode."""
     out = []
     mode = scale_out_mode(values)
-    if mode in SCALE_OUT_DESIGNED:
-        out.append(KUBERAY_NOT_BUILT)
-    elif not (isinstance(mode, str) and mode in SCALE_OUT_MODES):
-        out.append(f"global.scaleOut.mode must be none or keda (kuberay is designed but not built yet); "
-                   f"got {_show(mode)}")
+    if not (isinstance(mode, str) and mode in SCALE_OUT_MODES):
+        out.append(f"global.scaleOut.mode must be none or keda; got {_show(mode)}")
     compare = (values.get("global") or {}).get("compare") or {}
     if "mode" in compare and not (isinstance(compare["mode"], str) and compare["mode"] in COMPARE_MODES):
         out.append(f"global.compare.mode must be pairs or scaleout; got {_show(compare['mode'])}")

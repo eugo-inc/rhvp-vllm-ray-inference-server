@@ -433,7 +433,7 @@ def test_shared_value_files_switch(cg, render):
         "/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml",
         "/overrides/values-scaleout-{{ $.Values.global.scaleOut.mode }}.yaml"]
     assert GLOBAL["global"]["gpuMachineSet"] == "create"
-    # Only these two exist: global.scaleOut.mode none (and kuberay, which the server chart refuses) adds no file.
+    # Only these two exist: global.scaleOut.mode none adds no file.
     assert sorted(p.name for p in (REPO / "overrides").iterdir()) == [
         "values-gpu-machineset-create-AWS.yaml", "values-scaleout-keda.yaml"]
 

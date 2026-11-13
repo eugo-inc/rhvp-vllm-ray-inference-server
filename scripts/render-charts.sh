@@ -219,8 +219,6 @@ refuse() {
     exit 1
   fi
 }
-refuse scaleout-kuberay ray-serve-llm vllm-inference "kuberay mode is designed but not built yet" \
-  --set global.scaleOut.mode=kuberay
 refuse scaleout-unknown ray-serve-llm vllm-inference "global.scaleOut.mode must be none or keda" \
   --set global.scaleOut.mode=hpa
 refuse autoscaling-no-target ray-serve-llm vllm-inference "targetOngoingRequests must be set when maxReplicas" \

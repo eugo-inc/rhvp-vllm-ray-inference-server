@@ -36,8 +36,6 @@ global:
   #   keda     - OpenShift's Custom Metrics Autoscaler adds and removes whole
   #              server pods on vLLM's waiting-request count (settings:
   #              scaleOut in charts/all/ray-serve-llm/values.yaml).
-  #   kuberay  - KubeRay adds Ray worker pods. Designed, not built yet: the
-  #              values check and the server chart refuse it.
   scaleOut:
     mode: none
 
