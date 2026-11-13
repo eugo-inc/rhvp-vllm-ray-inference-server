@@ -86,6 +86,21 @@ def levels_unusable(results: Mapping) -> list[dict]:
     return out
 
 
+def energy_methods_mixed(results: Mapping) -> list[dict]:
+    """The load levels whose tokens per joule came from the energy counter in some finished measured launches and from
+    the mean of the power samples in others (energy.window_power picks per level), with the launches of each."""
+    by_level: dict[int, dict[str, list[int]]] = {}
+    for r in results.get("launches") or []:
+        if r.get("status") != "ok" or r.get("kind") == "warmup":
+            continue
+        for level in r.get("levels") or []:
+            method = (level.get("energy") or {}).get("method")
+            if method in ("energy_counter", "power_mean") and level.get("concurrency") is not None:
+                by_level.setdefault(level["concurrency"], {}).setdefault(method, []).append(r["index"])
+    return [{"concurrency": c, "energy_counter": methods["energy_counter"], "power_mean": methods["power_mean"]}
+            for c, methods in sorted(by_level.items()) if len(methods) == 2]
+
+
 def _primary(results: Mapping) -> list[dict]:
     rows = ((results.get("analysis") or {}).get("comparisons")) or []
     return [{"case": row["case"], "verdict": row["verdict"], "outcome": row["outcome"], "reason": row.get("reason"),

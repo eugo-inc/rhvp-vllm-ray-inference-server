@@ -81,6 +81,10 @@ LOAD_RETRIED_RAN = "{index} ({side}): ran again"
 LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
+ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
+                "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
+ENERGY_MIXED_LEVEL = ("at {concurrency} streams, the energy counter in launches {counter} and the power samples in "
+                      "launches {power}")
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
             "(side_failed).")
@@ -91,7 +95,9 @@ TWIN_DIFFERS = ("A side leaned the same way against its twin in more rounds than
 TWIN_DIFFERS_CASE = "side {side} on {case} (p = {p})"
 TWIN_ZERO = ("A figure of 0 in a side's comparison with its twin gives no ratio: that side has no noise floor there, "
              "and every case whose floor uses it has NO VERDICT (a figure of 0): {cases}.")
-TWIN_ZERO_CASE = "{who} on {case} in round {rounds} (no verdict for {affected})"
+TWIN_ZERO_CASE = "{who} on {case} in {rounds} (no verdict for {affected})"
+ROUND_ONE = "round {n}"
+ROUND_MANY = "rounds {n}"
 TWIN_ZERO_SIDE = "side {side}"
 TWIN_ZERO_TWIN = "side {side}'s twin"
 SIDE_LINE = "A = {a} · B = {b}"

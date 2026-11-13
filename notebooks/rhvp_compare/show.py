@@ -189,6 +189,11 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                 for u in summary.levels_unusable(results)]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
+    mixed = [words.ENERGY_MIXED_LEVEL.format(concurrency=m["concurrency"], power=", ".join(map(str, m["power_mean"])),
+                                             counter=", ".join(map(str, m["energy_counter"])))
+             for m in summary.energy_methods_mixed(results)]
+    if mixed:
+        parts.append(line(words.ENERGY_MIXED.format(levels="; ".join(mixed))))
     if run.get("error_code"):
         parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
     analysis = results.get("analysis") or {}
@@ -201,8 +206,9 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                for t in twins if t["p_raw"] < 0.05]
     if differs:
         parts.append(draw.notice(words.TWIN_DIFFERS.format(cases="; ".join(differs), tested=len(twins))))
-    zero = [words.TWIN_ZERO_CASE.format(who=who.format(side=t["side"]), case=t["case"],
-                                        rounds=", ".join(map(str, t[key])), affected=", ".join(t["cases"]))
+    zero = [words.TWIN_ZERO_CASE.format(who=who.format(side=t["side"]), case=t["case"], affected=", ".join(t["cases"]),
+                                        rounds=(words.ROUND_MANY if len(t[key]) > 1 else words.ROUND_ONE).format(
+                                            n=", ".join(map(str, t[key]))))
             for t in analysis.get("nonpositive_twins") or []
             for who, key in ((words.TWIN_ZERO_SIDE, "side_rounds"), (words.TWIN_ZERO_TWIN, "twin_rounds")) if t[key]]
     if zero:

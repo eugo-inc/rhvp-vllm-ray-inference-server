@@ -21,11 +21,12 @@ Two checks this pattern adds to the rule, because a failed launch does not stop 
 - launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
   (more_than_one_node).
 
-A figure of 0 or less gives no ratio. In a pair of B and A the case gets NO VERDICT (nonpositive_value). In a side's
-comparison with its twin, that side has no noise floor on the case, and every case whose floor uses it (the case's
-floor group) gets NO VERDICT (nonpositive_value) too. The floor is never taken from the rounds that are left: which
-rounds those are would be chosen after seeing a figure. `nonpositive_twins` names the side, the rounds and the cases,
-and so does a note.
+A figure of 0 or less gives no ratio. On side A or B the case gets NO VERDICT (nonpositive_value), in a pair of B and
+A or not: a round the other side has no figure for is not left out unseen. In a side's comparison with its twin, that
+side has no noise floor on the case, and every case whose floor uses it (the case's floor group) gets NO VERDICT
+(nonpositive_value) too. The floor is never taken from the rounds that are left: which rounds those are would be
+chosen after seeing a figure. `nonpositive_twins` names the side, the rounds and the cases, and a note names them in
+`notes`.
 
 A launch whose GuideLLM timed out runs again from a new start of the side (runner.LOAD_RETRIES), so it can finish
 with figures like any other. Every time-out still counts against its side: `load_timeouts` per side over the whole
@@ -101,6 +102,12 @@ def _paired(first: Mapping[int, float], second: Mapping[int, float]) -> list[int
     return sorted(set(first) & set(second))
 
 
+def _rounds(numbers: Iterable[int]) -> str:
+    """"round 2" or "rounds 2, 5"."""
+    numbers = list(numbers)
+    return f"round{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}"
+
+
 def _floor_entry(floor: stats.Floor | None, case: str | None) -> dict | None:
     if floor is None:
         return None
@@ -161,9 +168,8 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             if test and test.p < 0.05:
                 differs.append((side, case["id"], max(lower, higher), lower + higher, test.p))
     for entry in nonpositive.values():  # the round and the side, then what it costs
-        where = ([f"side {entry['side']} in round(s) {', '.join(map(str, entry['side_rounds']))}"]
-                 if entry["side_rounds"] else [])
-        where += ([f"its twin in round(s) {', '.join(map(str, entry['twin_rounds']))}"] if entry["twin_rounds"] else [])
+        where = [f"side {entry['side']} in {_rounds(entry['side_rounds'])}"] if entry["side_rounds"] else []
+        where += [f"its twin in {_rounds(entry['twin_rounds'])}"] if entry["twin_rounds"] else []
         notes.append(f"side {entry['side']}'s comparison with its twin on {entry['case']} has a figure of 0 "
                      f"({'; '.join(where)}): side {entry['side']} has no noise floor for {', '.join(entry['cases'])}, "
                      f"and those cases get NO VERDICT (nonpositive_value)")
@@ -191,12 +197,17 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
         lower, higher = stats.signs(ratios)
         test = stats.sign_test(lower, higher) if len(positive) > 1 else None
         ratio = stats.median(ratios) if ratios else None
-        for side, other, values in ((subject, baseline, s), (baseline, subject, b)):  # a 0 not named beside its twin
+        # A 0 of side A or B gives the case no verdict wherever it is, also in a round the other side and the twin
+        # have no figure for: leaving it out would grade the case on the rounds that are left. One note names the
+        # rounds the twin note above does not.
+        own_zero = {side: [r for r in sorted(values) if values[r] <= 0]
+                    for side, values in ((subject, s), (baseline, b))}
+        for side, zero in own_zero.items():
             beside_twin = (nonpositive.get((side, cid)) or {}).get("side_rounds") or []
-            zero = [r for r in paired if values[r] <= 0 and r not in beside_twin]
+            zero = [r for r in zero if r not in beside_twin]
             if zero:
-                notes.append(f"side {side} had a figure of 0 on {cid} in round(s) {', '.join(map(str, zero))}, paired "
-                             f"with side {other}: {cid} gets NO VERDICT (nonpositive_value)")
+                notes.append(f"side {side} had a figure of 0 on {cid} in {_rounds(zero)}: {cid} gets NO VERDICT "
+                             f"(nonpositive_value)")
         first = sum(1 for r in positive if pos.get((r, subject), 0) < pos.get((r, baseline), 0))
         fs, fs_case = group_floor(subject, case)
         fb, fb_case = group_floor(baseline, case)
@@ -221,7 +232,7 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             "p_corrected": None, "order_split": [first, len(positive) - first],
             "lost": lost,
             "load_timeouts": {side: sum(1 for r in paired if timed_out.get((r, side))) for side in (subject, baseline)},
-            "_nonpositive": len(positive) != len(paired) or any(
+            "_nonpositive": len(positive) != len(paired) or any(own_zero.values()) or any(
                 (side, other) in nonpositive for side in (subject, baseline) for other in group_of(case)),
         })
 

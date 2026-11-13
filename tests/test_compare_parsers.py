@@ -220,6 +220,15 @@ def test_window_power_prefers_the_energy_counter():
     counter = [energy.Sample(6 * i, 6 * i * 150_000) for i in range(10)]  # ten distinct readings: 150 W
     by_counter = energy.window_power(ten, 0, 60, 10, counter)
     assert by_counter.method == "energy_counter" and by_counter.mean_w == pytest.approx(150.0)
+    # The thresholds exactly: 9 power samples are one short of 10; 9 distinct counter readings are too, also when
+    # repeats of one value (a scrape faster than the exporter's update) make it 10 samples.
+    short = energy.window_power(ten[:9], 0, 60, 10, counter)
+    assert short.mean_w is None and short.samples == 9 and "at least 10 are needed" in short.note
+    nine = energy.window_power(ten, 0, 60, 10, counter[:9])
+    assert nine.method == "power_mean" and nine.mean_w == pytest.approx(200.0)
+    repeated = counter[:9] + [energy.Sample(57, counter[8].value)]
+    assert len(repeated) == 10 and len(energy.collapse(repeated)) == 9
+    assert energy.window_power(ten, 0, 60, 10, repeated).method == "power_mean"
 
 
 def test_flat_values_keep_a_zero():

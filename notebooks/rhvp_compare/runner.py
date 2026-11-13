@@ -719,6 +719,9 @@ def plan_lines(the_plan: Mapping) -> list[str]:
     if not power["both_twins"]:
         out.append("note: without a twin for both sides no case can get a verdict (NO VERDICT: no_floor or "
                    "one_sided_floor)")
+    elif the_plan["rounds"] == 1:
+        out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
+                   f"verdict; with 1 round every case gets NO VERDICT (single_measurement)")
     elif not power["reachable"]:
         secondary = stats.min_rounds(1, the_plan["analysis"]["alpha"])
         graded = ("the secondary cases are graded on their own" if the_plan["rounds"] >= secondary else

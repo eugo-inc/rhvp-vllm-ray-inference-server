@@ -200,8 +200,8 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`inside_noise`, `not_significant`, or `order_unbalanced` when one side ran first more than 3 times as often).
   `no_verdict` comes first when a case cannot be graded, checked in this order: `more_than_one_node`, `side_failed`
   (a launch of A or B failed on its own account where the other did not; pattern-only, like the node check),
-  `nonpositive_value` (a 0 in a pair of B and A, or in a side's pair with its twin, which takes the side's floor on
-  that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary family, or of one
+  `nonpositive_value` (a 0 on A or B in any round, paired or not, or in a side's pair with its twin, which takes the
+  side's floor on that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary family, or of one
   case for a secondary), `no_floor`, `one_sided_floor`, `zero_floor`. There is no fixed tie band.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;

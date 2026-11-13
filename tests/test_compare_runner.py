@@ -850,11 +850,60 @@ def test_a_twins_zero_gives_its_floor_group_no_verdict_and_is_shown_in_the_noteb
         assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
         assert rows[case]["floor"]["subject"] is None and rows[case]["bar"] is None
     assert any(n.startswith("side B's comparison with its twin on c4/output_tokens_per_s has a figure of 0 (its twin "
-                            "in round(s) 2)") for n in analysis["notes"])
-    assert "has a figure of 0 (its twin in round(s) 2)" in (the_runner.dir / "results.md").read_text()
+                            "in round 2)") for n in analysis["notes"])
+    assert "has a figure of 0 (its twin in round 2)" in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
     assert "comparison with its twin gives no ratio" in head
     assert "twin on c4/output_tokens_per_s in round 2 (no verdict for c" in head
+
+
+def test_a_twin_at_0_in_every_round_is_named_and_its_group_gets_no_verdict(tmp_path):
+    # Launches 4 and 7 are B~same in rounds 1 and 2: its only paired rounds, both at 0 at 4 streams.
+    results, _, _ = run(tmp_path, FakeBackend(zero={4: 4, 7: 4}), rounds={"count": 2, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    zeros = {t["case"]: t for t in results["analysis"]["nonpositive_twins"]}
+    assert zeros and all((t["side"], t["side_rounds"], t["twin_rounds"]) == ("B", [], [1, 2]) for t in zeros.values())
+    rows = rows_of(results)
+    for case in {c for t in zeros.values() for c in t["cases"]}:
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
+    head = "".join(show._head(results, [], []))
+    assert "twin on c4/output_tokens_per_s in rounds 1, 2 (no verdict for" in head
+    assert any("(its twin in rounds 1, 2)" in note for note in results["analysis"]["notes"])
+
+
+class CounterIn(FakeBackend):
+    """Launch 1's sampler also gives an energy counter (150 W, a distinct reading every 0.5 s); the others do not."""
+
+    def sampler(self, plan, handle):
+        if handle["launch"]["index"] != 1:
+            return FakeSampler()
+
+        class WithCounter(FakeSampler):
+            def samples(self, start, end):
+                power, _, note = super().samples(start, end)
+                return power, [energy.Sample(s.t, s.t * 150_000) for s in power], note
+
+        return WithCounter()
+
+
+def test_a_level_whose_launches_mixed_the_two_energy_methods_is_named(tmp_path):
+    results, _, the_runner = run(tmp_path, CounterIn(), rounds=ONE_ROUND)
+    first = results["launches"][0]
+    assert {lv["energy"]["method"] for lv in first["levels"]} == {"energy_counter"}
+    mixed = summary.energy_methods_mixed(results)
+    assert [m["concurrency"] for m in mixed] == [1, 4]
+    assert all(m["energy_counter"] == [1] and m["power_mean"] == [2, 3, 4] for m in mixed)
+    assert ("**Two energy methods at 4 streams:** tokens per joule came from the energy counter in launches 1 and from "
+            "the mean of the power samples in launches 2, 3, 4.") in (the_runner.dir / "results.md").read_text()
+    head = "".join(show._head(results, [], []))
+    assert "at 4 streams, the energy counter in launches 1 and the power samples in launches 2, 3, 4" in head
+    assert not summary.energy_methods_mixed(run(tmp_path / "plain", rounds=ONE_ROUND)[0])
+
+
+def test_the_plan_note_at_one_round_names_single_measurement():
+    [note] = [line for line in runner.plan_lines(plans.build(config(rounds=ONE_ROUND), "docker"))
+              if line.startswith("note:") and "need at least" in line]
+    assert note.endswith("with 1 round every case gets NO VERDICT (single_measurement)")
 
 
 def test_the_plan_note_below_the_secondary_minimum_says_the_secondary_cases_get_none_either():
