@@ -72,6 +72,9 @@ RUN_CODES = (ROUNDS_FAILED, REQUESTS_FAILED, STOPPED, RUN_TIMEOUT, RUNNER_FAILED
 EXIT_COMPLETE, EXIT_PARTIAL, EXIT_CONFIG, EXIT_FAILED, EXIT_SERVER_NOT_RESTORED, EXIT_RUN_ACTIVE = 0, 1, 2, 3, 4, 5
 
 
+NOT_RESTORED = "the live server was not brought back"
+
+
 class RoundError(Exception):
     """A round could not be measured; the message is safe to show and to store, the code is one of ROUND_CODES."""
 
@@ -277,10 +280,13 @@ class Runner:
             back = restore()
         except Exception as error:  # recorded, and the exit code says so (EXIT_SERVER_NOT_RESTORED)
             run["server_restored"] = False
-            message = f"the live server was not brought back: {error}"
+            message = f"{NOT_RESTORED}: {error}"
             if message not in run["errors"]:
                 run["errors"].append(message)
             return
+        if back and run.get("server_restored") is False:  # a later try went through: keep it as a note
+            run["notes"] += [f"{e}; a later try brought it back" for e in run["errors"] if e.startswith(NOT_RESTORED)]
+            run["errors"] = [e for e in run["errors"] if not e.startswith(NOT_RESTORED)]
         run["server_restored"] = True if back else None
 
     def _backend_on_stop(self) -> None:

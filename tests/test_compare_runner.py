@@ -601,3 +601,21 @@ def test_a_run_that_fails_outside_a_round_is_exit_3(tmp_path, monkeypatch):
     results = json.loads(path.read_text())
     assert results["run"]["status"] == "failed" and results["run"]["error_code"] == "RUNNER_FAILED"
     assert results["run"]["server_restored"] is True and backend.server_up  # brought back all the same
+
+
+def test_a_server_that_comes_back_on_the_last_try_is_back(tmp_path):
+    backend = ServerBackend(term_in_round=3)
+    tries = {"n": 0}
+
+    def restore():
+        tries["n"] += 1
+        backend.events.append(("restore",))
+        if tries["n"] == 1:  # the early try on the stop fails, the one at the end works
+            raise runner.RoundError("could not scale ray-serve-llm back to 1 (HTTP 503)")
+        return True
+    backend.restore_server = restore
+    results, _, _ = run(tmp_path, backend)
+    assert tries["n"] == 2 and results["run"]["server_restored"] is True
+    assert not [e for e in results["run"]["errors"] if e.startswith(runner.NOT_RESTORED)]
+    assert [n for n in results["run"]["notes"] if "a later try brought it back" in n]
+    assert runner.exit_code(results) == runner.EXIT_PARTIAL
