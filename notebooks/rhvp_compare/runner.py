@@ -6,6 +6,13 @@ The loop knows nothing about Kubernetes or docker: a Backend does the platform w
 fake one in the tests). A round that fails is recorded with its reason and a fixed failure code (ROUND_CODES), and
 the run goes on; the comparison then has one pair fewer for the metrics that round would have given.
 
+GuideLLM now and then stops making progress at the end of a level (seen once in about twenty runs against a stand-in
+server). A round whose GuideLLM timed out runs once more (LOAD_RETRIES): the side is taken down, started again from
+the GPU check and timed from that new start, and GuideLLM runs with the same requests (the same load seed). Sent
+again to the same server, those requests could find their prompts in its prefix cache, which no other round has.
+Every figure of the round then comes from that second try; the first try's files are kept as *.try-1.*, and the
+round's `load_retries` says it ran again. A second time-out is LOAD_FAILED.
+
 SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the round: the round
 is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is saved as
 partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
@@ -55,13 +62,19 @@ def utc_now() -> str:
 GPU_NOT_FREE = "GPU_NOT_FREE"          # another pod or program still held the GPU when the round was to start
 SIDE_FAILED = "SIDE_FAILED"            # the side failed: bad image, pull failure, no node, or the server exited
 SIDE_NEVER_READY = "SIDE_NEVER_READY"  # the side did not list the model, or gave no answer, before its time limit
-LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its one retry), or its report is unusable
+LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed, or timed out in both tries of the round, or its report is
+#                                        unusable
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the round
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
 #: How many more times a side is started in one round when its server stopped at vLLM's start-up memory check
-#: (logs.memory_profiling_failed); recorded in the round's start_retries. A second such failure is SIDE_FAILED.
+#: (logs.memory_profiling_failed); recorded in the round's start_retries. A second such failure of the same start is
+#: SIDE_FAILED. A round whose load runs again (LOAD_RETRIES) starts the side anew, and that start gets its own retry.
 START_RETRIES = 1
+#: How many more times a round runs after its GuideLLM timed out (LoadError.timed_out), so one stall of the load tool
+#: is not a failure of the side. The retry takes the side down and starts it again (see the module's docstring), and
+#: the round's load_retries counts it; a second time-out is LOAD_FAILED.
+LOAD_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
@@ -389,7 +402,7 @@ class Runner:
                         "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
                         "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
-                        "start_retries": 0}
+                        "start_retries": 0, "load_retries": 0}
         held: dict = {"handle": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
@@ -423,10 +436,33 @@ class Runner:
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
-        """Wait for the GPU, start the side, time its start, load it; any failure raises. A server that stopped at
-        vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that start."""
+        """Wait for the GPU, start the side, time its start, load it; any failure raises. A load whose GuideLLM timed
+        out runs the round once more (LOAD_RETRIES) from a new start of the side, so the second try meets the same
+        conditions as every other round: a server that has served no load, and the same requests."""
+        tries = 0
+        while True:
+            handle, target = self._start_side(round_, side, spec, record, out_dir, rel, held)
+            if round_["kind"] == plans.WARMUP:
+                return
+            try:
+                record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
+            except guidellm.LoadError as error:
+                if not error.timed_out or tries >= LOAD_RETRIES:
+                    raise
+                tries += 1
+                self._discard_try(record, out_dir, rel, held, error, tries)
+                continue
+            record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+            return
+
+    def _start_side(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+                    held: dict):
+        """Wait for the GPU, start the side and time it to its first answer: (handle, target). A server that stopped
+        at vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that
+        start."""
         timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
+        retries = 0
         while True:
             self.backend.gpu_free(self.plan, side)
             record["_started_epoch"] = self.wall()
@@ -444,21 +480,21 @@ class Runner:
                     record["_reported_version"] = probe.reported_version(client)
                 break
             except probe.StartFailed as error:
-                if error.never_ready or record["start_retries"] >= START_RETRIES:
+                if error.never_ready or retries >= START_RETRIES:
                     raise
-                if not self._start_again(handle, record, out_dir, rel, error):
+                if not self._start_again(handle, record, out_dir, rel, error, retries + 1):
                     raise
+                retries += 1
                 held["handle"] = None  # torn down; the next start sets it
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["metrics"].update({"startup.ready_s": ready_s, "startup.first_answer_s": first_s})
-        if round_["kind"] != plans.WARMUP:
-            record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
-            record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+        return handle, target
 
-    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception) -> bool:
-        """When the server's log shows vLLM's memory-profiling check failing: keep that log as server.attempt-N.log,
-        take the side down and return True (the round starts it again). Anything else: False, and the round fails."""
+    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception, attempt: int) -> bool:
+        """When the server's log shows vLLM's memory-profiling check failing: keep that log as
+        server.attempt-<attempt>.log, take the side down and return True (the round starts it again). Anything else:
+        False, and the round fails."""
         try:
             text = self.backend.logs(handle)
         except Exception:
@@ -466,14 +502,47 @@ class Runner:
         if not logs.memory_profiling_failed(text):
             return False
         record["start_retries"] += 1
-        name = f"server.attempt-{record['start_retries']}.log"
+        name = f"server.attempt-{attempt}.log"
         (out_dir / name).write_text(text, encoding="utf-8")
-        record["artifacts"][f"server_log_attempt_{record['start_retries']}"] = f"{rel}/{name}"
+        record["artifacts"][f"server_log_attempt_{attempt}"] = f"{rel}/{name}"
         record.setdefault("notes", []).append(
             f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side was started once "
             f"more, and its start is timed from then ({name} is the first try's log)")
         self.backend.stop(handle)
         return True
+
+    def _discard_try(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int) -> None:
+        """After a load whose GuideLLM timed out: take the side down, keep every file of that try as *.try-N.*
+        (artifact keys *_try_N), and clear what the try had recorded, so the round starts again from the GPU check.
+        The retry and its note are recorded first, so a teardown that fails or is stopped half-way still says so."""
+        record["load_retries"] = tries
+        record.setdefault("notes", []).append(
+            f"{error}; the round was run once more from a new start of the side, with the same requests (that try's "
+            f"files are the *.try-{tries}.* files)")
+
+        def keep(name: str, key: str) -> None:
+            stem, dot, ext = name.rpartition(".")
+            kept = f"{stem}.try-{tries}{dot}{ext}"
+            if (out_dir / name).exists():
+                (out_dir / name).replace(out_dir / kept)
+                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
+
+        for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's server.attempt-1.log
+            if "_try_" not in key:
+                del record["artifacts"][key]
+                keep(path.rpartition("/")[2], key)
+        keep("guidellm.log", "guidellm")
+        keep("guidellm.json", "load_report")  # a report the stopped GuideLLM may have left
+        handle = held["handle"]
+        try:
+            (out_dir / f"server.try-{tries}.log").write_text(self.backend.logs(handle), encoding="utf-8")
+            record["artifacts"][f"server_log_try_{tries}"] = f"{rel}/server.try-{tries}.log"
+        except Exception as read_error:
+            record["notes"].append(f"the server log of that try not read: {type(read_error).__name__}")
+        self.backend.stop(handle)
+        held["handle"] = None
+        record.pop("_reported_version", None)
+        record["startup"], record["levels"], record["metrics"] = None, [], {}
 
     def _load(self, round_: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None
@@ -486,18 +555,7 @@ class Runner:
                 record.setdefault("notes", []).append(f"power sampling did not start: {type(error).__name__}")
                 sampler = None
         try:
-            try:
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
-            except guidellm.LoadError as error:
-                if not error.timed_out:
-                    raise
-                # GuideLLM v0.8.1 now and then stops making progress at the end of a level (seen once in about
-                # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
-                # round.
-                record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
-                if (out_dir / "guidellm.log").exists():
-                    (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
+            report_path = self.backend.run_load(self.plan, round_, target, out_dir)
         finally:
             if sampler is not None:
                 try:

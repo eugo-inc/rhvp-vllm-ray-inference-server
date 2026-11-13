@@ -64,6 +64,10 @@ RUN_FAILED_ROUNDS = "Rounds that failed: {rounds}."
 RUN_CODE = "Why the run did not finish: {code}."
 RUN_RETRIED = ("Rounds whose side was started once more after vLLM's start-up memory check failed (timed from "
                "the last start): {rounds}.")
+RUN_LOAD_RETRIED = "Rounds whose load ran again after GuideLLM timed out: {rounds}. {how}"
+LOAD_RETRIED_PAIRS = ("The side was taken down and started again, timed from that new start, and GuideLLM ran once "
+                      "more with the same requests; every figure of the round comes from that second try.")
+RETRIED_ROUND = "{index} (side {side})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = "Pairs lost to one side failing, per metric: {lost}. Those metrics are INCONCLUSIVE."

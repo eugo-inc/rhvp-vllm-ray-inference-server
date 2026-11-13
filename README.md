@@ -453,6 +453,13 @@ use the same GPU. The runner then measures:
   `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's monitoring
   scrapes the DCGM exporter; the label is set on every install, also when the comparison is off.
 
+GuideLLM now and then stops making progress at the end of a level, and the round's load then times out. The round
+tries once more, from the start: the side is taken down, started again and timed from that new start, and GuideLLM
+runs with the same requests. Sent again to the same server, those requests could find their prompts in its prefix
+cache, which no other round has. Every figure of the round then comes from that second try; the first try's files
+stay in the round's folder as `*.try-1.*`, the round's `load_retries` is 1, and `results.md` and the notebook list
+the round. A second time-out fails the round with `LOAD_FAILED`.
+
 ### How the verdicts are decided
 
 The rule is fixed in the config before the first round and written into the results:
@@ -523,7 +530,7 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | `GPU_NOT_FREE` | another pod still held the GPU after 15 minutes |
 | `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
-| `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
+| `LOAD_FAILED` | GuideLLM failed, or timed out in both tries of the round, or its report could not be read (after one time-out the side is started again and GuideLLM runs once more, with the same requests; see "What a run does") |
 | `STOPPED` | the runner was stopped during the round |
 | `RUNNER_ERROR` | anything else, such as an error from the Kubernetes API |
 
@@ -555,11 +562,11 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
 - On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
   (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
   starts that side once more in the same round and times its start from the new start; the round's
-  `start_retries`, `results.md` and the notebook say so. A second such exit fails the round (`SIDE_FAILED`). The
-  same measurement sets the size of the server's KV cache, so memory that other programs take in those seconds
-  shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same image got in the
-  other rounds. Each round's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as quiet as you can
-  during a run.
+  `start_retries`, `results.md` and the notebook say so. A second such exit of that start fails the round
+  (`SIDE_FAILED`). The same measurement sets the size of the server's KV cache, so memory that other programs take
+  in those seconds shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same
+  image got in the other rounds. Each round's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as
+  quiet as you can during a run.
 
 ### Comparing with this pattern's own server
 

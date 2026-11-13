@@ -168,6 +168,10 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     retried = [f"{r['index']} (side {r['side']})" for r in results.get("rounds") or [] if r.get("start_retries")]
     if retried:
         parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
+    reloaded = [words.RETRIED_ROUND.format(index=r["index"], side=r["side"]) for r in results.get("rounds") or []
+                if r.get("load_retries")]
+    if reloaded:
+        parts.append(line(words.RUN_LOAD_RETRIED.format(rounds=", ".join(reloaded), how=words.LOAD_RETRIED_PAIRS)))
     unusable = [f"round {u['index']} side {u['side']} at {u['concurrency']} streams"
                 for u in summary.levels_unusable(results)]
     if unusable:

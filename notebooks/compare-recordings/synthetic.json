@@ -528,7 +528,8 @@
    "artifacts": {
     "server_log": "rounds/01-A-warmup/server.log"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 2,
@@ -600,7 +601,8 @@
    "artifacts": {
     "server_log": "rounds/02-B-warmup/server.log"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 3,
@@ -809,7 +811,8 @@
     "server_log": "rounds/03-A-scored/server.log",
     "load_report": "rounds/03-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 4,
@@ -1018,7 +1021,8 @@
     "server_log": "rounds/04-B-scored/server.log",
     "load_report": "rounds/04-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 5,
@@ -1227,7 +1231,8 @@
     "server_log": "rounds/05-B-scored/server.log",
     "load_report": "rounds/05-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 6,
@@ -1436,7 +1441,8 @@
     "server_log": "rounds/06-A-scored/server.log",
     "load_report": "rounds/06-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 7,
@@ -1645,7 +1651,8 @@
     "server_log": "rounds/07-A-scored/server.log",
     "load_report": "rounds/07-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 8,
@@ -1854,7 +1861,8 @@
     "server_log": "rounds/08-B-scored/server.log",
     "load_report": "rounds/08-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 9,
@@ -2063,7 +2071,8 @@
     "server_log": "rounds/09-B-scored/server.log",
     "load_report": "rounds/09-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 10,
@@ -2272,7 +2281,8 @@
     "server_log": "rounds/10-A-scored/server.log",
     "load_report": "rounds/10-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 11,
@@ -2481,7 +2491,8 @@
     "server_log": "rounds/11-A-scored/server.log",
     "load_report": "rounds/11-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 12,
@@ -2690,7 +2701,8 @@
     "server_log": "rounds/12-B-scored/server.log",
     "load_report": "rounds/12-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 13,
@@ -2899,7 +2911,8 @@
     "server_log": "rounds/13-B-scored/server.log",
     "load_report": "rounds/13-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 14,
@@ -3108,7 +3121,8 @@
     "server_log": "rounds/14-A-scored/server.log",
     "load_report": "rounds/14-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 15,
@@ -3317,7 +3331,8 @@
     "server_log": "rounds/15-A-scored/server.log",
     "load_report": "rounds/15-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 16,
@@ -3526,7 +3541,8 @@
     "server_log": "rounds/16-B-scored/server.log",
     "load_report": "rounds/16-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 17,
@@ -3735,7 +3751,8 @@
     "server_log": "rounds/17-B-scored/server.log",
     "load_report": "rounds/17-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 18,
@@ -3944,7 +3961,8 @@
     "server_log": "rounds/18-A-scored/server.log",
     "load_report": "rounds/18-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 19,
@@ -4153,7 +4171,8 @@
     "server_log": "rounds/19-A-scored/server.log",
     "load_report": "rounds/19-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 20,
@@ -4362,7 +4381,8 @@
     "server_log": "rounds/20-B-scored/server.log",
     "load_report": "rounds/20-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 21,
@@ -4571,7 +4591,8 @@
     "server_log": "rounds/21-B-scored/server.log",
     "load_report": "rounds/21-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 22,
@@ -4780,7 +4801,8 @@
     "server_log": "rounds/22-A-scored/server.log",
     "load_report": "rounds/22-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 23,
@@ -4989,7 +5011,8 @@
     "server_log": "rounds/23-A-aa/server.log",
     "load_report": "rounds/23-A-aa/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 24,
@@ -5198,7 +5221,8 @@
     "server_log": "rounds/24-A-aa/server.log",
     "load_report": "rounds/24-A-aa/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 25,
@@ -5407,7 +5431,8 @@
     "server_log": "rounds/25-A-aa/server.log",
     "load_report": "rounds/25-A-aa/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   },
   {
    "index": 26,
@@ -5616,7 +5641,8 @@
     "server_log": "rounds/26-A-aa/server.log",
     "load_report": "rounds/26-A-aa/guidellm.json"
    },
-   "start_retries": 0
+   "start_retries": 0,
+   "load_retries": 0
   }
  ],
  "analysis": {

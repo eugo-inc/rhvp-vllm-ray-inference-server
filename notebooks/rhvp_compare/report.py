@@ -115,8 +115,17 @@ def markdown(results: Mapping) -> str:
     if retried:
         lines += ["", "Rounds whose side was started again after vLLM's start-up memory check failed "
                   "(timed from the last start):"]
-        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): started {r['start_retries'] + 1} times, "
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): started "
+                  f"{r['start_retries'] + (r.get('load_retries') or 0) + 1} times, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
+    reloaded = [r for r in results.get("rounds") or [] if r.get("load_retries")]
+    if reloaded:
+        lines += ["", "Rounds whose load ran again after GuideLLM timed out (the side was taken down and started "
+                  "again, timed from that new start, and GuideLLM ran once more with the same requests; every figure "
+                  "of the round comes from that second try, and the first try's files are the round's *.try-1.* "
+                  "files):"]
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): ran again, then "
+                  f"{'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in reloaded]
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]

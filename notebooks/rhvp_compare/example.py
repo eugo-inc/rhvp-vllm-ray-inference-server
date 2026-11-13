@@ -95,6 +95,7 @@ def synthesize() -> dict:
             "levels": [], "metrics": {"startup.ready_s": ready, "startup.first_answer_s": first},
             "artifacts": {"server_log": f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/server.log"},
             "start_retries": 0,
+            "load_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
         if planned["kind"] != plans.WARMUP:

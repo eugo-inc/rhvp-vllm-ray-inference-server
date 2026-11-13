@@ -937,7 +937,8 @@
         "levels",
         "metrics",
         "artifacts",
-        "start_retries"
+        "start_retries",
+        "load_retries"
       ],
       "properties": {
         "index": {
@@ -1069,6 +1070,22 @@
             "server_log_attempt_1": {
               "type": "string",
               "description": "The server log of the start that stopped at vLLM's start-up memory check, when the side was started again."
+            },
+            "guidellm_try_1": {
+              "type": "string",
+              "description": "GuideLLM's log of the round's first try, whose GuideLLM timed out, so the round ran once more from a new start of the side (runner.LOAD_RETRIES, load_retries). Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
+            },
+            "server_log_try_1": {
+              "type": "string",
+              "description": "The server log of that first try, taken down before the round ran again."
+            },
+            "load_report_try_1": {
+              "type": "string",
+              "description": "A GuideLLM report that the timed-out GuideLLM of that first try left, if it left one. Not read."
+            },
+            "server_log_attempt_1_try_1": {
+              "type": "string",
+              "description": "The server log of a start of that first try that stopped at vLLM's start-up memory check."
             }
           }
         },
@@ -1081,7 +1098,13 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1: a second such failure fails the round (SIDE_FAILED). The start-up figures are timed from the last start."
+          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of the side: a second such failure of the same start fails the round (SIDE_FAILED). A round whose load ran again (load_retries) starts the side anew, with its own retry, so its count can be 2. The start-up figures are timed from the last start."
+        },
+        "load_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How many times the round ran again after GuideLLM timed out (at most once). The side is taken down and started again from the GPU check, timed from that new start, and GuideLLM runs with the same requests (the first try's files are the *_try_1 artifacts). Every figure of the round comes from the last try."
         }
       }
     },
