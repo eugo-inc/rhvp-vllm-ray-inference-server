@@ -1,6 +1,9 @@
 """Fixtures shared by the chart tests: scripts/render-charts.sh runs once per test session (helm inside the
 Validated Patterns utility container). They are skipped when neither docker nor podman is available, or when
-charts.validatedpatterns.io cannot be reached."""
+charts.validatedpatterns.io cannot be reached.
+
+pytest loads this file for every test run under tests/, also the notebook checks, whose environment has no PyYAML;
+so chart_helpers (which needs it) is imported inside the fixtures only."""
 
 from __future__ import annotations
 
@@ -12,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from chart_helpers import REPO, container_engine, docs
-
 
 @pytest.fixture(scope="session")
 def render(tmp_path_factory) -> Path:
+    from chart_helpers import REPO, container_engine
+
     if container_engine() is None:
         pytest.skip("needs docker or podman")
     try:
@@ -35,4 +38,6 @@ def render(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def server(render) -> list[dict]:
+    from chart_helpers import docs
+
     return docs(render / "charts/ray-serve-llm.yaml")
