@@ -317,14 +317,27 @@ def test_scaling_keys_reach_ray_serve(tmp_path):
     kwargs = build_llm_config_kwargs(cfg)
     assert kwargs["deployment_config"] == {
         "autoscaling_config": {"min_replicas": 1, "max_replicas": 2, "target_ongoing_requests": 4}}
-    # One bundle per vLLM worker with half a GPU: Ray Serve LLM then also sets VLLM_RAY_PER_WORKER_GPUS.
+    # One bundle per vLLM worker with half a GPU.
     assert kwargs["placement_group_config"] == {"bundle_per_worker": {"GPU": 0.5}}
     assert kwargs["engine_kwargs"]["gpu_memory_utilization"] == 0.4
+
+
+@pytest.mark.parametrize("engine, share, per_worker", [({}, 0.5, "0.5"), ({"tensor_parallel_size": 1}, 0.25, "0.25")])
+def test_a_shared_gpu_tells_the_engine_process_its_share(tmp_path, engine, share, per_worker):
+    # vLLM 0.29.0's engine process asks Ray for VLLM_RAY_PER_WORKER_GPUS GPUs per worker (1.0 when unset), and
+    # Ray Serve LLM 2.60.0 sets that only for the workers: without it on the replica, whose engine process
+    # inherits the replica's environment, a worker asks for a whole GPU and a bundle of the share cannot hold it.
+    cfg = load_config(write(tmp_path, contract_with(gpu_per_replica=share, engine_kwargs=engine)), {})
+    kwargs = build_llm_config_kwargs(cfg)
+    assert kwargs["runtime_env"] == {"env_vars": {"VLLM_RAY_PER_WORKER_GPUS": per_worker}}
+    assert float(kwargs["runtime_env"]["env_vars"]["VLLM_RAY_PER_WORKER_GPUS"]) == \
+        kwargs["placement_group_config"]["bundle_per_worker"]["GPU"]
 
 
 def test_defaults_add_no_new_llm_config_keys(tmp_path):
     kwargs = build_llm_config_kwargs(load_config(write(tmp_path, CONTRACT_YAML), {}))
     assert "placement_group_config" not in kwargs
+    assert "runtime_env" not in kwargs
     assert kwargs["deployment_config"] == {"autoscaling_config": {"min_replicas": 1, "max_replicas": 1}}
 
 

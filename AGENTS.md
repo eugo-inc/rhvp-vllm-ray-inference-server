@@ -256,7 +256,10 @@ Three parts, each off by default. With every default, the local charts render ex
 - **Inside the pod** (`server.autoscaling`, `server.gpuPerReplica`): Ray Serve's own autoscaler, in the locked Ray
   release, adds and removes vLLM replicas in the one server pod. `serve_app.py` passes `target_ongoing_requests`
   into `autoscaling_config` and, when replicas share a GPU, a placement bundle of that share per worker
-  (`placement_group_config`). It does not depend on `global.scaleOut.mode`.
+  (`placement_group_config`) and the same share as `VLLM_RAY_PER_WORKER_GPUS` in `LLMConfig.runtime_env`. vLLM
+  0.29.0 reads that variable in its engine process, a child of the Serve replica, to size each worker's GPU request
+  (1.0 when unset); Ray Serve LLM 2.60.0 sets it only for the workers, and LLMConfig.runtime_env is what reaches the
+  replica (`LLMServer.get_deployment_options`). It does not depend on `global.scaleOut.mode`.
 - **Across pods** (`global.scaleOut.mode: keda`): `variants/prod/values-prod.yaml` adds
   `/overrides/values-scaleout-<mode>.yaml` to `sharedValueFiles`; only the keda file exists. It installs Red Hat's
   Custom Metrics Autoscaler (operator, KedaController through the `keda-config` app), and the server chart renders
@@ -308,8 +311,15 @@ and the notebook rendered.
 
 Not checked yet:
 
-- No GPU scale event: no real vLLM replica or server pod has been added by either autoscaler. The shared-GPU
-  placement bundle, the GPU check at start and the deployment names of a real Ray Serve LLM app have not run.
+- No GPU scale event: no real vLLM replica or server pod has been added by either autoscaler. The GPU check at
+  start and the deployment names of a real Ray Serve LLM app have not run.
+- No replica on a share of a GPU (`gpu_per_replica` below 1) has started on a real GPU. The one try (one GPU,
+  `gpu_per_replica: 0.5`) failed at the first replica's engine start with `Cannot schedule RayWorkerProc with the
+  placement group ... {'CPU': 0, 'GPU': 1.0} cannot fit into ... [{'CPU': 1.0, 'GPU': 0.5}]`: the engine process did
+  not see `VLLM_RAY_PER_WORKER_GPUS`. The fix (the variable in `LLMConfig.runtime_env`) was checked on CPU only: Ray
+  2.60.0's Ray Serve LLM builder with a stand-in server class and a stand-in for vLLM's import surface, on a Ray node
+  with one logical GPU; the replica's spawned child asked for one worker in the replica's placement group as
+  `ray_executor_v2` does, and got the same error without the variable and a placed worker with it.
 - Nothing of keda mode on OpenShift: the operator install (package and channel are from Red Hat's docs and catalog,
   not from a cluster), the KedaController that the operator and Argo CD both manage, the operator's trust in the
   Thanos Querier's certificate, the ServiceMonitor (kind has no CRD for it), the labels on the real metric, the

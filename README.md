@@ -648,7 +648,8 @@ checks it when it starts, and exits with code 2 when Ray sees too few GPUs.
 **Half a GPU each is a test setup.** The default AWS node has one L4. On it, a second replica can only share that
 GPU (`gpuPerReplica: 0.5`, with `gpu_memory_utilization: 0.4`). Two replicas on one GPU add no GPU compute: they take
 turns on it, and each has less memory for its cache. Use that setup to watch the autoscaler work, not to serve more.
-The real case is a node with several GPUs.
+The real case is a node with several GPUs. No replica on a share of a GPU has started on a real GPU yet (see "What
+has not been checked for scale out").
 
 What you can see:
 
@@ -781,6 +782,12 @@ mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU
 ### What has not been checked for scale out
 
 - No GPU has scaled yet: neither autoscaler has added a real vLLM replica or pod.
+- No replica on a share of a GPU (`server.gpuPerReplica` below 1) has started on a real GPU. The one try, on one GPU
+  with `gpuPerReplica: 0.5`, failed when the first replica's vLLM engine started: the engine asked Ray for a whole GPU
+  for its worker, which the half-GPU placement bundle cannot hold (`Cannot schedule RayWorkerProc with the placement
+  group`). The server now gives the engine its share (`VLLM_RAY_PER_WORKER_GPUS` in the replica's `runtime_env`).
+  That was checked on CPU only: with Ray 2.60.0's Ray Serve LLM code, a Ray node with one GPU in name only, and a
+  stand-in for vLLM's engine process, the same error came back without the setting and the worker was placed with it.
 - Ray Serve's autoscaling in the pod was checked on CPU only, in the pattern's server image, with a stand-in Ray Serve
   app whose replicas take 20 seconds to start, scaling from 1 to 2: the `rhvp-scale` lines showed the decision and
   then 2 running replicas, the app stayed RUNNING, the ready file stayed, every request was answered, and

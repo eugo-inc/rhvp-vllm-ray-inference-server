@@ -413,9 +413,16 @@ def build_llm_config_kwargs(cfg: Mapping[str, Any]) -> Dict[str, Any]:
     if cfg.get("accelerator_type"):
         kwargs["accelerator_type"] = cfg["accelerator_type"]
     if cfg.get("gpu_per_replica") is not None and gpus_per_worker(cfg) < 1:
-        # Ray Serve LLM's default bundle is one whole GPU per worker. A fractional bundle also makes it set
-        # VLLM_RAY_PER_WORKER_GPUS for the engine (Ray 2.60.0, VLLMEngineConfig).
-        kwargs["placement_group_config"] = {"bundle_per_worker": {"GPU": gpus_per_worker(cfg)}}
+        # Ray Serve LLM's default bundle is one whole GPU per worker; this asks for the share instead.
+        share = gpus_per_worker(cfg)
+        kwargs["placement_group_config"] = {"bundle_per_worker": {"GPU": share}}
+        # vLLM 0.29.0 asks Ray for VLLM_RAY_PER_WORKER_GPUS GPUs per worker (default 1.0), read in its engine
+        # process, which the replica starts as a child process. Ray Serve LLM 2.60.0 sets the variable only for
+        # the workers (VLLMEngineConfig.get_runtime_env_with_local_env_vars), so the engine asked for a whole GPU,
+        # which a bundle of the share cannot hold ("Cannot schedule RayWorkerProc with the placement group").
+        # LLMConfig.runtime_env goes on the replica's own runtime_env (LLMServer.get_deployment_options), and the
+        # engine process inherits it.
+        kwargs["runtime_env"] = {"env_vars": {"VLLM_RAY_PER_WORKER_GPUS": str(share)}}
     return kwargs
 
 
