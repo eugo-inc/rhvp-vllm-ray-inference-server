@@ -27,7 +27,23 @@ Settings (environment variables):
 - RHVP_COMPARE_MEMORY: memory limit of each side, as docker writes it (for example 32g; default none)
 - RHVP_COMPARE_SERVER_CONTAINER: a container to stop for the run and start again after it (default none)
 - RHVP_COMPARE_RUNNER_NAME: the runner container's own name (default: its hostname, the container id)
+- RHVP_COMPARE_REPLICA_GPUS: in mode scaleout, one device id per replica, comma-separated ("0,1": the first
+  replica on GPU 0, the second on GPU 1); empty (the default): every replica gets RHVP_COMPARE_GPUS
+- RHVP_COMPARE_CPUSET: CPUs every container of the run may use, as docker writes them (for example 0-3; default
+  all)
+- RHVP_COMPARE_CACHE_VOLUME: the name prefix of the compile-cache volumes (default rhvp-compare-cache)
 - DOCKER_SOCKET: the Engine API socket (default /var/run/docker.sock)
+
+A side with `compileCache: warm` gets its own volume at /cache for the whole run (`<prefix>-<last 8 characters of
+the run id>-<a or b>`) in place of the tmpfs, so its warm-up round fills the compile caches its scored rounds find;
+the volumes are removed when the run ends. In mode scaleout both replicas of a round share it.
+
+The scale round (mode scaleout): the second replica is a container named like the first plus `-2`; the router
+(router.py) and GuideLLM run as child processes of the runner, GuideLLM against the router.
+
+Launch records (`launch_facts`): the environment of the side's largest process (by resident memory, which is the
+server even when an entrypoint script or an init process is PID 1), read with docker exec once the server has
+answered; "container" (the configured environment: the image's ENV plus the runner's) when that cannot be read.
 """
 
 from __future__ import annotations
@@ -147,6 +163,21 @@ class Docker:
     def remove(self, cid: str) -> None:
         self.http.delete(f"/containers/{cid}", params={"force": "1", "v": "1"})
 
+    def exec(self, cid: str, cmd: list[str], timeout_s: float = 30.0) -> tuple[int, str]:
+        """Run `cmd` in a running container: (exit code, stdout and stderr)."""
+        created = self._ok(self.http.post(f"/containers/{cid}/exec", json={
+            "Cmd": cmd, "AttachStdout": True, "AttachStderr": True, "Tty": False}), "start an exec").json()
+        response = self.http.post(f"/exec/{created['Id']}/start", json={"Detach": False, "Tty": False},
+                                  timeout=httpx.Timeout(timeout_s, connect=30.0))
+        text = demux(self._ok(response, "run an exec").content)
+        code = self._ok(self.http.get(f"/exec/{created['Id']}/json"), "inspect an exec").json().get("ExitCode")
+        return (int(code) if code is not None else -1), text
+
+    def remove_volume(self, name: str) -> None:
+        response = self.http.delete(f"/volumes/{name}", params={"force": "1"})
+        if response.status_code not in (204, 404):
+            self._ok(response, f"remove volume {name}")
+
     def by_label(self, value: str) -> list[str]:
         filters = json.dumps({"label": [f"{LABEL}={value}"]})
         response = self.http.get("/containers/json", params={"all": "1", "filters": filters})
@@ -192,6 +223,25 @@ def repository(ref: str) -> str:
     return name.rsplit(":", 1)[0] if ":" in name.rsplit("/", 1)[-1] else name
 
 
+#: Prints the environment (NUL-separated) of the container's process with the most resident memory, among those
+#: whose environment it may read.
+SERVER_ENVIRON = (
+    'best=1; most=0; for d in /proc/[0-9]*; do [ -r "$d/environ" ] || continue; rss=0; '
+    'while read -r key value rest; do [ "$key" = "VmRSS:" ] && rss=$value; done 2>/dev/null < "$d/status"; '
+    'if [ "$rss" -gt "$most" ] 2>/dev/null; then most=$rss; best=${d#/proc/}; fi; done; '
+    'cat "/proc/$best/environ"')
+
+
+def environ(text: str) -> dict[str, str]:
+    """NAME=value entries, NUL-separated (/proc/<pid>/environ), as a map."""
+    out = {}
+    for item in text.split("\0"):
+        name, sep, value = item.partition("=")
+        if sep and name:
+            out[name] = value
+    return out
+
+
 def _gpu_request(gpus: str) -> list[dict]:
     if gpus.strip().lower() == "all":
         return [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]
@@ -204,8 +254,9 @@ class NvidiaSmi:
 
     source = "nvidia-smi"
 
-    def __init__(self, docker: Docker, image: str, gpus: str, name: str, run_id: str) -> None:
+    def __init__(self, docker: Docker, image: str, gpus: str, name: str, run_id: str, cpuset: str = "") -> None:
         self.docker, self.image, self.gpus, self.name, self.run_id = docker, image, gpus, name, run_id
+        self.cpuset = cpuset
         self.cid: str | None = None
         self.log = ""
 
@@ -215,7 +266,7 @@ class NvidiaSmi:
             "Cmd": ["-i", "0", "--query-gpu=power.draw", "--format=csv,noheader,nounits", "-lms", "500"],
             "Labels": {LABEL: self.run_id},
             "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus),
-                           "Memory": HELPER_MEMORY}})
+                           "Memory": HELPER_MEMORY, **({"CpusetCpus": self.cpuset} if self.cpuset else {})}})
         self.docker.start(self.cid)
 
     def stop(self) -> None:
@@ -252,6 +303,10 @@ class DockerBackend:
         self.memory = memory_bytes(env.get("RHVP_COMPARE_MEMORY"))
         self.server_container = env.get("RHVP_COMPARE_SERVER_CONTAINER", "").strip()
         self.runner_name = env.get("RHVP_COMPARE_RUNNER_NAME", "").strip() or socket.gethostname()
+        self.replica_gpus = [g.strip() for g in env.get("RHVP_COMPARE_REPLICA_GPUS", "").split(",") if g.strip()]
+        self.cpuset = env.get("RHVP_COMPARE_CPUSET", "").strip()
+        self.cache_prefix = env.get("RHVP_COMPARE_CACHE_VOLUME", "").strip() or "rhvp-compare-cache"
+        self.cache_volumes: dict[str, str] = {}
         self.results_root = results_root
         self.run_id = ""
         self._gpu_facts: dict | None = None
@@ -324,10 +379,24 @@ class DockerBackend:
         code, _ = self.docker.run(self._name("prepare"), {
             "Image": plan["sides"][0]["image"], "User": "0:0", "Entrypoint": ["sh", "-c"],
             "Cmd": ["mkdir -p /models/hf && chgrp 0 /models /models/hf && chmod g+rwx /models /models/hf"],
-            "Labels": {LABEL: self.run_id}, "HostConfig": {"Binds": [f"{self.models_volume}:/models"],
-                                                          "NetworkMode": "none", "Memory": HELPER_MEMORY}})
+            "Labels": {LABEL: self.run_id}, "HostConfig": self._host({"Binds": [f"{self.models_volume}:/models"],
+                                                                     "NetworkMode": "none",
+                                                                     "Memory": HELPER_MEMORY})})
         if code != 0:
             raise runner.RoundError(f"could not make the models volume writable (exit {code})")
+        for side in plan["sides"]:
+            if side.get("compile_cache") != "warm":
+                continue
+            volume = self.cache_volumes[side["key"]] = f"{self.cache_prefix}-{self.run_id[-8:]}-{side['key'].lower()}"
+            self.docker.remove_volume(volume)  # an earlier attempt's caches would make the first round warm
+            self.docker.volume(volume)
+            code, _ = self.docker.run(self._name("prepare-cache"), {
+                "Image": side["image"], "User": "0:0", "Entrypoint": ["sh", "-c"], "Cmd": ["chmod 1777 /cache"],
+                "Labels": {LABEL: self.run_id}, "HostConfig": self._host({"Binds": [f"{volume}:/cache"],
+                                                                         "NetworkMode": "none",
+                                                                         "Memory": HELPER_MEMORY})})
+            if code != 0:
+                raise runner.RoundError(f"could not make the compile-cache volume {volume} writable (exit {code})")
         llm = self.results_root / self.run_id / "llm.yaml"
         if any(s["preset"] == "ray-serve-llm" for s in plan["sides"]):
             from . import plan as plans
@@ -345,11 +414,28 @@ class DockerBackend:
     def cleanup(self) -> None:
         for cid in self.docker.by_label(self.run_id) if self.run_id else []:
             self.docker.remove(cid)
+        for volume in self.cache_volumes.values():
+            self.docker.remove_volume(volume)
 
     # ---- one round ----
 
     def _name(self, what: str) -> str:
         return f"rhvp-cmp-{self.run_id[-8:]}-{what}".lower()
+
+    def _host(self, host: dict) -> dict:
+        """A container's HostConfig, with the run's CPU set (RHVP_COMPARE_CPUSET) when there is one."""
+        if self.cpuset:
+            host["CpusetCpus"] = self.cpuset
+        return host
+
+    def _gpus(self, replica: int) -> str:
+        """The GPUs replica `replica` gets: its own id from RHVP_COMPARE_REPLICA_GPUS, else RHVP_COMPARE_GPUS."""
+        if not self.replica_gpus:
+            return self.gpus
+        if replica > len(self.replica_gpus):
+            raise runner.RoundError(f"RHVP_COMPARE_REPLICA_GPUS names {len(self.replica_gpus)} GPUs; replica "
+                                    f"{replica} needs one more")
+        return self.replica_gpus[replica - 1]
 
     def gpu_free(self, plan: Mapping, side: Mapping, wait_s: float = 600.0) -> None:
         if not side.get("gpu", True):
@@ -361,8 +447,9 @@ class DockerBackend:
                 "Cmd": ["--query-compute-apps=pid", "--format=csv,noheader"], "Labels": {LABEL: self.run_id},
                 # the host's process namespace: without it nvidia-smi in a container lists no other program's GPU
                 # processes (seen with the NVIDIA Container Toolkit), and the check would always pass
-                "HostConfig": {"NetworkMode": "none", "PidMode": "host", "DeviceRequests": _gpu_request(self.gpus),
-                               "Memory": HELPER_MEMORY}}, timeout_s=60)
+                "HostConfig": self._host({"NetworkMode": "none", "PidMode": "host",
+                                          "DeviceRequests": _gpu_request(self._gpus(1)), "Memory": HELPER_MEMORY})},
+                timeout_s=60)
             busy = [text for _, text in logs.lines(log) if text.strip()]
             if code == 0 and not busy:
                 return
@@ -371,20 +458,24 @@ class DockerBackend:
                                         f"nvidia-smi could not read the GPU (exit {code})", runner.GPU_NOT_FREE)
             time.sleep(10)
 
-    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
-        name = self._name(f"r{round_['index']:02d}-{round_['side'].lower()}")
+    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping, replica: int = 1) -> dict:
+        name = self._name(f"r{round_['index']:02d}-{round_['side'].lower()}" + (f"-{replica}" if replica > 1 else ""))
         env = dict(spec["env"])
         if self.hf_token:
             env["HF_TOKEN"] = self.hf_token
         binds = [f"{self.models_volume}:/models"]
         if spec.get("llm_config"):
             binds.append(f"{self.host_results}/{self.run_id}/llm.yaml:/config/llm.yaml:ro")
-        host = {"NetworkMode": self.network, "Binds": binds, "ShmSize": self.shm,
-                "Tmpfs": {"/cache": "rw,exec,size=20g,mode=1777", "/tmp/r": "rw,exec,mode=1777"}}
+        tmpfs = {"/cache": "rw,exec,size=20g,mode=1777", "/tmp/r": "rw,exec,mode=1777"}
+        cache = self.cache_volumes.get(side["key"])
+        if cache:  # compileCache warm: the side's volume, kept for the run, in place of a fresh tmpfs
+            binds.append(f"{cache}:/cache")
+            del tmpfs["/cache"]
+        host = self._host({"NetworkMode": self.network, "Binds": binds, "ShmSize": self.shm, "Tmpfs": tmpfs})
         if self.memory:
             host.update({"Memory": self.memory, "MemorySwap": self.memory})  # no swap on top
         if spec.get("gpu"):
-            host["DeviceRequests"] = _gpu_request(self.gpus)
+            host["DeviceRequests"] = _gpu_request(self._gpus(replica))
         body: dict = {"Image": side["image"], "Cmd": list(spec["args"]), "User": self.user,
                       "Env": [f"{k}={v}" for k, v in env.items()], "Labels": {LABEL: self.run_id},
                       "ExposedPorts": {f"{plan['server']['port']}/tcp": {}}, "HostConfig": host}
@@ -393,7 +484,7 @@ class DockerBackend:
         cid = self.docker.create(name, body)
         self.docker.start(cid)
         return {"id": cid, "name": name, "image": side["image"], "port": plan["server"]["port"],
-                "gpu": spec.get("gpu", True)}
+                "gpu": spec.get("gpu", True), "replica": replica}
 
     def endpoint(self, handle: Mapping, deadline: float) -> str:
         problem = self.alive(handle)
@@ -412,10 +503,40 @@ class DockerBackend:
     def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path:
         return guidellm.run(plan, target, out_dir)
 
+    def start_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> guidellm.Running:
+        return guidellm.start(plan, target, out_dir)
+
+    def router(self, plan: Mapping, targets: list[str], out_dir: Path):
+        from . import router as routers  # its server needs aiohttp, which the runner's image has
+
+        try:
+            return routers.spawn(targets, out_dir / "router.log")
+        except routers.RouterError as error:
+            raise runner.RoundError(str(error)) from None
+
+    def launch_facts(self, handle: Mapping) -> dict:
+        """The environment the server process saw (see the module's docstring), and the image's own entrypoint."""
+        config = (self.docker.image(handle["image"]) or {}).get("Config") or {}
+        out = {"image_entrypoint": config.get("Entrypoint"), "image_cmd": config.get("Cmd"), "env": None,
+               "env_source": "none"}
+        try:
+            code, text = self.docker.exec(handle["id"], ["sh", "-c", SERVER_ENVIRON])
+            env = environ(text) if code == 0 else {}
+        except (runner.RoundError, httpx.HTTPError):
+            env = {}
+        if env:
+            out.update(env=env, env_source="process")
+            return out
+        inspected = (self.docker.inspect(handle["id"]) or {}).get("Config") or {}
+        if inspected.get("Env") is not None:
+            out.update(env=environ("\0".join(inspected["Env"])), env_source="container")
+        return out
+
     def sampler(self, plan: Mapping, handle: Mapping):
         if plan["energy"]["source"] != "nvidia-smi" or not handle.get("gpu"):
             return None
-        return NvidiaSmi(self.docker, handle["image"], self.gpus, f"{handle['name']}-power", self.run_id)
+        return NvidiaSmi(self.docker, handle["image"], self._gpus(handle.get("replica", 1)), f"{handle['name']}-power",
+                         self.run_id, self.cpuset)
 
     def logs(self, handle: Mapping) -> str:
         return self.docker.logs(handle["id"], timeout_s=self.log_timeout_s)
@@ -439,8 +560,8 @@ class DockerBackend:
                 "Image": image, "Entrypoint": ["nvidia-smi"],
                 "Cmd": ["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
                 "Labels": {LABEL: self.run_id},
-                "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus),
-                               "Memory": HELPER_MEMORY}}, timeout_s=60)
+                "HostConfig": self._host({"NetworkMode": "none", "DeviceRequests": _gpu_request(self._gpus(1)),
+                                          "Memory": HELPER_MEMORY})}, timeout_s=60)
             rows = [text for _, text in logs.lines(log) if text.strip()]
             if code == 0 and rows:
                 first = [x.strip() for x in rows[0].split(",")]

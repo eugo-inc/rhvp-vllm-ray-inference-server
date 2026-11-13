@@ -176,3 +176,11 @@ def scale_events(log: str) -> list[dict]:
             record["log_ts"] = at
             out.append(record)
     return out
+
+
+def first_scale_up(events: Iterable[dict], since_epoch: float) -> float | None:
+    """Seconds from `since_epoch` to the first decision to add a replica that the server logged at or after it (an
+    event with reason target and more replicas after than before), by the event's own `ts`; None when there is
+    none."""
+    times = [e["ts"] for e in events if e.get("reason") == "target" and e["to"] > e["from"] and e["ts"] >= since_epoch]
+    return min(times) - since_epoch if times else None

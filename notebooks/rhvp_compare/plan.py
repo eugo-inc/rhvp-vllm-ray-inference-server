@@ -16,6 +16,21 @@ multiple-comparison correction, so ten pairs can still give a FASTER or SLOWER v
 to first answer and, at the highest concurrency level, the median time to first token, the output tokens per second
 and the output tokens per joule. Every other metric is secondary: it gets the same test, interval and tie band, but
 its p-value is not corrected, so its verdict is descriptive, not a finding. `analysis.primary` lists other ids.
+
+Scale-out mode (`mode: scaleout`, settings under `scaleOut`). The same paired rounds, statistics and verdicts, with a
+different round: one replica of the side starts and answers; a surge of requests at a fixed rate (GuideLLM's
+constant profile, open loop, so a queue builds when the replica cannot keep up) goes to it through a router; at a
+fixed time after the first surge request (`stepAfterSeconds`, the forced step) the runner starts a second replica of
+the same side and adds it to the router once it answers. Because the step is forced, a side that queues less cannot
+start its second replica later than a side that queues more. The two primary metrics are the new replica's time from
+its start to its first answer and GuideLLM's SLO attainment over the surge (the share of requests that met the
+latency goals `ttftMs` and `tpotMs`); with Holm's correction over two metrics, 7 pairs are the fewest that can give
+FASTER or SLOWER. A scale-up decision the server itself logged (the pattern's rhvp-scale line) is kept as a secondary
+metric. The scale round runs on docker only (dockerapi.py, scripts/compare-local.sh) until the OpenShift round is
+built; on OpenShift the plan refuses the mode. Energy is not measured in this mode.
+
+Per side, `compileCache` is cold (the default: every start compiles in a fresh /cache) or warm (docker only: a volume
+kept for the whole run, filled by the side's warm-up round, so every scored start finds its compile caches).
 """
 
 from __future__ import annotations
@@ -32,9 +47,20 @@ SCHEMA = "rhvp-image-compare/1"
 A, B = "A", "B"
 WARMUP, SCORED, AA = "warmup", "scored", "aa"
 PRESETS = ("vllm-openai", "ray-serve-llm", "guidellm-mock", "custom")
-#: `mode` in the config: pairs (the default) or scaleout. scaleout is designed but not built yet.
-MODES = ("pairs", "scaleout")
-DEFAULT_MODE = "pairs"
+#: `mode` in the config: pairs (the default) or scaleout (see the module's docstring).
+PAIRS, SCALEOUT = "pairs", "scaleout"
+MODES = (PAIRS, SCALEOUT)
+DEFAULT_MODE = PAIRS
+#: The platforms each mode runs on. The scale round needs the docker backend's router until the OpenShift scale
+#: round is built, so the OpenShift Job (kube.py) gets PLAN_INVALID for scaleout.
+MODE_PLATFORMS = {PAIRS: ("openshift", "docker"), SCALEOUT: ("docker",)}
+#: `sides[].compileCache`: cold (a fresh /cache at every start) or warm (docker only, see the docstring).
+COMPILE_CACHES = ("cold", "warm")
+#: In scaleout mode, each replica's share of its GPU's memory when the config does not set
+#: server.gpuMemoryUtilization and both replicas share one GPU (scaleOut.sharedGpu): two of them fit.
+SHARED_GPU_MEMORY_UTILIZATION = 0.4
+#: The most two replicas on one GPU may ask for together.
+SHARED_GPU_LIMIT = 0.95
 ENERGY_SOURCES = ("auto", "dcgm", "nvidia-smi", "none")
 ENERGY_LABEL = "GPU-only power"
 DEFAULT_PORT = 8000
@@ -55,6 +81,10 @@ DEFAULTS: dict = {
                  "ciLevel": 0.95, "primary": None},
     "energy": {"source": "auto", "settleSeconds": 45,
                "thanosUrl": "https://thanos-querier.openshift-monitoring.svc:9091", "minSamples": 2},
+    # Read in mode scaleout only. The rate and the goals are placeholders: pick a rate above what one replica
+    # serves within the goals on your GPU, and goals that fit your model.
+    "scaleOut": {"requestRate": 4, "surgeSeconds": 300, "stepAfterSeconds": 30, "ttftMs": 1000, "tpotMs": 100,
+                 "sharedGpu": True},
 }
 
 
@@ -124,9 +154,12 @@ def _side(raw: Mapping, key: str, where: str) -> dict:
     gpu = raw.get("gpu", preset != "guidellm-mock")
     if not isinstance(gpu, bool):
         raise PlanError(f"{where}.gpu must be true or false")
+    cache = raw.get("compileCache", "cold")
+    if cache not in COMPILE_CACHES:
+        raise PlanError(f"{where}.compileCache must be one of {', '.join(COMPILE_CACHES)}; got {cache!r}")
     return {"key": key, "name": name, "image": image.strip(), "preset": preset, "command": command,
             "args": _string_list(raw.get("args"), f"{where}.args"), "env": _string_map(raw.get("env"), f"{where}.env"),
-            "gpu": gpu}
+            "gpu": gpu, "compile_cache": cache}
 
 
 def round_order(pairs: int, warmup: bool, aa_pairs: int) -> list[dict]:
@@ -189,6 +222,80 @@ def metric_family(concurrencies: list[int], energy: bool) -> list[dict]:
     return out
 
 
+#: The default primary metrics of scaleout mode: the new replica's start to first answer, and SLO attainment over
+#: the surge.
+SCALE_PRIMARY = ("scale.first_answer_s", "surge.slo_attainment")
+
+
+def scale_metric_family() -> list[dict]:
+    """The declared metrics of scaleout mode, in report order (no load levels: one surge per round). The startup.*
+    metrics time the round's first replica; scale.* the replica the forced step adds; surge.* come from GuideLLM's
+    report of the surge. scale.load_triggered_s is there only for a server that logs rhvp-scale lines."""
+    def metric(id_: str, label: str, unit: str, better: str) -> dict:
+        return {"id": id_, "label": label, "unit": unit, "better": better, "kind": "speed", "concurrency": None}
+
+    return [
+        metric("startup.ready_s", "first replica: time to ready", "s", stats.LOWER),
+        metric("startup.first_answer_s", "first replica: time to first answer", "s", stats.LOWER),
+        metric("scale.ready_s", "new replica: time to ready", "s", stats.LOWER),
+        metric("scale.first_answer_s", "new replica: time to first answer", "s", stats.LOWER),
+        metric("surge.slo_attainment", "surge: share of requests within the latency goals", "share", stats.HIGHER),
+        metric("surge.goodput_rps", "surge: requests per second within the latency goals", "requests/s",
+               stats.HIGHER),
+        metric("surge.ttft_ms_median", "surge: time to first token, median", "ms", stats.LOWER),
+        metric("surge.itl_ms_median", "surge: inter-token latency, median", "ms", stats.LOWER),
+        metric("surge.output_tokens_per_s", "surge: output tokens per second", "tokens/s", stats.HIGHER),
+        metric("scale.load_triggered_s", "first scale-up the server logged, from the first surge request", "s",
+               stats.LOWER),
+    ]
+
+
+def _goal(value, key: str) -> float | None:
+    if value is None:
+        return None
+    return _number(value, key, 0.001, 3_600_000)
+
+
+def _scale_out(raw, sides: list[dict], server: Mapping) -> dict:
+    """The scale-out settings of a scaleout plan, checked."""
+    if raw is not None and not isinstance(raw, Mapping):
+        raise PlanError("scaleOut must be a map")
+    cfg = _merge(DEFAULTS["scaleOut"], raw or {})
+    surge_s = _number(cfg.get("surgeSeconds"), "scaleOut.surgeSeconds", 10, 86400)
+    step_s = _number(cfg.get("stepAfterSeconds"), "scaleOut.stepAfterSeconds", 0, 86400)
+    if step_s >= surge_s:
+        raise PlanError(f"scaleOut.stepAfterSeconds ({step_s:g}) must be less than scaleOut.surgeSeconds "
+                        f"({surge_s:g}): the second replica is started during the surge")
+    ttft, tpot = _goal(cfg.get("ttftMs"), "scaleOut.ttftMs"), _goal(cfg.get("tpotMs"), "scaleOut.tpotMs")
+    if ttft is None and tpot is None:
+        raise PlanError("scaleOut needs at least one latency goal: ttftMs or tpotMs")
+    shared = cfg.get("sharedGpu")
+    if not isinstance(shared, bool):
+        raise PlanError("scaleOut.sharedGpu must be true or false")
+    if shared and any(s["gpu"] for s in sides):
+        share = server["gpu_memory_utilization"]
+        if 2 * share > SHARED_GPU_LIMIT:
+            raise PlanError(
+                f"server.gpuMemoryUtilization ({share:g}) is each replica's share of the GPU in mode scaleout, and "
+                f"with scaleOut.sharedGpu both replicas share one GPU: two of them need it at most "
+                f"{SHARED_GPU_LIMIT / 2:g}. Set scaleOut.sharedGpu: false when each replica has its own GPU")
+    return {
+        "replicas_start": 1,
+        "replicas_end": 2,
+        "request_rate": _number(cfg.get("requestRate"), "scaleOut.requestRate", 0.01, 10000),
+        "surge_s": surge_s,
+        "step_after_s": step_s,
+        "slo": {"ttft_ms": ttft, "tpot_ms": tpot},
+        "shared_gpu": shared,
+        "router": "least-busy",
+        "step_rule": "the second replica is started step_after_s after the first surge request reaches the "
+                     "router, whatever the load, and joins the router once it answers",
+        "surge_rule": "SLO attainment and goodput are GuideLLM's: a failed request counts as one that missed the "
+                      "goals, and requests still running when the surge ends are left out; a surge in which no "
+                      "request finished counts as 0 attainment and 0 goodput, a pair lost to that side",
+    }
+
+
 def digest(config: Mapping) -> str:
     """A short, stable hash of the config: part of the run id, so a changed config is a new run. `mode: pairs`, the
     default, is left out first, so a config keeps the run id it had before `mode` existed (the notebook chart leaves
@@ -201,15 +308,19 @@ def digest(config: Mapping) -> str:
 
 def build(config: Mapping, platform: str = "openshift") -> dict:
     """The plan for `config`, or PlanError. `platform` is openshift or docker: it decides what energy source
-    `auto` means (DCGM through the cluster's monitoring on OpenShift, nvidia-smi sampling under docker)."""
+    `auto` means (DCGM through the cluster's monitoring on OpenShift, nvidia-smi sampling under docker) and which
+    modes can run (MODE_PLATFORMS). A scaleout plan carries `mode` and `scale_out`; a pairs plan carries neither,
+    so it is the plan it was before scaleout existed."""
     if not isinstance(config, Mapping):
         raise PlanError("the config must be a JSON object")
     cfg = _merge(DEFAULTS, config)
     mode = cfg.get("mode", DEFAULT_MODE)
     if mode not in MODES:
         raise PlanError(f"mode must be one of {', '.join(MODES)}; got {mode!r}")
-    if mode == "scaleout":
-        raise PlanError("mode scaleout (the scale-out benchmark) is designed but not built yet; use pairs")
+    if platform not in MODE_PLATFORMS[mode]:
+        raise PlanError(f"mode {mode} runs on the docker backend only (scripts/compare-local.sh) until the OpenShift "
+                        f"scale round is built; use mode pairs on {platform}")
+    scale_mode = mode == SCALEOUT
     run_name = cfg.get("runName")
     if not isinstance(run_name, str) or not NAME.match(run_name):
         raise PlanError(f"runName must be lower-case letters, digits, '-' or '.', at most 40 characters; "
@@ -236,15 +347,27 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
         raise PlanError("rounds.warmup must be true or false")
 
     server = cfg["server"]
+    scale_raw = config.get("scaleOut")
+    if scale_mode and "gpuMemoryUtilization" not in (config.get("server") or {}):
+        shared = scale_raw.get("sharedGpu", True) if isinstance(scale_raw, Mapping) else True
+        if shared is True:  # two replicas on one GPU: each gets a share both fit in
+            server = {**server, "gpuMemoryUtilization": SHARED_GPU_MEMORY_UTILIZATION}
     load = cfg["load"]
-    concurrencies = load.get("concurrencies")
-    if not isinstance(concurrencies, list) or not concurrencies:
-        raise PlanError("load.concurrencies must be a non-empty list")
-    levels = [_number(c, "load.concurrencies[]", 1, 4096, integer=True) for c in concurrencies]
-    if len(set(levels)) != len(levels):
-        raise PlanError("load.concurrencies must not repeat a value")
-    seconds_per_level = _number(load.get("secondsPerLevel"), "load.secondsPerLevel", 1, 86400)
-    if load.get("timeoutSeconds") is None:  # time for every level, the tokenizer download and GuideLLM's start
+    if scale_mode:  # one surge per round, at a fixed rate (scaleOut), in place of the concurrency levels
+        levels = []
+        seconds_per_level = _number(_merge(DEFAULTS["scaleOut"], scale_raw if isinstance(scale_raw, Mapping)
+                                           else {}).get("surgeSeconds"), "scaleOut.surgeSeconds", 10, 86400)
+    else:
+        concurrencies = load.get("concurrencies")
+        if not isinstance(concurrencies, list) or not concurrencies:
+            raise PlanError("load.concurrencies must be a non-empty list")
+        levels = [_number(c, "load.concurrencies[]", 1, 4096, integer=True) for c in concurrencies]
+        if len(set(levels)) != len(levels):
+            raise PlanError("load.concurrencies must not repeat a value")
+        seconds_per_level = _number(load.get("secondsPerLevel"), "load.secondsPerLevel", 1, 86400)
+    if load.get("timeoutSeconds") is None and scale_mode:  # the surge, the tokenizer download and GuideLLM's start
+        timeout_s = float(round(seconds_per_level * 1.5 + 300))
+    elif load.get("timeoutSeconds") is None:  # time for every level, the tokenizer download and GuideLLM's start
         timeout_s = float(round(len(levels) * (seconds_per_level * 1.5 + 60) + 300))
     else:
         timeout_s = _number(load.get("timeoutSeconds"), "load.timeoutSeconds", 30, 86400)
@@ -268,15 +391,27 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
     source = energy.get("source")
     if source not in ENERGY_SOURCES:
         raise PlanError(f"energy.source must be one of {', '.join(ENERGY_SOURCES)}")
-    if source == "auto":
+    if scale_mode and source not in ("auto", "none"):
+        raise PlanError(f"energy.source {source} is not measured in mode scaleout (two replicas share the power "
+                        "reading); set energy.source to auto or none")
+    if scale_mode:
+        source = "none"
+    elif source == "auto":
         source = "dcgm" if platform == "openshift" else "nvidia-smi"
     if not (side_a["gpu"] and side_b["gpu"]):
         source = "none"  # a side without a GPU has no GPU power to read
-    metrics = metric_family(levels, source != "none")
+    for side in (side_a, side_b):
+        if side["compile_cache"] == "warm" and platform != "docker":
+            raise PlanError(f"sides[{0 if side is side_a else 1}].compileCache warm runs on the docker backend "
+                            "only; on OpenShift every side pod starts with a fresh /cache")
+        if side["compile_cache"] == "warm" and not warmup:
+            raise PlanError(f"sides[{0 if side is side_a else 1}].compileCache warm needs rounds.warmup: true, "
+                            "the round that fills the cache before the scored rounds")
+    metrics = scale_metric_family() if scale_mode else metric_family(levels, source != "none")
     ids = [m["id"] for m in metrics]
     primary = analysis.get("primary")
     if primary is None:
-        primary = default_primary(levels, source != "none")
+        primary = list(SCALE_PRIMARY) if scale_mode else default_primary(levels, source != "none")
     elif (not isinstance(primary, list) or not primary or not all(isinstance(p, str) for p in primary)
           or len(set(primary)) != len(primary)):
         raise PlanError("analysis.primary must be a non-empty list of metric ids without repeats, or null for the "
@@ -295,6 +430,7 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
         "run_name": run_name,
         "run_id": f"{run_name}-{digest(config)}",
         "platform": platform,
+        **({"mode": SCALEOUT} if scale_mode else {}),
         "model": {"id": model["id"].strip(), "source": model["source"].strip(), "revision": revision.strip()},
         "sides": [side_a, side_b],
         "rounds": round_order(pairs, warmup, aa_pairs),
@@ -351,6 +487,8 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
         "floor": {"family_size": family, "min_adjusted_p": floor, "reachable": floor <= alpha,
                   "pairs_needed": stats.pairs_needed(family, correction, alpha)},
     }
+    if scale_mode:
+        plan["scale_out"] = _scale_out(scale_raw, [side_a, side_b], plan["server"])
     return plan
 
 

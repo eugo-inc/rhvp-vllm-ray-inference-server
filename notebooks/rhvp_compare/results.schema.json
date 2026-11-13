@@ -383,6 +383,13 @@
         },
         "gpu": {
           "type": "boolean"
+        },
+        "compile_cache": {
+          "enum": [
+            "cold",
+            "warm"
+          ],
+          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up round. Missing in results written before it existed (cold)."
         }
       }
     },
@@ -446,13 +453,14 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^(startup\\.(ready_s|first_answer_s)|c[0-9]+\\.(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule))$"
+          "pattern": "^(startup\\.(ready_s|first_answer_s)|c[0-9]+\\.(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule)|scale\\.(ready_s|first_answer_s|load_triggered_s)|surge\\.(slo_attainment|goodput_rps|ttft_ms_median|itl_ms_median|output_tokens_per_s))$"
         },
         "label": {
           "type": "string"
         },
         "unit": {
-          "type": "string"
+          "type": "string",
+          "description": "share is a fraction from 0 to 1."
         },
         "better": {
           "enum": [
@@ -504,6 +512,10 @@
         "floor"
       ],
       "properties": {
+        "mode": {
+          "const": "scaleout",
+          "description": "Set only in mode scaleout (the scale round); a plan without it is mode pairs."
+        },
         "model": {
           "type": "object",
           "required": [
@@ -706,6 +718,72 @@
               ]
             }
           }
+        },
+        "scale_out": {
+          "type": "object",
+          "description": "Mode scaleout only: the scale round's settings, fixed before the first round.",
+          "required": [
+            "replicas_start",
+            "replicas_end",
+            "request_rate",
+            "surge_s",
+            "step_after_s",
+            "slo",
+            "shared_gpu",
+            "router",
+            "step_rule",
+            "surge_rule"
+          ],
+          "properties": {
+            "replicas_start": {
+              "const": 1
+            },
+            "replicas_end": {
+              "const": 2
+            },
+            "request_rate": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Requests per second of the surge (GuideLLM's constant profile)."
+            },
+            "surge_s": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "step_after_s": {
+              "type": "number",
+              "minimum": 0,
+              "description": "The forced step: the second replica is asked for this long after the surge's first request reached the router."
+            },
+            "slo": {
+              "type": "object",
+              "required": [
+                "ttft_ms",
+                "tpot_ms"
+              ],
+              "properties": {
+                "ttft_ms": {
+                  "$ref": "#/$defs/number_or_null"
+                },
+                "tpot_ms": {
+                  "$ref": "#/$defs/number_or_null"
+                }
+              },
+              "description": "The latency goals GuideLLM scores each request against; tpot_ms is compared with the request's inter-token latency."
+            },
+            "shared_gpu": {
+              "type": "boolean"
+            },
+            "router": {
+              "const": "least-busy"
+            },
+            "step_rule": {
+              "type": "string"
+            },
+            "surge_rule": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -792,7 +870,7 @@
     },
     "level": {
       "type": "object",
-      "description": "One concurrency level of one round, from GuideLLM's report.",
+      "description": "One concurrency level of one round, from GuideLLM's report; in mode scaleout, the round's one surge (concurrency null).",
       "required": [
         "concurrency",
         "started_at",
@@ -876,6 +954,30 @@
         },
         "energy": {
           "$ref": "#/$defs/energy"
+        },
+        "rate": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "Mode scaleout: the requests per second the surge sent at."
+        },
+        "slo_attainment": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Mode scaleout: GuideLLM's share of the judged requests that met every latency goal (a failed request counts as one that missed them; requests still running at the end are left out); null when it judged none."
+        },
+        "slo_determined_requests": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "goodput_rps": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "Mode scaleout: requests per second that met every latency goal (GuideLLM's request_goodput, mean over the successful requests)."
         }
       }
     },
@@ -930,7 +1032,8 @@
         "startup",
         "levels",
         "metrics",
-        "artifacts"
+        "artifacts",
+        "launches"
       ],
       "properties": {
         "index": {
@@ -1040,7 +1143,7 @@
           "items": {
             "$ref": "#/$defs/launch"
           },
-          "description": "Every server start in the round, in start order. Missing in results written before launches were recorded."
+          "description": "Every server start in the round, by replica (1 for the round's first start, 2 for the replica a scale round adds)."
         },
         "levels": {
           "type": "array",
@@ -1065,6 +1168,9 @@
             },
             "load_report": {
               "type": "string"
+            },
+            "server_log_2": {
+              "type": "string"
             }
           }
         },
@@ -1072,6 +1178,158 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "scale": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Mode scaleout, a scored or A/A round that reached the forced step: the step, the second replica, and how the router shared the surge out. Times in seconds are since the surge's first request reached the router, by the runner's clock.",
+          "required": [
+            "surge_started_at",
+            "step_after_s",
+            "step_at_s",
+            "new_replica",
+            "router",
+            "new_replica_share",
+            "events",
+            "load_triggered_s"
+          ],
+          "properties": {
+            "surge_started_at": {
+              "type": "string"
+            },
+            "step_after_s": {
+              "type": "number"
+            },
+            "step_at_s": {
+              "$ref": "#/$defs/number_or_null",
+              "description": "When the second replica was asked for (the plan's step_after_s, plus the runner's own delay)."
+            },
+            "new_replica": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "ready_s",
+                "first_answer_s",
+                "joined_at_s",
+                "joined_during_surge",
+                "clock",
+                "breakdown"
+              ],
+              "properties": {
+                "ready_s": {
+                  "type": "number"
+                },
+                "first_answer_s": {
+                  "type": "number"
+                },
+                "joined_at_s": {
+                  "type": "number",
+                  "description": "When the router started to send it requests."
+                },
+                "joined_during_surge": {
+                  "type": "boolean",
+                  "description": "false when the surge had ended before the replica answered: it got no requests."
+                },
+                "clock": {
+                  "type": "string"
+                },
+                "breakdown": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/breakdown_entry"
+                  }
+                }
+              }
+            },
+            "router": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "policy",
+                "backends"
+              ],
+              "properties": {
+                "policy": {
+                  "const": "least-busy"
+                },
+                "backends": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "replica",
+                      "sent",
+                      "finished",
+                      "failed",
+                      "cancelled",
+                      "max_in_flight",
+                      "first_s",
+                      "last_s"
+                    ],
+                    "properties": {
+                      "replica": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sent": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "finished": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "failed": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "cancelled": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Requests whose client went away, as GuideLLM does with the requests still running when the surge ends."
+                      },
+                      "max_in_flight": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "first_s": {
+                        "$ref": "#/$defs/number_or_null"
+                      },
+                      "last_s": {
+                        "$ref": "#/$defs/number_or_null"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "new_replica_share": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "The second replica's share of the surge's requests through the router."
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The rhvp-scale lines in the first replica's log (servers that write them)."
+            },
+            "load_triggered_s": {
+              "$ref": "#/$defs/number_or_null",
+              "description": "The first scale-up the server itself logged after the surge began (metric scale.load_triggered_s)."
+            }
           }
         }
       }

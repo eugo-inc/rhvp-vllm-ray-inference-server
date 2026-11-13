@@ -11,6 +11,7 @@ Run with: python -m pytest -q tests/test_compare_parsers.py
 import base64
 import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -311,14 +312,28 @@ def test_image_digest_from_the_pod():
 
 def _side_backend(secret: str | None = None, server_replicas: int | None = None,
                   configmaps: dict | None = None, scale_fails: int = 0, runner_pods: list | None = None,
-                  clock=None) -> tuple[kube.KubeBackend, list]:
-    """A KubeBackend on a fake API. `scale_fails`: how many scale-ups answer HTTP 503 before one goes through."""
+                  clock=None, scaled_object: dict | None = None, env_extra: dict | None = None,
+                  autoscaler_replicas: int | None = None) -> tuple[kube.KubeBackend, list]:
+    """A KubeBackend on a fake API. `scale_fails`: how many scale-ups answer HTTP 503 before one goes through.
+    `scaled_object`: the server's ScaledObject (its metadata.annotations are patched in place), None for none;
+    `autoscaler_replicas`: once it is resumed, the autoscaler sets the server to this many replicas."""
     calls = []
     state = {"replicas": server_replicas, "fails": scale_fails}
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         calls.append((request.method, request.url.path, body))
+        if request.url.path == "/apis/keda.sh/v1alpha1/namespaces/vllm-inference/scaledobjects/ray-serve-llm":
+            if scaled_object is None:
+                return httpx.Response(404, json={"message": "not found"})
+            assert request.headers["content-type"] == "application/merge-patch+json"
+            notes = scaled_object.setdefault("metadata", {}).setdefault("annotations", {})
+            notes.update(body["metadata"]["annotations"])
+            for key in [k for k, v in notes.items() if v is None]:
+                del notes[key]
+            if not notes and autoscaler_replicas is not None:
+                state["autoscaler"] = autoscaler_replicas
+            return httpx.Response(200, json=scaled_object)
         if request.url.path.endswith("/deployments/ray-serve-llm/scale"):
             if state["replicas"] is None:
                 return httpx.Response(404, json={"message": "not found"})
@@ -328,6 +343,8 @@ def _side_backend(secret: str | None = None, server_replicas: int | None = None,
                     state["fails"] -= 1
                     return httpx.Response(503, json={"message": "unavailable"})
                 state["replicas"] = body["spec"]["replicas"]
+            if request.method == "GET" and state.get("autoscaler") is not None and state["replicas"]:
+                state["replicas"] = state["autoscaler"]
             return httpx.Response(200, json={"spec": {"replicas": state["replicas"]}})
         if configmaps is not None and "/configmaps" in request.url.path:
             name = request.url.path.rsplit("/", 1)[1]
@@ -355,8 +372,74 @@ def _side_backend(secret: str | None = None, server_replicas: int | None = None,
     env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb", "RHVP_COMPARE_POD_NAME": "me",
            "RHVP_COMPARE_SIDE_RESOURCES": json.dumps({"requests": {"cpu": "2", "memory": "12Gi"},
                                                       "limits": {"memory": "24Gi"}})}
+    env.update(env_extra or {})
     extra = {"clock": clock} if clock else {}
     return kube.KubeBackend(kube=client, env=env, sleep=lambda s: None, **extra), calls
+
+
+SCALED = {"RHVP_COMPARE_SERVER_SCALED_OBJECT": "ray-serve-llm"}
+KEDA_PATH = "/apis/keda.sh/v1alpha1/namespaces/vllm-inference/scaledobjects/ray-serve-llm"
+
+
+def test_the_servers_autoscaler_is_paused_for_the_run_and_resumed_first():
+    scaled = {"metadata": {"name": "ray-serve-llm", "annotations": {"other": "x"}}}
+    backend, calls = _side_backend(server_replicas=1, scaled_object=scaled, env_extra=SCALED, autoscaler_replicas=2)
+    backend.prepare(_plan())
+    steps = [(m, p.rsplit("/", 1)[1], b) for m, p, b in calls if p == KEDA_PATH or p.endswith("/scale")]
+    assert steps == [("GET", "scale", None),
+                     ("PATCH", "ray-serve-llm", {"metadata": {"annotations": {kube.KEDA_PAUSED: "0"}}}),
+                     ("PATCH", "scale", {"spec": {"replicas": 0}})]
+    assert scaled["metadata"]["annotations"] == {"other": "x", kube.KEDA_PAUSED: "0"}
+    calls.clear()
+    assert backend.restore_server() is True  # the autoscaler chose 2: at least the 1 asked for, so back
+    steps = [(m, p.rsplit("/", 1)[1], b) for m, p, b in calls if p == KEDA_PATH or p.endswith("/scale")]
+    assert steps == [("PATCH", "ray-serve-llm", {"metadata": {"annotations": {kube.KEDA_PAUSED: None}}}),
+                     ("PATCH", "scale", {"spec": {"replicas": 1}}), ("GET", "scale", None)]
+    assert scaled["metadata"]["annotations"] == {"other": "x"}
+
+
+def test_a_missing_autoscaler_is_left_alone():
+    backend, calls = _side_backend(server_replicas=1, scaled_object=None, env_extra=SCALED)
+    backend.prepare(_plan())
+    assert backend.restore_server() is True
+    assert [m for m, p, b in calls if p == KEDA_PATH] == ["PATCH"]  # one look at prepare, none at the restore
+    plain, calls = _side_backend(server_replicas=1)
+    plain.prepare(_plan())
+    assert plain.restore_server() is True and not [c for c in calls if "keda" in c[1]]
+
+
+def test_a_paused_autoscaler_that_cannot_be_resumed_says_how():
+    now = [0.0]
+
+    def clock():
+        now[0] += 5.0
+        return now[0]
+    scaled = {"metadata": {"name": "ray-serve-llm"}}
+    backend, calls = _side_backend(server_replicas=1, scaled_object=scaled, env_extra=SCALED, clock=clock)
+    backend.prepare(_plan())
+    real = backend.kube.pause_scaled_object
+
+    def fails(namespace, name, paused):
+        if not paused:
+            raise runner.RoundError("the Kubernetes API answered HTTP 403 while trying to resume the autoscaler")
+        return real(namespace, name, paused)
+    backend.kube.pause_scaled_object = fails
+    with pytest.raises(runner.RoundError) as caught:
+        backend.restore_server()
+    assert ("oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/paused-replicas- && "
+            "oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference") in str(caught.value)
+
+
+def test_the_openshift_job_refuses_the_scale_out_mode_before_it_changes_anything(tmp_path, capsys):
+    config = _plan_config()
+    config.update(mode="scaleout", rounds={"pairs": 7, "warmup": False})
+    path = tmp_path / "compare.json"
+    path.write_text(json.dumps(config))
+    backend, calls = _side_backend(server_replicas=1, scaled_object={}, env_extra=SCALED)
+    with pytest.raises(plans.PlanError, match="mode scaleout runs on the docker backend only"):
+        runner.main_run(str(path), str(tmp_path / "results"), backend,
+                        env={"RHVP_COMPARE_TERMINATION_LOG": str(tmp_path / "term")})
+    assert calls == [] and json.loads((tmp_path / "term").read_text())["error_code"] == "PLAN_INVALID"
 
 
 def test_the_live_server_is_scaled_down_for_the_run_and_back_after():
@@ -748,3 +831,184 @@ def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):
     with pytest.raises(runner.RoundError, match="another program holds the GPU") as caught:
         backend.gpu_free({}, side, wait_s=0)
     assert caught.value.code == runner.GPU_NOT_FREE
+
+
+# ---- mode scaleout: the surge, the scale-ups the server logged, the docker replicas ----
+
+SLO_REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1-slo.json").read_text())
+
+
+def _scale_plan(**scale) -> dict:
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+              "scaleOut": {"requestRate": 2.5, "surgeSeconds": 60, "stepAfterSeconds": 10, "ttftMs": 300,
+                           "tpotMs": 25, **scale}}
+    return plans.build(config, "docker")
+
+
+def _constant(report: dict, rate: float = 2.5) -> dict:
+    """The fixture is a concurrent run with latency goals; a surge's report differs in its strategy block only,
+    written here by hand as GuideLLM v0.8.1 writes it for the constant profile."""
+    out = json.loads(json.dumps(report))
+    out["benchmarks"][0]["config"]["strategy"] = {"type_": "constant", "rate": rate, "max_concurrency": None,
+                                                  "rampup_duration": 0.0}
+    return out
+
+
+def test_the_surge_command_runs_a_constant_rate_with_the_latency_goals():
+    args = guidellm.command(_scale_plan(), "http://127.0.0.1:8787", "/results/r/guidellm.json")
+    assert args[args.index("--profile") + 1] == "kind=constant,rate=2.5"
+    assert args[args.index("--constraint") + 1] == "kind=max_duration,seconds=60"
+    assert "--override" not in args and "kind=json,path=/results/r/guidellm.json" in args
+    metrics = json.loads(args[args.index("--metrics") + 1])
+    assert metrics == {"kind": "generative", "sample_size": 0, "slo": {"ttft_ms": 300, "tpot_ms": 25}}
+    # the shape GuideLLM v0.8.1 records for the goals it was given (the fixture's own config)
+    recorded = SLO_REPORT["config"]["spec"]["metrics"]
+    assert set(metrics) <= set(recorded) and set(metrics["slo"]) <= set(recorded["slo"])
+    one_goal = guidellm.command(_scale_plan(tpotMs=None), "t", "o")
+    assert json.loads(one_goal[one_goal.index("--metrics") + 1])["slo"] == {"ttft_ms": 300}
+    assert guidellm.command(_plan(), "t", "o")[guidellm.command(_plan(), "t", "o").index("--metrics") + 1] == (
+        "kind=generative,sample_size=0")  # mode pairs: unchanged
+
+
+def test_the_surge_level_from_a_report_with_latency_goals():
+    level = guidellm.surge_level(_constant(SLO_REPORT))
+    assert level["concurrency"] is None and level["rate"] == 2.5 and level["usable"] and level["note"] is None
+    assert level["slo_attainment"] == pytest.approx(0.9574468085106383)
+    assert level["slo_determined_requests"] == 47 and level["goodput_rps"] == pytest.approx(11.0)
+    assert level["requests"] == {"successful": 47, "errored": 0, "incomplete": 1}
+    flat = guidellm.surge_metrics(level)
+    assert set(flat) == {"surge.slo_attainment", "surge.goodput_rps", "surge.ttft_ms_median", "surge.itl_ms_median",
+                         "surge.output_tokens_per_s"}
+    assert flat["surge.ttft_ms_median"] == level["ttft_ms"]["median"]
+
+
+def test_a_surge_with_failed_requests_keeps_its_attainment_only():
+    report = _constant(SLO_REPORT)
+    metrics = report["benchmarks"][0]["metrics"]
+    metrics["request_totals"]["errored"] = 5
+    metrics["slo_attainment"] = 0.5
+    level = guidellm.surge_level(report)
+    assert not level["usable"] and "count as requests that missed the latency goals" in level["note"]
+    assert set(guidellm.surge_metrics(level)) == {"surge.slo_attainment", "surge.goodput_rps"}
+
+
+@pytest.mark.parametrize("successful, errored, attainment, goodput, expected", [
+    (0, 0, None, None, {"surge.slo_attainment": 0.0, "surge.goodput_rps": 0.0}),  # nothing finished: a 0
+    (0, 6, 0.0, None, {"surge.slo_attainment": 0.0, "surge.goodput_rps": 0.0}),   # all failed: GuideLLM's 0
+    (10, 0, None, None, {}),  # judged none (a goal it cannot measure): missing, not 0
+])
+def test_a_surge_that_gives_no_attainment(successful, errored, attainment, goodput, expected):
+    report = _constant(SLO_REPORT)
+    metrics = report["benchmarks"][0]["metrics"]
+    metrics["request_totals"].update(successful=successful, errored=errored)
+    metrics["slo_attainment"] = attainment
+    if goodput is None:
+        del metrics["request_goodput"]
+    level = guidellm.surge_level(report)
+    got = {k: v for k, v in guidellm.surge_metrics(level).items() if k in ("surge.slo_attainment",
+                                                                        "surge.goodput_rps")}
+    assert got == expected
+    if successful and attainment is None:
+        assert "judged no request" in level["note"]
+
+
+def test_start_runs_guidellm_in_the_background(tmp_path):
+    fake = tmp_path / "guidellm"
+    fake.write_text("#!/bin/sh\nsleep 1\nfor a in \"$@\"; do case \"$a\" in kind=json,path=*) "
+                    "echo '{}' > \"${a#kind=json,path=}\";; esac; done\n")
+    fake.chmod(0o755)
+    running = guidellm.start(_scale_plan(), "http://127.0.0.1:8787", tmp_path / "out", executable=str(fake))
+    assert running.poll() is None  # still running: start returned at once
+    assert running.finish() == tmp_path / "out" / "guidellm.json"
+    hang = tmp_path / "hang"
+    hang.write_text("#!/bin/sh\nsleep 30\n")
+    hang.chmod(0o755)
+    started = guidellm.start(_scale_plan(), "t", tmp_path / "out2", executable=str(hang))
+    started.stop()
+    assert started.poll() is not None
+
+
+def test_the_first_scale_up_the_server_logged():
+    events = [{"ts": 90.0, "from": 1, "to": 2, "reason": "target"}, {"ts": 112.5, "from": 1, "to": 2, "reason": "running"},
+              {"ts": 105.0, "from": 1, "to": 2, "reason": "target"}, {"ts": 130.0, "from": 2, "to": 1,
+                                                                    "reason": "target"}]
+    assert logs.first_scale_up(events, 100.0) == 5.0  # a decision before the surge and a scale-down do not count
+    assert logs.first_scale_up(events[3:], 100.0) is None
+
+
+class ReplicaDocker(FakeDocker):
+    """FakeDocker with the calls a side's start, its launch facts and the cache volumes make."""
+
+    def __init__(self, exec_result=(0, "VLLM_X=1\0HF_TOKEN=hf_s\0PATH=/bin\0")):
+        super().__init__()
+        self.created, self.volumes_removed, self.exec_result = {}, [], exec_result
+
+    def create(self, name, body):
+        self.created[name] = body
+        return f"{name}-id"
+
+    def image(self, ref):
+        return {"Config": {"Entrypoint": ["/usr/bin/tini", "--"], "Cmd": ["serve"]}}
+
+    def exec(self, cid, cmd, timeout_s=30.0):
+        self.calls.append(("exec", cid, cmd))
+        if isinstance(self.exec_result, Exception):
+            raise self.exec_result
+        return self.exec_result
+
+    def inspect(self, cid):
+        return {"State": {"Running": True}, "Config": {"Env": ["VLLM_Y=2", "PATH=/usr/bin"]}}
+
+    def by_label(self, value):
+        return []
+
+    def remove_volume(self, name):
+        self.volumes_removed.append(name)
+
+
+def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
+    docker = ReplicaDocker()
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_CPUSET="0-3",
+                              RHVP_COMPARE_CACHE_VOLUME="cc")
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+              "sides": [{"name": "a", "image": "x/a:1", "compileCache": "warm"}, {"name": "b", "image": "x/b:1"}]}
+    plan = plans.build(config, "docker")
+    backend.prepare(plan)
+    volume = f"cc-{plan['run_id'][-8:]}-a"
+    assert backend.cache_volumes == {"A": volume} and docker.volumes_removed == [volume]  # a fresh one
+    chmod = [body for kind, name, body in [c for c in docker.calls if c[0] == "run"] if "cache" in name]
+    assert chmod[0]["Cmd"] == ["chmod 1777 /cache"] and chmod[0]["HostConfig"]["CpusetCpus"] == "0-3"
+    side_a, side_b = plan["sides"]
+    round_ = plan["rounds"][2]
+    first = backend.start(plan, round_, side_a, plans.side_spec(plan, side_a))
+    second = backend.start(plan, round_, side_a, plans.side_spec(plan, side_a), replica=2)
+    assert second["name"] == first["name"] + "-2" and second["replica"] == 2
+    host1, host2 = docker.created[first["name"]]["HostConfig"], docker.created[second["name"]]["HostConfig"]
+    assert host1["DeviceRequests"][0]["DeviceIDs"] == ["0"] and host2["DeviceRequests"][0]["DeviceIDs"] == ["1"]
+    assert f"{volume}:/cache" in host2["Binds"] and "/cache" not in host2["Tmpfs"] and host2["CpusetCpus"] == "0-3"
+    cold = backend.start(plan, plan["rounds"][3], side_b, plans.side_spec(plan, side_b))
+    cold_host = docker.created[cold["name"]]["HostConfig"]
+    assert "/cache" in cold_host["Tmpfs"] and not any(b.endswith(":/cache") for b in cold_host["Binds"])
+    with pytest.raises(runner.RoundError, match="replica 3 needs one more"):
+        backend.start(plan, round_, side_a, plans.side_spec(plan, side_a), replica=3)
+    backend.cleanup()
+    assert docker.volumes_removed == [volume, volume]
+
+
+def test_docker_launch_facts_read_the_server_process_then_the_container():
+    docker = ReplicaDocker()
+    backend = _docker_backend(docker)
+    facts = backend.launch_facts({"id": "c1", "image": "x/a:1"})
+    assert facts == {"image_entrypoint": ["/usr/bin/tini", "--"], "image_cmd": ["serve"], "env_source": "process",
+                     "env": {"VLLM_X": "1", "HF_TOKEN": "hf_s", "PATH": "/bin"}}
+    assert docker.calls[-1] == ("exec", "c1", ["sh", "-c", dockerapi.SERVER_ENVIRON])
+    no_shell = _docker_backend(ReplicaDocker(exec_result=runner.RoundError("docker could not start an exec")))
+    facts = no_shell.launch_facts({"id": "c1", "image": "x/a:1"})
+    assert facts["env_source"] == "container" and facts["env"] == {"VLLM_Y": "2", "PATH": "/usr/bin"}
+    assert dockerapi.environ("A=1\0B=x=y\0\0junk\0") == {"A": "1", "B": "x=y"}
+
+
+def test_the_server_environ_script_picks_the_largest_process(tmp_path):
+    # Run the script against this machine's own /proc: it must print some process's environment, NUL-separated.
+    out = subprocess.run(["sh", "-c", dockerapi.SERVER_ENVIRON], capture_output=True, timeout=30)
+    assert out.returncode == 0 and b"=" in out.stdout and b"\0" in out.stdout

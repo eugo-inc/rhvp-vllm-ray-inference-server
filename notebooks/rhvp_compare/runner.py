@@ -20,6 +20,18 @@ The live server. The backend may scale the pattern's own server down for the run
 worked. A server that could not be brought back makes the run exit 4, whatever its status, with the command that
 brings it back in the log.
 
+The scale round (plan mode scaleout, every round but the warm-ups). The side's first replica starts and is timed as
+in any round; a router (router.py, least-busy) is put in front of it, and GuideLLM's surge goes through the router. At
+scale_out.step_after_s after the router saw the surge's first request (the forced step), the runner starts a
+second replica of the same side, times it from its start to its first answer, and adds it to the router. The
+round keeps how many requests each replica got (`scale.router`), so the new replica's share of the surge is on
+record. A second replica that never answers fails the round (SIDE_NEVER_READY); one that answers only after the surge
+has ended is still timed, with a share of 0. The surge is not run a second time when GuideLLM times out: a second
+surge would have no forced step.
+
+Every server start is recorded in the round's `launches` (launch.py): what the runner ran, and the environment the
+server process saw when the backend can read it (`launch_facts`).
+
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
 table), and rounds/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
 is already complete is not run again (so a Job that Argo CD creates a second time does nothing). See summary.py for
@@ -40,7 +52,7 @@ from collections.abc import Callable, Mapping
 
 import httpx
 
-from . import analyze, energy, guidellm, logs, plan as plans, probe, report, summary
+from . import analyze, energy, guidellm, launch, logs, plan as plans, probe, report, summary
 
 HARNESS = {"name": "rhvp_compare", "version": "1"}
 
@@ -120,6 +132,13 @@ class Backend(Protocol):
 
     def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path: ...
 
+    # The scale round also needs (plan mode scaleout):
+    # - `start(plan, round_, side, spec, replica=2)`: the round's second replica, next to the first (`replica` is
+    #   passed only for 2);
+    # - `router(plan, targets, out_dir)`: a router in front of `targets`, with `url`, `add(target) -> dict`,
+    #   `stats() -> dict` and `stop()` (router.Process);
+    # - `start_load(plan, round_, target, out_dir)`: GuideLLM started in the background (guidellm.Running).
+
     def sampler(self, plan: Mapping, handle: Any) -> Sampler | None: ...
 
     def logs(self, handle: Any) -> str: ...
@@ -140,6 +159,8 @@ class Backend(Protocol):
     # - `on_stop()`: a stop has begun; shorten the waits of what is left (log reads, deletes) to fit the grace period.
     # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
     #   results volume finds it (kube.py: a ConfigMap). Called after every save.
+    # - `launch_facts(handle) -> dict`: what a server start ran with, read while it runs: `env` (the server
+    #   process's environment) and `env_source` (launch.ENV_SOURCES), `image_entrypoint` and `image_cmd`.
 
 
 def write_json(path: Path, data: Mapping) -> None:
@@ -353,14 +374,18 @@ class Runner:
         record: dict = {"index": round_["index"], "side": round_["side"], "kind": round_["kind"],
                         "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
-                        "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {}}
-        held: dict = {"handle": None}
+                        "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
+                        "launches": []}
+        held: dict = {"handle": None, "replicas": [], "load": None, "router": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
             try:
                 if self._stopping:
                     raise Stopped()
-                self._round(round_, side, spec, record, out_dir, rel, held)
+                if self.plan.get("mode") == plans.SCALEOUT and round_["kind"] != plans.WARMUP:
+                    self._scale_round(round_, side, spec, record, out_dir, rel, held)
+                else:
+                    self._round(round_, side, spec, record, out_dir, rel, held)
                 record["status"] = "ok"
             finally:
                 self._interruptible = False
@@ -378,21 +403,60 @@ class Runner:
         finally:
             if self._stopping:  # also a stop that came in after the round's own work: the server back first
                 self._begin_stop()
+            self._stop_scale_helpers(held, record)
+            for replica in reversed(held["replicas"][1:]):  # the added replica first, the first replica last
+                self._after_replica(replica, spec, record, out_dir, rel)
             if held["handle"] is not None:
+                self._launch(held["replicas"][0], spec, record)
                 self._after(held["handle"], record, out_dir, rel)
+            record["launches"].sort(key=lambda item: item["replica"])
             record["finished_at"] = utc_now()
         record.pop("_reported_version", None)
         record.pop("_started_epoch", None)
         return record
 
+    def _start(self, round_: Mapping, side: Mapping, spec: Mapping, held: dict, replica: int = 1):
+        """Start one replica of the side; kept in `held` at once, so it is taken down whatever happens next."""
+        started_at, epoch = utc_now(), self.wall()
+        if replica == 1:
+            handle = self.backend.start(self.plan, round_, side, spec)
+            held["handle"] = handle
+        else:
+            handle = self.backend.start(self.plan, round_, side, spec, replica=replica)
+        held["replicas"].append({"replica": replica, "handle": handle, "started_at": started_at, "epoch": epoch})
+        return handle
+
+    def _launch(self, replica: Mapping, spec: Mapping, record: dict) -> None:
+        """The replica's launch record: what the runner ran, and what the backend can read of what the server saw."""
+        facts: dict = {}
+        read = getattr(self.backend, "launch_facts", None)
+        if read is not None:
+            try:
+                facts = read(replica["handle"]) or {}
+            except Exception as error:  # the launch record says what it could not read
+                record.setdefault("notes", []).append(f"launch facts of replica {replica['replica']} not read: "
+                                                      f"{type(error).__name__}")
+        source = facts.get("env_source") if facts.get("env_source") in launch.ENV_SOURCES else "none"
+        record["launches"].append(launch.record(
+            replica["replica"], spec.get("command"), spec.get("args") or [], facts.get("env"), source,
+            started_at=replica["started_at"], image_entrypoint=facts.get("image_entrypoint"),
+            image_cmd=facts.get("image_cmd")))
+
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
         """Wait for the GPU, start the side, time its start, load it; any failure raises."""
+        handle, target = self._first_replica(round_, side, spec, record, held)
+        if round_["kind"] != plans.WARMUP:
+            record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
+            record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+
+    def _first_replica(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, held: dict):
+        """Wait for the GPU, start the round's first replica and time it to its first answer: (handle, target)."""
         self.backend.gpu_free(self.plan, side)
         timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
         record["_started_epoch"] = self.wall()
         t0 = self.clock()
-        handle = held["handle"] = self.backend.start(self.plan, round_, side, spec)
+        handle = self._start(round_, side, spec, held)
         deadline = t0 + timeout
         target = self.backend.endpoint(handle, deadline)
         alive = lambda: self.backend.alive(handle)  # noqa: E731
@@ -406,9 +470,121 @@ class Runner:
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["metrics"].update({"startup.ready_s": ready_s, "startup.first_answer_s": first_s})
-        if round_["kind"] != plans.WARMUP:
-            record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
-            record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+        return handle, target
+
+    # ---- the scale round (plan mode scaleout) ----
+
+    def _scale_round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+                     held: dict) -> None:
+        """The first replica as in any round; the surge through the router; the second replica at the forced step;
+        the surge's figures, and how the router shared it out."""
+        scale = self.plan["scale_out"]
+        _, target = self._first_replica(round_, side, spec, record, held)
+        router = held["router"] = self.backend.router(self.plan, [target], out_dir)
+        running = held["load"] = self.backend.start_load(self.plan, round_, router.url, out_dir)
+        load_deadline = self.clock() + self.plan["load"]["timeout_s"]
+        surge_at = None
+        while surge_at is None:  # the surge starts when its first request reaches the router
+            surge_at = router.stats().get("first_request_at")
+            if surge_at is None:
+                if running.poll() is not None:
+                    running.finish()  # LoadError when it failed
+                    raise guidellm.LoadError("GuideLLM ended before it sent a request")
+                if self.clock() > load_deadline:
+                    raise guidellm.LoadError("GuideLLM sent no request before its time limit")
+                self.sleep(0.25)
+        step_at = surge_at + scale["step_after_s"]
+        while (left := step_at - self.wall()) > 0:
+            if running.poll() is not None:
+                running.finish()
+                raise guidellm.LoadError("the surge ended before the forced step")
+            self.sleep(min(left, 0.5))
+        record["scale"] = {"surge_started_at": _iso(surge_at), "step_after_s": scale["step_after_s"],
+                           "step_at_s": None, "new_replica": None, "router": None, "new_replica_share": None,
+                           "events": [], "load_triggered_s": None}
+        timeout = self.plan["server"]["ready_timeout_s"]
+        t0 = self.clock()
+        handle2 = self._start(round_, side, spec, held, replica=2)
+        record["scale"]["step_at_s"] = round(held["replicas"][-1]["epoch"] - surge_at, 3)
+        deadline = t0 + timeout
+        target2 = self.backend.endpoint(handle2, deadline)
+        alive2 = lambda: self.backend.alive(handle2)  # noqa: E731
+        model = self.plan["model"]["id"]
+        with self.client(target2) as client:
+            ready_s = probe.wait_ready(client, model, t0, deadline, alive2)
+            first_s = probe.first_answer(client, model, t0, deadline, alive2,
+                                         self.plan["server"]["first_answer_tokens"],
+                                         self.plan["load"]["request_format"])
+        surge_over = running.poll() is not None
+        joined = router.add(target2) or {}
+        joined_at = joined.get("joined_at") if isinstance(joined.get("joined_at"), (int, float)) else self.wall()
+        record["scale"]["new_replica"] = {
+            "ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
+            "joined_at_s": round(joined_at - surge_at, 3), "joined_during_surge": not surge_over,
+            "clock": "runner, from just before the second replica was asked for", "breakdown": []}
+        record["metrics"].update({"scale.ready_s": ready_s, "scale.first_answer_s": first_s})
+        report_path = running.finish()  # no second try: a second surge would have no forced step
+        record["artifacts"]["load_report"] = f"{rel}/{report_path.name}"
+        raw = json.loads(report_path.read_text(encoding="utf-8"))
+        version = guidellm.version(raw)
+        if version:
+            self.results["provenance"]["load_tool"]["version"] = version
+        level = guidellm.surge_level(raw)
+        level["energy"] = energy.none_entry("none", "energy is not measured in mode scaleout")
+        record["levels"] = [level]
+        record["metrics"].update(guidellm.surge_metrics(level))
+        record["scale"]["router"] = self._router_stats(router.stats(), [target, target2], surge_at)
+        sent = [b["sent"] for b in record["scale"]["router"]["backends"]]
+        record["scale"]["new_replica_share"] = round(sent[1] / sum(sent), 4) if sum(sent) else None
+
+    def _router_stats(self, stats: Mapping, targets: list[str], surge_at: float) -> dict:
+        """The router's counts per replica (replica 1 first), its times in seconds after the surge's start."""
+        by_url = {b.get("url"): b for b in stats.get("backends") or []}
+        out = []
+        for replica, url in enumerate(targets, start=1):
+            b = by_url.get(url) or {}
+
+            def since(key: str) -> float | None:
+                value = b.get(key)
+                return round(value - surge_at, 3) if isinstance(value, (int, float)) else None
+
+            out.append({"replica": replica, "sent": int(b.get("sent") or 0), "finished": int(b.get("finished") or 0),
+                        "failed": int(b.get("failed") or 0), "cancelled": int(b.get("cancelled") or 0),
+                        "max_in_flight": int(b.get("max_in_flight") or 0), "first_s": since("first_at"),
+                        "last_s": since("last_at")})
+        return {"policy": stats.get("policy") or "least-busy", "backends": out}
+
+    def _stop_scale_helpers(self, held: dict, record: dict) -> None:
+        """Stop the surge and the router, if the round got that far and they still run."""
+        running, router = held.get("load"), held.get("router")
+        if running is not None and running.poll() is None:
+            try:
+                running.stop()
+            except Exception as error:
+                record.setdefault("notes", []).append(f"GuideLLM not stopped: {type(error).__name__}")
+        if router is not None:
+            try:
+                router.stop()
+            except Exception as error:
+                record.setdefault("notes", []).append(f"router not stopped: {type(error).__name__}: {error}")
+
+    def _after_replica(self, replica: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str) -> None:
+        """The added replica: its launch record, its log (server-<n>.log, with its start's breakdown), teardown."""
+        handle, n = replica["handle"], replica["replica"]
+        self._launch(replica, spec, record)
+        try:
+            text = self.backend.logs(handle)
+            (out_dir / f"server-{n}.log").write_text(text, encoding="utf-8")
+            record["artifacts"][f"server_log_{n}"] = f"{rel}/server-{n}.log"
+            new = (record.get("scale") or {}).get("new_replica")
+            if new is not None:
+                new["breakdown"] = logs.breakdown(text, replica["epoch"])
+        except Exception as error:
+            record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(error).__name__}")
+        try:
+            self.backend.stop(handle)
+        except Exception as error:
+            record.setdefault("notes", []).append(f"teardown of replica {n}: {type(error).__name__}: {error}")
 
     def _load(self, round_: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None
@@ -494,6 +670,14 @@ class Runner:
                 source = "log" if version else None
             if version:
                 record["server_version"] = {"vllm": version, "source": source}
+            scale = record.get("scale")
+            if scale is not None:  # the scale-ups the server itself logged (the pattern's rhvp-scale lines)
+                scale["events"] = logs.scale_events(text)
+                surge_at = summary_epoch(scale.get("surge_started_at"))
+                up = logs.first_scale_up(scale["events"], surge_at) if surge_at is not None else None
+                if up is not None:
+                    scale["load_triggered_s"] = round(up, 3)
+                    record["metrics"]["scale.load_triggered_s"] = up
         except Exception as error:
             record.setdefault("notes", []).append(f"server log not read: {type(error).__name__}")
         try:
@@ -518,6 +702,20 @@ class Runner:
             self.backend.stop(handle)
         except Exception as error:
             record.setdefault("notes", []).append(f"teardown: {type(error).__name__}: {error}")
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def summary_epoch(text: str | None) -> float | None:
+    """Seconds since the epoch of a time the runner wrote (utc_now, _iso)."""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _finish(results: Mapping, termination_log: str | None) -> None:

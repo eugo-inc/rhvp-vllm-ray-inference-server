@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from . import summary
+from . import stats, summary
 
 
 def _num(value, unit: str = "") -> str:
     if value is None:
         return "-"
+    if unit == "share":
+        return f"{value:.1%}"
     if unit in ("s",):
         text = f"{value:.2f}"
     elif unit == "ms":
@@ -68,10 +70,22 @@ def markdown(results: Mapping) -> str:
     warmup = ", after one warm-up round per side" if plan.get("warmup") else ""
     aa = (f", then {plan['aa_pairs']} A/A pair{'s' if plan['aa_pairs'] != 1 else ''}" if plan.get("aa_pairs")
           else "")
+    scale = plan.get("scale_out") if plan.get("mode") == "scaleout" else None
+    if scale:
+        shape = (f"{scale['request_rate']:g} requests per second for {load['seconds_per_level']:.0f} s through a "
+                 f"least-busy router, a second replica asked for {scale['step_after_s']:g} s after the first "
+                 f"request")
+    else:
+        shape = (f"{load['seconds_per_level']:.0f} s at each of {', '.join(str(c) for c in load['concurrencies'])} "
+                 f"concurrent streams")
     lines.append(f"Plan: {plan['pairs']} pairs in ABBA order{warmup}{aa}. "
                  f"Load: GuideLLM, {load['prompt_tokens']} prompt and {load['output_tokens']} output tokens per "
-                 f"request, {load['seconds_per_level']:.0f} s at each of "
-                 f"{', '.join(str(c) for c in load['concurrencies'])} concurrent streams, seed {load['seed']}.")
+                 f"request, {shape}, seed {load['seed']}.")
+    if scale:
+        goals = "; ".join(f"{name} at most {scale['slo'][key]:g} ms" for key, name in
+                          (("ttft_ms", "time to first token"), ("tpot_ms", "inter-token latency"))
+                          if scale["slo"].get(key) is not None)
+        lines.append(f"Latency goals: {goals}. Mode scaleout: {scale['surge_rule']}.")
     primary_count = sum(1 for m in plan["metrics"] if m.get("role", "primary") == "primary")
     lines.append(f"Method: B/A per pair; exact {method['test']} test, {method['correction']} correction over the "
                  f"{primary_count} primary metrics, alpha {method['alpha']}; tie band ±{method['tie_band']:.0%} "
@@ -106,6 +120,8 @@ def markdown(results: Mapping) -> str:
             typical = "-" if row["median_abs_change"] is None else f"{row['median_abs_change']:.1%}"
             largest = "-" if row["max_abs_change"] is None else f"{row['max_abs_change']:.1%}"
             lines.append(f"| {labels.get(row['id'], row['id'])} | {row['pairs']} | {typical} | {largest} |")
+    if scale:
+        lines += _scale_lines(results)
     failed = [r for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         lines += ["", "Rounds that did not finish:"]
@@ -114,7 +130,8 @@ def markdown(results: Mapping) -> str:
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]
-        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}), {u['concurrency']} streams: "
+        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}), "
+                  f"{'the surge' if u['concurrency'] is None else str(u['concurrency']) + ' streams'}: "
                   f"{u['errored']} requests failed, {u['successful']} succeeded" for u in unusable]
     lost = [row for row in rows if (row.get("pairs_lost") or {}).get("A") or (row.get("pairs_lost") or {}).get("B")]
     if lost:
@@ -124,3 +141,26 @@ def markdown(results: Mapping) -> str:
         lines += ["", "**The live server was not brought back.** " + "; ".join(
             e for e in run.get("errors") or [] if "live server" in e)]
     return "\n".join(lines) + "\n"
+
+
+def _scale_lines(results: Mapping) -> list[str]:
+    """Mode scaleout: per side, the medians over the scored rounds of when the second replica was asked for and
+    first sent requests, and its share of the surge's requests through the router."""
+    out = ["", "The second replica (medians over the scored rounds that reached the forced step; seconds after "
+               "the surge's first request):", "",
+           "| Side | Rounds | asked for | first sent requests | its share of the requests | answered after the "
+           "surge |", "|---|---|---|---|---|---|"]
+    for side in ("A", "B"):
+        scales = [r["scale"] for r in results.get("rounds") or [] if r.get("kind") == "scored"
+                  and r.get("side") == side and r.get("status") == "ok" and (r.get("scale") or {}).get("new_replica")]
+
+        def median(values: list) -> float | None:
+            values = [v for v in values if isinstance(v, (int, float))]
+            return stats.median(values) if values else None
+
+        late = sum(1 for s in scales if s["new_replica"].get("joined_during_surge") is False)
+        joined = [s["new_replica"].get("joined_at_s") for s in scales if s["new_replica"].get("joined_during_surge")]
+        out.append(f"| {side} | {len(scales)} | {_num(median([s.get('step_at_s') for s in scales]), 's')} | "
+                   f"{_num(median(joined), 's')} | "
+                   f"{_num(median([s.get('new_replica_share') for s in scales]), 'share')} | {late} |")
+    return out

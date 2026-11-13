@@ -215,12 +215,84 @@ def test_plan_rejects_bad_configs():
         plans.build({**config(), "analysis": {"correction": "sidak"}})
 
 
-def test_plan_refuses_the_scale_out_mode_until_it_is_built():
-    # Lift this when the scale-out benchmark is built; then make launches required if every round writes it.
-    with pytest.raises(plans.PlanError, match=r"mode scaleout \(the scale-out benchmark\) is designed but not built"):
-        plans.build({**config(), "mode": "scaleout"}, "docker")
-    assert "mode" not in plans.build(config(), "docker")
-    assert "launches" not in SCHEMA["$defs"]["round"]["required"]
+def scale_config(**extra) -> dict:
+    """A scaleout config; a `scaleOut` map in `extra` is merged into the one here."""
+    scale = {"requestRate": 10, "surgeSeconds": 40, "stepAfterSeconds": 5, "ttftMs": 200, "tpotMs": 20}
+    if isinstance(extra.get("scaleOut"), dict):
+        extra["scaleOut"] = {**scale, **extra["scaleOut"]}
+    out = config(mode="scaleout", rounds={"pairs": 7, "warmup": True, "aaPairs": 0}, scaleOut=scale)
+    out.update(extra)
+    return out
+
+
+def test_plan_scale_out_mode():
+    plan = plans.build(scale_config(), "docker")
+    assert plan["mode"] == "scaleout" and "mode" not in plans.build(config(), "docker")
+    assert plan["analysis"]["primary"] == ["scale.first_answer_s", "surge.slo_attainment"]
+    assert [m["id"] for m in plan["metrics"] if m["role"] == "primary"] == plan["analysis"]["primary"]
+    # Holm over the two primaries: 7 pairs are the fewest that can reach alpha 0.05 (2 * 2**-6 = 0.031).
+    assert plan["floor"] == {"family_size": 2, "min_adjusted_p": pytest.approx(2 * 2 ** -6), "reachable": True,
+                             "pairs_needed": 7}
+    assert not plans.build(scale_config(rounds={"pairs": 6}), "docker")["floor"]["reachable"]
+    assert plan["energy"]["source"] == "none" and plan["load"]["concurrencies"] == []
+    assert plan["load"]["seconds_per_level"] == 40 and plan["load"]["timeout_s"] == 40 * 1.5 + 300
+    assert plan["server"]["gpu_memory_utilization"] == plans.SHARED_GPU_MEMORY_UTILIZATION  # two replicas, one GPU
+    scale = plan["scale_out"]
+    assert (scale["request_rate"], scale["surge_s"], scale["step_after_s"], scale["slo"], scale["router"]) == (
+        10, 40, 5, {"ttft_ms": 200, "tpot_ms": 20}, "least-busy")
+    assert (scale["replicas_start"], scale["replicas_end"], scale["shared_gpu"]) == (1, 2, True)
+    assert all(m["concurrency"] is None for m in plan["metrics"])
+    assert plans.build(scale_config(server={"gpuMemoryUtilization": 0.3}), "docker")["server"][
+        "gpu_memory_utilization"] == 0.3
+    assert plans.build(scale_config(scaleOut={"sharedGpu": False}), "docker")["server"][
+        "gpu_memory_utilization"] == 0.85
+    assert plans.build(scale_config(scaleOut={"tpotMs": None}), "docker")["scale_out"]["slo"] == {
+        "ttft_ms": 200, "tpot_ms": None}
+    assert plans.build(config(), "docker")["sides"][0]["compile_cache"] == "cold"
+    assert "launches" in SCHEMA["$defs"]["round"]["required"]  # every round of every mode writes it
+
+
+@pytest.mark.parametrize("extra, platform, message", [
+    ({}, "openshift", "mode scaleout runs on the docker backend only"),
+    ({"scaleOut": {"stepAfterSeconds": 40}}, "docker", "must be less than scaleOut.surgeSeconds"),
+    ({"scaleOut": {"ttftMs": None, "tpotMs": None}}, "docker", "at least one latency goal"),
+    ({"scaleOut": "fast"}, "docker", "scaleOut must be a map"),
+    ({"scaleOut": {"sharedGpu": "yes"}}, "docker", "sharedGpu must be true or false"),
+    ({"server": {"gpuMemoryUtilization": 0.6}}, "docker", "two of them need it at most 0.475"),
+    ({"energy": {"source": "nvidia-smi"}}, "docker", "is not measured in mode scaleout"),
+    ({"analysis": {"primary": ["c4.ttft_ms_median"]}}, "docker", "does not have: c4.ttft_ms_median"),
+])
+def test_plan_scale_out_mode_refusals(extra, platform, message):
+    with pytest.raises(plans.PlanError, match=re.escape(message)):
+        plans.build(scale_config(**extra), platform)
+
+
+def test_plan_warm_compile_cache_runs_on_docker_after_a_warm_up():
+    warm = config(sides=[{"name": "old", "image": "registry.example/server:1", "compileCache": "warm"},
+                         {"name": "new", "image": "registry.example/server:2"}])
+    assert [s["compile_cache"] for s in plans.build(warm, "docker")["sides"]] == ["warm", "cold"]
+    with pytest.raises(plans.PlanError, match="compileCache warm runs on the docker backend only"):
+        plans.build(warm, "openshift")
+    with pytest.raises(plans.PlanError, match="needs rounds.warmup: true"):
+        plans.build({**warm, "rounds": {"pairs": 3, "warmup": False}}, "docker")
+    with pytest.raises(plans.PlanError, match="compileCache must be one of cold, warm"):
+        plans.build(config(sides=[{"name": "a", "image": "x:1", "compileCache": "hot"}, {"name": "b", "image": "x:2"}]),
+                    "docker")
+
+
+def test_the_scale_out_mock_config_builds_on_docker_only():
+    """tests/fixtures/compare-scaleout-mock.json, the config of the docker mock run (scripts/compare-local.sh)."""
+    mock = json.loads((FIXTURES / "compare-scaleout-mock.json").read_text())
+    plan = plans.build(mock, "docker")
+    assert plan["mode"] == "scaleout" and plan["pairs"] == 7 and plan["floor"]["reachable"]
+    assert [m["id"] for m in plan["metrics"] if m.get("role", "primary") == "primary"] == list(plans.SCALE_PRIMARY)
+    assert plan["scale_out"]["step_after_s"] < plan["scale_out"]["surge_s"] == plan["load"]["seconds_per_level"]
+    spec = plans.side_spec(plan, plan["sides"][0])
+    assert spec["command"][:2] == ["sh", "-c"] and spec["gpu"] is False
+    assert spec["args"][-2:] == ["--max-concurrent-requests", "2"] and "--port" in spec["args"]
+    assert plan["sides"][0]["image"] == plan["sides"][1]["image"] == plans.GUIDELLM_IMAGE
+    with pytest.raises(plans.PlanError, match="docker backend only"):
+        plans.build(mock, "openshift")
 
 
 def test_plan_declares_everything_before_the_run():
@@ -490,6 +562,16 @@ def test_the_pinned_guidellm_image_is_the_same_everywhere():
     assert plans.GUIDELLM_IMAGE in helpers and plans.GUIDELLM_IMAGE in script
 
 
+def test_compare_local_passes_on_settings_the_docker_backend_reads():
+    script = (ROOT / "scripts/compare-local.sh").read_text()
+    backend = (ROOT / "notebooks/rhvp_compare/dockerapi.py").read_text()
+    passed = set(re.findall(r"-e (RHVP_COMPARE_[A-Z_]+)=", script))
+    read = set(re.findall(r'env\.get\("(RHVP_COMPARE_[A-Z_]+)"', backend))
+    assert {"RHVP_COMPARE_REPLICA_GPUS", "RHVP_COMPARE_CPUSET", "RHVP_COMPARE_CACHE_VOLUME"} <= passed
+    assert passed <= read
+    assert '"${cpuset_flag[@]}"' in script  # the runner container itself stays on the CPU set
+
+
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
     """main_run with the fake server; returns (exit code, the results root, the termination message file)."""
     path = tmp_path / "compare.json"
@@ -665,3 +747,227 @@ def test_a_server_that_comes_back_on_the_last_try_is_back(tmp_path):
     assert not [e for e in results["run"]["errors"] if e.startswith(runner.NOT_RESTORED)]
     assert [n for n in results["run"]["notes"] if "a later try brought it back" in n]
     assert runner.exit_code(results) == runner.EXIT_PARTIAL
+
+
+# ---- the scale round (mode scaleout) ----
+
+SLO_REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1-slo.json").read_text())
+
+
+def surge_report(rate: float, attainment: float | None, goodput: float | None, successful: int = 40,
+                 errored: int = 0) -> dict:
+    """A surge's GuideLLM report. The fixture is a real GuideLLM v0.8.1 report with latency goals, of a concurrent
+    run; a constant-rate run differs in its strategy block, which is written here by hand."""
+    data = json.loads(json.dumps(SLO_REPORT))
+    bench = data["benchmarks"][0]
+    bench["config"]["strategy"] = {"type_": "constant", "rate": rate, "max_concurrency": None, "rampup_duration": 0.0}
+    metrics = bench["metrics"]
+    metrics["request_totals"].update(successful=successful, errored=errored, total=successful + errored + 1)
+    metrics["slo_attainment"] = attainment
+    metrics["slo_determined_requests"] = successful + errored if attainment is not None else 0
+    if goodput is None:
+        del metrics["request_goodput"]
+    else:
+        metrics["request_goodput"]["successful"]["mean"] = goodput
+    return data
+
+
+class FakeClock:
+    """The runner's wall clock: moves only when the runner sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1_794_000_000.0
+
+    def wall(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeRunning:
+    """GuideLLM started in the background: ends when the runner asks for its report."""
+
+    def __init__(self, path: Path, data: dict, ended=lambda: False) -> None:
+        self.path, self.data, self.ended, self.code, self.stopped = path, data, ended, None, False
+
+    def poll(self):
+        return 0 if self.ended() else self.code
+
+    def finish(self):
+        self.path.write_text(json.dumps(self.data))
+        self.code = 0
+        return self.path
+
+    def stop(self):
+        self.stopped, self.code = True, -15
+
+
+class FakeRouter:
+    """The router: the first stats call sees the surge's first request; the replica added later gets `share`."""
+
+    def __init__(self, targets, clock: FakeClock, share: float) -> None:
+        self.url, self.clock, self.share, self.stopped = "http://router.test:8787", clock, share, False
+        self.targets, self.first_at, self.joined = list(targets), None, None
+
+    def stats(self):
+        self.first_at = self.first_at or self.clock.wall()
+        sent2 = round(40 * self.share) if self.joined else 0
+        backends = [{"url": self.targets[0], "sent": 40 - sent2, "finished": 40 - sent2, "failed": 0, "cancelled": 1,
+                     "max_in_flight": 12, "first_at": self.first_at, "last_at": self.first_at + 39}]
+        if self.joined:
+            backends.append({"url": self.targets[1], "sent": sent2, "finished": sent2, "failed": 0, "cancelled": 0,
+                             "max_in_flight": 3, "first_at": self.joined + 0.1, "last_at": self.first_at + 39})
+        return {"policy": "least-busy", "first_request_at": self.first_at, "backends": backends}
+
+    def add(self, target):
+        self.targets.append(target)
+        self.joined = self.clock.wall()
+        return {"url": target, "joined_at": self.joined}
+
+    def stop(self):
+        self.stopped = True
+
+
+class ScaleBackend(FakeBackend):
+    """Two replicas per scored round, a router and a background surge. Side B meets the goals more often. `empty`:
+    round index -> a surge in which no request finished; `late`: the surge has ended before replica 2 answers;
+    `never_ready`: replica 2 never lists the model, and the runner's clock jumps back once the surge starts, so its
+    time limit has passed at once."""
+
+    def __init__(self, clock: FakeClock, empty: tuple = (), late: bool = False, never_ready: int | None = None):
+        super().__init__()
+        self.clock, self.empty, self.late, self.never_ready = clock, empty, late, never_ready
+        self.routers, self.loads, self.replica2_started = [], [], False
+        self.rewind = False
+
+    def start(self, plan, round_, side, spec, replica=1):
+        self.started.append((round_["index"], round_["side"], replica))
+        self.replica2_started = replica == 2
+        return {"round": round_, "side": side["key"], "replica": replica}
+
+    def endpoint(self, handle, deadline):
+        return f"http://side-{handle['replica']}.test:8000"
+
+    def router(self, plan, targets, out_dir):
+        self.routers.append(FakeRouter(targets, self.clock, 0.25 if not self.late else 0.0))
+        return self.routers[-1]
+
+    def start_load(self, plan, round_, target, out_dir):
+        assert target == "http://router.test:8787"
+        if round_["index"] == self.never_ready:
+            self.rewind = True  # from here the runner's deadlines lie behind the probe's clock
+        good = 0.9 if round_["side"] == "B" else 0.6
+        good *= 1.0 + 0.001 * round_["index"]
+        data = (surge_report(10, None, None, successful=0) if round_["index"] in self.empty
+                else surge_report(10, good, 10 * good))
+        self.loads.append(FakeRunning(out_dir / "guidellm.json", data,
+                                      ended=lambda: self.late and self.replica2_started))
+        return self.loads[-1]
+
+    def launch_facts(self, handle):
+        return {"env": {"VLLM_X": "1", "HF_TOKEN": "hf_secret", "PATH": "/usr/bin"}, "env_source": "process",
+                "image_entrypoint": ["/usr/bin/tini", "--"], "image_cmd": None}
+
+    def logs(self, handle):
+        if handle["replica"] == 1 and handle["round"]["kind"] == "scored":
+            ts = self.routers[-1].first_at + 12.5
+            return ("2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
+                    f'2026-01-01T00:00:01Z {{"event":"rhvp-scale","ts":{ts},"app":"llm","deployment":"d",'
+                    '"from":1,"to":2,"reason":"target"}\n')
+        return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
+
+    def stop(self, handle):
+        self.stopped.append((handle["round"]["index"], handle["replica"]))
+
+
+def scale_run(tmp_path, backend: ScaleBackend, clock: FakeClock, **extra):
+    plan = plans.build(scale_config(**extra), "docker")
+    mono = time.monotonic
+    the_runner = runner.Runner(plan, backend, tmp_path, wall=clock.wall, sleep=clock.sleep,
+                               clock=lambda: -1e9 if backend.rewind else mono(),
+                               client=lambda url: httpx.Client(base_url=url, transport=server(
+                                   "another-model" if backend.rewind and "side-2" in url else "m")))
+    return the_runner.run(), the_runner
+
+
+def test_a_scale_out_run(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock)
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    assert results["run"]["status"] == "complete" and results["plan"]["mode"] == "scaleout"
+    warm, scored = results["rounds"][0], results["rounds"][2]
+    assert warm["kind"] == "warmup" and "scale" not in warm and [l["replica"] for l in warm["launches"]] == [1]
+    assert [(i, r) for i, _, r in backend.started[:4]] == [(1, 1), (2, 1), (3, 1), (3, 2)]
+    assert sorted(backend.stopped) == sorted({(i, 1) for i in range(1, 17)} | {(i, 2) for i in range(3, 17)})
+    assert all(r.stopped for r in backend.routers) and len(backend.routers) == 14
+
+    scale = scored["scale"]
+    assert scale["step_after_s"] == 5 and 5 <= scale["step_at_s"] < 5.5  # the forced step, on the runner's clock
+    assert scale["new_replica"]["joined_during_surge"] is True and scale["new_replica"]["joined_at_s"] >= 5
+    assert scale["new_replica_share"] == 0.25
+    assert [b["replica"] for b in scale["router"]["backends"]] == [1, 2]
+    assert scale["router"]["backends"][1]["sent"] == 10 and scale["router"]["backends"][0]["first_s"] == 0
+    assert scale["load_triggered_s"] == 12.5 and scored["metrics"]["scale.load_triggered_s"] == 12.5
+    assert [(e["from"], e["to"], e["reason"]) for e in scale["events"]] == [(1, 2, "target")]
+    level = scored["levels"][0]
+    assert level["concurrency"] is None and level["rate"] == 10 and level["energy"]["source"] == "none"
+    assert level["slo_attainment"] == pytest.approx(0.6 * 1.003)
+    assert set(scored["metrics"]) == {"startup.ready_s", "startup.first_answer_s", "scale.ready_s",
+                                      "scale.first_answer_s", "scale.load_triggered_s", "surge.slo_attainment",
+                                      "surge.goodput_rps", "surge.ttft_ms_median", "surge.itl_ms_median",
+                                      "surge.output_tokens_per_s"}
+    assert scored["artifacts"] == {"server_log": "rounds/03-A-scored/server.log",
+                                   "server_log_2": "rounds/03-A-scored/server-2.log",
+                                   "load_report": "rounds/03-A-scored/guidellm.json"}
+    first, second = scored["launches"]
+    assert (first["replica"], second["replica"]) == (1, 2) and first["entrypoint"] == "image"
+    assert first["env"] == {"VLLM_X": "1"} and first["env_dropped"] == ["HF_TOKEN"] and first["env_source"] == "process"
+    assert first["image_entrypoint"] == ["/usr/bin/tini", "--"] and "hf_secret" not in the_runner.path.read_text()
+
+    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
+    assert rows["surge.slo_attainment"]["role"] == "primary" and rows["surge.slo_attainment"]["verdict"] == "FASTER"
+    assert rows["surge.slo_attainment"]["p_adjusted"] == pytest.approx(2 * 2 ** -6)  # Holm over the 2 primaries
+    assert rows["surge.goodput_rps"]["verdict"] == "FASTER" and rows["surge.goodput_rps"]["role"] == "secondary"
+    assert rows["scale.first_answer_s"]["role"] == "primary" and rows["scale.first_answer_s"]["n_pairs"] == 7
+    assert rows["surge.ttft_ms_median"]["verdict"] == "TIE"
+
+
+def test_a_surge_in_which_nothing_finished_is_a_pair_lost_to_that_side(tmp_path):
+    # Round 4 is side B of pair 1 (A B): no request finished in its surge, so its attainment and goodput are 0.
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, empty=(4,)), clock)
+    jsonschema.validate(results, SCHEMA)
+    empty = results["rounds"][3]
+    assert (empty["side"], empty["pair"]) == ("B", 1)
+    assert empty["metrics"]["surge.slo_attainment"] == 0 and empty["metrics"]["surge.goodput_rps"] == 0
+    assert "surge.ttft_ms_median" not in empty["metrics"] and empty["levels"][0]["usable"] is False
+    assert "count as 0" in empty["levels"][0]["note"]
+    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
+    for metric in ("surge.slo_attainment", "surge.goodput_rps", "surge.ttft_ms_median"):
+        assert rows[metric]["pairs_lost"] == {"A": 0, "B": 1, "both": 0, "other": 0}, metric
+        assert rows[metric]["verdict"] == "INCONCLUSIVE" and rows[metric]["n_pairs"] == 6
+    assert rows["scale.first_answer_s"]["pairs_lost"]["B"] == 0
+    assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "REQUESTS_FAILED"
+
+
+def test_a_new_replica_that_answers_after_the_surge_is_timed_with_a_share_of_0(tmp_path):
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, late=True), clock, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    scored = results["rounds"][0]
+    assert scored["status"] == "ok" and scored["scale"]["new_replica"]["joined_during_surge"] is False
+    assert scored["scale"]["new_replica_share"] == 0 and "scale.first_answer_s" in scored["metrics"]
+
+
+def test_a_new_replica_that_never_answers_fails_the_round(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, never_ready=1)
+    results, _ = scale_run(tmp_path, backend, clock, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    failed = results["rounds"][0]
+    assert failed["status"] == "failed" and failed["error_code"] == "SIDE_NEVER_READY"
+    assert backend.loads[0].stopped and backend.routers[0].stopped  # the surge and the router were stopped
+    assert sorted(backend.stopped)[:2] == [(1, 1), (1, 2)]  # both replicas taken down
+    assert [l["replica"] for l in failed["launches"]] == [1, 2]

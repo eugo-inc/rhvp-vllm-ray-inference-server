@@ -16,8 +16,9 @@ an `analysis` of the same shape can replace this module and stats.py together. S
 Two checks run over the verdict stats.verdict gives, and make it INCONCLUSIVE:
 
 - one side failing. A pair that lost a metric because one side failed in a way that is that side's doing (its round
-  failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at that load level, or its value of the
-  metric is 0, such as no output tokens: a 0 gives no ratio) is evidence against that side, and the pairs that are
+  failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at that load level or in that surge,
+  or its value of the metric is 0, such as no output tokens or no request within the latency goals: a 0 gives no
+  ratio) is evidence against that side, and the pairs that are
   left would overstate it. So any such pair makes the metric
   INCONCLUSIVE, whichever side failed. Rounds that failed for other reasons (stopped, the GPU was not free, the
   platform) and rounds not run leave no such mark. Every row says how many pairs it lost and why (`pairs_lost`).
@@ -31,7 +32,7 @@ from collections.abc import Mapping
 
 from . import stats
 
-TOOL = {"name": "rhvp_compare.analyze", "version": "3"}
+TOOL = {"name": "rhvp_compare.analyze", "version": "4"}
 #: Round failure codes that belong to the side itself (runner.ROUND_CODES; not imported, to keep this module alone).
 SIDE_CODES = ("SIDE_FAILED", "SIDE_NEVER_READY", "LOAD_FAILED")
 
@@ -86,6 +87,8 @@ def _side_fault(round_: Mapping | None, metric: Mapping) -> bool | None:
         return None if value > 0 else True  # 0: the side's own result, such as no output tokens at all
     level = next((lv for lv in round_.get("levels") or [] if lv.get("concurrency") == metric.get("concurrency")),
                  None)
+    if metric["id"].startswith("surge."):  # mode scaleout: the round's one surge, whose concurrency is null
+        return bool(level is not None and level.get("usable") is False)
     return bool(metric.get("concurrency") is not None and level is not None and level.get("usable") is False)
 
 

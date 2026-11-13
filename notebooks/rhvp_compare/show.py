@@ -120,6 +120,8 @@ def table(headers: tuple[str, ...], rows: list[list[str]], raw_last: bool = Fals
 def _num(value, unit: str = "") -> str:
     if not isinstance(value, (int, float)):
         return words.NO_FIGURE
+    if unit == "share":
+        return f"{value:.1%}"
     if unit == "s":
         text = f"{value:.2f}"
     elif unit == "ms":
@@ -165,7 +167,7 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
               for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
-    unusable = [f"round {u['index']} side {u['side']} at {u['concurrency']} streams"
+    unusable = [(words.LEVEL_SURGE if u["concurrency"] is None else words.LEVEL_AT).format(**u)
                 for u in summary.levels_unusable(results)]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
@@ -257,21 +259,26 @@ def startup(run: str | None = None) -> None:
         parts.append(table(words.STARTUP_HEADERS, table_rows, raw_last=True))
         if any(rows.get(m, {}).get("role") == "secondary" for m in ("startup.ready_s", "startup.first_answer_s")):
             parts.append(line(words.SECONDARY_NOTE))
-        phases: dict[str, dict] = {}
-        for side in ("A", "B"):
-            for r in _scored(results, side):
-                for entry in (r.get("startup") or {}).get("breakdown") or []:
-                    if isinstance(entry.get("seconds"), (int, float)):
-                        slot = phases.setdefault(entry["phase"], {"label": entry["label"], "A": [], "B": []})
-                        slot[side].append(entry["seconds"])
-        if phases:
-            parts.append(table(words.PHASE_HEADERS, [
-                [p["label"], _num(_median(p["A"]), "s"), _num(_median(p["B"]), "s"), f"{len(p['A'])}, {len(p['B'])}"]
-                for p in phases.values()]))
-            parts.append(line(words.PHASE_NOTE))
-        else:
-            parts.append(line(words.PHASE_NONE))
+        phases = _phase_table(results, words.PHASE_HEADERS, lambda r: (r.get("startup") or {}).get("breakdown"))
+        parts += [phases, line(words.PHASE_NOTE)] if phases else [line(words.PHASE_NONE)]
     draw.show(*parts)
+
+
+def _phase_table(results: dict, headers: tuple[str, ...], breakdown) -> str | None:
+    """The median of each start phase per side, over the scored rounds; `breakdown(round)` gives a round's phase
+    list. None when no round has a timed phase."""
+    phases: dict[str, dict] = {}
+    for side in ("A", "B"):
+        for r in _scored(results, side):
+            for entry in breakdown(r) or []:
+                if isinstance(entry.get("seconds"), (int, float)):
+                    slot = phases.setdefault(entry["phase"], {"label": entry["label"], "A": [], "B": []})
+                    slot[side].append(entry["seconds"])
+    if not phases:
+        return None
+    return table(headers, [
+        [p["label"], _num(_median(p["A"]), "s"), _num(_median(p["B"]), "s"), f"{len(p['A'])}, {len(p['B'])}"]
+        for p in phases.values()])
 
 
 def energy(run: str | None = None) -> None:
@@ -309,6 +316,89 @@ def energy(run: str | None = None) -> None:
     draw.show(*parts)
 
 
+def _goals(slo: dict) -> str:
+    goals = []
+    if slo.get("ttft_ms") is not None:
+        goals.append(words.SCALE_GOAL_TTFT.format(value=slo["ttft_ms"]))
+    if slo.get("tpot_ms") is not None:
+        goals.append(words.SCALE_GOAL_TPOT.format(value=slo["tpot_ms"]))
+    return words.SCALE_GOALS_JOIN.join(goals) or words.NO_FIGURE
+
+
+def scale_out(run: str | None = None) -> None:
+    """Mode scaleout: the forced step, the second replica's start, and how the router shared the surge out."""
+    results, parts = _frame(run)
+    if results:
+        plan = results["plan"]
+        scale = plan.get("scale_out")
+        if plan.get("mode") != "scaleout" or not scale:
+            parts.append(draw.notice(words.SCALE_OFF))
+            draw.show(*parts)
+            return
+        parts.append(line(words.SCALE_LINE.format(rate=scale["request_rate"], surge=scale["surge_s"],
+                                                  step=scale["step_after_s"], goals=_goals(scale.get("slo") or {}))))
+        if not any(side.get("gpu", True) for side in plan["sides"]):
+            parts.append(line(words.SCALE_GPU_NONE))
+        else:
+            parts.append(line(words.SCALE_GPU_SHARED if scale.get("shared_gpu") else words.SCALE_GPU_OWN))
+        rows = _rows(results)
+        declared = [m for m in plan["metrics"] if m["id"].startswith("scale.")]
+        ids = [m["id"] for m in declared]
+        parts.append(table(words.SCALE_HEADERS, [
+            [m["label"], _num((rows.get(m["id"]) or {}).get("a_median"), m["unit"]),
+             _num((rows.get(m["id"]) or {}).get("b_median"), m["unit"]),
+             _ratio(rows[m["id"]]) if m["id"] in rows else words.NO_FIGURE, verdict_cell(rows.get(m["id"]) or {})]
+            for m in declared], raw_last=True))
+        if any((rows.get(m) or {}).get("role") == "secondary" for m in ids):
+            parts.append(line(words.SECONDARY_NOTE))
+        stepped = {side: [r for r in _scored(results, side) if (r.get("scale") or {}).get("new_replica")]
+                   for side in ("A", "B")}
+        if not stepped["A"] and not stepped["B"]:
+            parts.append(line(words.SCALE_NONE))
+            draw.show(*parts)
+            return
+        facts = []
+        for label, unit, get in (
+                (words.SCALE_ASKED, "s", lambda s: s.get("step_at_s")),
+                (words.SCALE_JOINED, "s", lambda s: s["new_replica"].get("joined_at_s")
+                 if s["new_replica"].get("joined_during_surge") else None),
+                (words.SCALE_SHARE, "share", lambda s: s.get("new_replica_share"))):
+            values = {side: [v for r in stepped[side] if isinstance(v := get(r["scale"]), (int, float))]
+                      for side in ("A", "B")}
+            facts.append([label, _num(_median(values["A"]), unit), _num(_median(values["B"]), unit),
+                          f"{len(values['A'])}, {len(values['B'])}"])
+        parts.append(table(words.SCALE_FACT_HEADERS, facts))
+        late = [str(r["index"]) for side in ("A", "B") for r in stepped[side]
+                if r["scale"]["new_replica"].get("joined_during_surge") is False]
+        if late:
+            parts.append(line(words.SCALE_LATE.format(rounds=", ".join(sorted(late, key=int)))))
+        counts = []
+        for side in ("A", "B"):
+            sums: dict[int, dict] = {}
+            for r in stepped[side]:
+                for b in (r["scale"].get("router") or {}).get("backends") or []:
+                    slot = sums.setdefault(b["replica"], {"sent": 0, "finished": 0, "failed": 0, "cancelled": 0,
+                                                          "max_in_flight": 0})
+                    for key in ("sent", "finished", "failed", "cancelled"):
+                        slot[key] += b.get(key) or 0
+                    slot["max_in_flight"] = max(slot["max_in_flight"], b.get("max_in_flight") or 0)
+            counts += [[side, str(n), str(c["sent"]), str(c["finished"]), str(c["failed"]), str(c["cancelled"]),
+                        str(c["max_in_flight"])] for n, c in sorted(sums.items())]
+        if counts:
+            parts.append(table(words.SCALE_REQUESTS_HEADERS, counts))
+            parts.append(line(words.SCALE_REQUESTS_NOTE))
+        parts.append(line(words.SCALE_SURGE_RULE))
+        logged = {side: sum(1 for r in stepped[side] if r["scale"].get("load_triggered_s") is not None)
+                  for side in ("A", "B")}
+        parts.append(line(words.SCALE_EVENTS.format(a=logged["A"], na=len(stepped["A"]), b=logged["B"],
+                                                    nb=len(stepped["B"]))))
+        phases = _phase_table(results, words.SCALE_PHASE_HEADERS,
+                              lambda r: ((r.get("scale") or {}).get("new_replica") or {}).get("breakdown"))
+        if phases:
+            parts += [phases, line(words.PHASE_NOTE)]
+    draw.show(*parts)
+
+
 def provenance(run: str | None = None) -> None:
     results, parts = _frame(run)
     if results:
@@ -327,11 +417,14 @@ def provenance(run: str | None = None) -> None:
             driver=gpu.get("driver") or words.NO_FIGURE, node=node.get("instance_type") or words.NO_FIGURE,
             arch=node.get("arch") or words.NO_FIGURE, openshift=cluster.get("openshift_version") or words.NO_FIGURE)))
         load = plan["load"]
-        parts.append(line(words.LOAD_LINE.format(
-            version=(prov.get("load_tool") or {}).get("version") or words.NO_FIGURE, prompt=load["prompt_tokens"],
-            output=load["output_tokens"], seconds=load["seconds_per_level"],
-            levels=", ".join(str(c) for c in load["concurrencies"]), seed=load["seed"],
-            server_seed=plan["server"]["seed"])))
+        common = {"version": (prov.get("load_tool") or {}).get("version") or words.NO_FIGURE,
+                  "prompt": load["prompt_tokens"], "output": load["output_tokens"],
+                  "seconds": load["seconds_per_level"], "seed": load["seed"], "server_seed": plan["server"]["seed"]}
+        if plan.get("mode") == "scaleout" and plan.get("scale_out"):
+            parts.append(line(words.SURGE_LOAD_LINE.format(rate=plan["scale_out"]["request_rate"], **common)))
+        else:
+            parts.append(line(words.LOAD_LINE.format(levels=", ".join(str(c) for c in load["concurrencies"]),
+                                                     **common)))
         parts.append(line(words.PLAN_LINE.format(
             pairs=plan["pairs"], warmup=words.PLAN_WARMUP if plan.get("warmup") else "",
             aa=words.PLAN_AA.format(n=plan["aa_pairs"]) if plan.get("aa_pairs") else "")))

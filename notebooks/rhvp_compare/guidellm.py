@@ -10,44 +10,70 @@ One run of GuideLLM per round measures every concurrency level in turn (the `con
 `profile.streams` override per level). Each level runs for a fixed time; requests still running when the time is up
 are "incomplete", which is expected. A level with any errored request is kept in the results file but marked not
 usable, and its figures stay out of the comparison: an average over failed requests would compare failures.
+
+In mode scaleout one run is one surge instead: GuideLLM's `constant` profile (requests sent at a fixed rate whether
+or not earlier ones have finished) for scaleOut.surgeSeconds, with the latency goals passed to `--metrics` as JSON
+(`"slo": {"ttft_ms": .., "tpot_ms": ..}`; GuideLLM compares tpot_ms with each request's inter-token latency). GuideLLM
+then reports `slo_attainment` (the share of finished and failed requests that met every goal; a failed request
+counts as one that missed them, a request still running at the end is left out) and `request_goodput` (the rate of
+the requests that met them). The runner starts that run in the background (`start`), because it starts the second
+replica while the surge runs.
 Standard library only.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import signal
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Mapping
 
 
 def command(plan: Mapping, target: str, output_path: str) -> list[str]:
-    """The arguments after `guidellm` for one round against the server at `target`."""
-    load, model = plan["load"], plan["model"]
+    """The arguments after `guidellm` for one round against the server at `target`: every concurrency level in
+    mode pairs, the surge (`surge_command`) in mode scaleout."""
+    if plan.get("mode") == "scaleout":
+        return surge_command(plan, target, output_path)
+    load = plan["load"]
     levels = [str(c) for c in load["concurrencies"]]
+    args = ["run", "--backend", _backend(plan, target), "--profile", f"kind=concurrent,streams={levels[0]}"]
+    if len(levels) > 1:
+        args += ["--override", "profile.streams", ",".join(levels)]
+    args += ["--constraint", f"kind=max_duration,seconds={load['seconds_per_level']:g}", *_workload(plan),
+             "--metrics", "kind=generative,sample_size=0", "--output", f"kind=json,path={output_path}",
+             "--disable-console-interactive"]
+    return args
+
+
+def surge_command(plan: Mapping, target: str, output_path: str) -> list[str]:
+    """The arguments after `guidellm` for one scaleout round's surge: requests at scaleOut.requestRate per second
+    for scaleOut.surgeSeconds, scored against the latency goals."""
+    scale = plan["scale_out"]
+    slo = {key: value for key, value in scale["slo"].items() if value is not None}
+    metrics = json.dumps({"kind": "generative", "sample_size": 0, "slo": slo}, separators=(",", ":"))
+    return ["run", "--backend", _backend(plan, target), "--profile", f"kind=constant,rate={scale['request_rate']:g}",
+            "--constraint", f"kind=max_duration,seconds={scale['surge_s']:g}", *_workload(plan),
+            "--metrics", metrics, "--output", f"kind=json,path={output_path}", "--disable-console-interactive"]
+
+
+def _backend(plan: Mapping, target: str) -> str:
+    load, model = plan["load"], plan["model"]
+    return f"kind=openai_http,target={target},model={model['id']},request_format={load['request_format']}"
+
+
+def _workload(plan: Mapping) -> list[str]:
+    """The data, tokenizer and seed arguments, the same in both modes."""
+    load, model = plan["load"], plan["model"]
     tokenizer = f"kind=huggingface_auto,model={load['tokenizer']}"
     if model.get("revision") and load["tokenizer"] == model["source"]:
         tokenizer += f",load_kwargs.revision={model['revision']}"
-    args = [
-        "run",
-        "--backend", f"kind=openai_http,target={target},model={model['id']},request_format={load['request_format']}",
-        "--profile", f"kind=concurrent,streams={levels[0]}",
-    ]
-    if len(levels) > 1:
-        args += ["--override", "profile.streams", ",".join(levels)]
-    args += [
-        "--constraint", f"kind=max_duration,seconds={load['seconds_per_level']:g}",
-        "--data", f"kind=synthetic_text,prompt_tokens={load['prompt_tokens']},output_tokens={load['output_tokens']}",
-        "--tokenizer", tokenizer,
-        "--seed", f"kind=static,value={load['seed']}",
-        "--metrics", "kind=generative,sample_size=0",
-        "--output", f"kind=json,path={output_path}",
-        "--disable-console-interactive",
-    ]
-    return args
+    data = f"kind=synthetic_text,prompt_tokens={load['prompt_tokens']},output_tokens={load['output_tokens']}"
+    return ["--data", data, "--tokenizer", tokenizer, "--seed", f"kind=static,value={load['seed']}"]
 
 
 def _iso(epoch: float | None) -> str | None:
@@ -79,25 +105,58 @@ def run(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None
         executable: str = "guidellm") -> Path:
     """Run GuideLLM against `target` and return the report's path. Its output goes to guidellm.log next to the
     report. A run past plan.load.timeout_s is stopped (its whole process group) and raises LoadError."""
+    return start(plan, target, out_dir, env, executable).finish()
+
+
+class Running:
+    """A GuideLLM run started in the background (`start`). `finish` waits for it; `stop` ends it."""
+
+    def __init__(self, process: subprocess.Popen, log, report: Path, timeout_s: float, started: float) -> None:
+        self.process, self._log, self.report = process, log, report
+        self.timeout_s, self.started = timeout_s, started
+
+    def poll(self) -> int | None:
+        """The exit code once GuideLLM has ended, else None."""
+        return self.process.poll()
+
+    def finish(self) -> Path:
+        """Wait until GuideLLM ends, at most until plan.load.timeout_s after its start, and return the report's
+        path; LoadError when it failed or ran out of time (then it is stopped)."""
+        remaining = max(0.0, self.timeout_s - (time.monotonic() - self.started))
+        try:
+            code = self.process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            self.stop()
+            raise LoadError(f"GuideLLM did not finish within {self.timeout_s:g} s and was stopped; see guidellm.log",
+                            timed_out=True) from None
+        except BaseException:  # the runner was told to stop: take GuideLLM down with it
+            self.stop()
+            raise
+        self._log.close()
+        if code != 0 or not self.report.is_file():
+            raise LoadError(f"GuideLLM exited with code {code}; see guidellm.log")
+        return self.report
+
+    def stop(self) -> None:
+        """Stop GuideLLM's whole process group (SIGTERM, then SIGKILL) and close its log."""
+        _stop(self.process)
+        self._log.close()
+
+
+def start(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None = None,
+          executable: str = "guidellm") -> Running:
+    """Start GuideLLM against `target` in its own process group and return at once."""
     out_dir.mkdir(parents=True, exist_ok=True)
     report = out_dir / "guidellm.json"
-    timeout_s = plan["load"]["timeout_s"]
-    with open(out_dir / "guidellm.log", "w", encoding="utf-8") as log:
+    log = open(out_dir / "guidellm.log", "w", encoding="utf-8")
+    try:
         process = subprocess.Popen([executable, *command(plan, target, str(report))], stdout=log,
                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                    env={**os.environ, **(env or {})}, start_new_session=True)
-        try:
-            code = process.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            _stop(process)
-            raise LoadError(f"GuideLLM did not finish within {timeout_s:g} s and was stopped; see guidellm.log",
-                            timed_out=True) from None
-        except BaseException:  # the runner was told to stop: take GuideLLM down with it
-            _stop(process)
-            raise
-    if code != 0 or not report.is_file():
-        raise LoadError(f"GuideLLM exited with code {code}; see guidellm.log")
-    return report
+    except BaseException:
+        log.close()
+        raise
+    return Running(process, log, report, plan["load"]["timeout_s"], time.monotonic())
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -182,3 +241,63 @@ def flat_metrics(level_list: list[Mapping]) -> dict[str, float]:
         out.update({k: float(v) for k, v in pairs.items()
                     if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0})
     return out
+
+
+def _finite(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def surge_level(report: Mapping) -> dict:
+    """The surge of a scaleout round, from the report's one benchmark: the fields `levels` gives (with concurrency
+    None and the rate the profile sent), plus GuideLLM's SLO figures: `slo_attainment` (0 to 1, None when no request
+    could be judged), `slo_determined_requests` (the requests it judged) and `goodput_rps` (requests per second
+    that met every goal, the mean of request_goodput over the successful requests)."""
+    level = levels(report)[0]
+    bench = report["benchmarks"][0]
+    metrics, strategy = bench["metrics"], bench["config"]["strategy"]
+    determined = metrics.get("slo_determined_requests")
+    level.update({
+        "concurrency": None,
+        "rate": _finite(strategy.get("rate")),
+        "slo_attainment": _finite(metrics.get("slo_attainment")),
+        "slo_determined_requests": int(determined) if _finite(determined) is not None else None,
+        "goodput_rps": _finite(_stat(metrics, "request_goodput").get("mean")),
+    })
+    errored = level["requests"]["errored"]
+    if errored:
+        level["note"] = (f"{errored} requests failed; they count as requests that missed the latency goals, and the "
+                         "surge's latency medians are left out of the comparison")
+    elif not level["requests"]["successful"]:
+        level["note"] = "no request finished during the surge; its SLO attainment and goodput count as 0"
+    elif level["slo_attainment"] is None:
+        level["note"] = ("GuideLLM judged no request against the latency goals (a goal it cannot measure, such as "
+                         "ttft_ms without streaming); SLO attainment and goodput are missing")
+    return level
+
+
+def surge_metrics(level: Mapping) -> dict[str, float]:
+    """The scaleout round's surge.* figures (keys as in plan.scale_metric_family).
+
+    - surge.slo_attainment and surge.goodput_rps are kept whenever GuideLLM gives them, failed requests included
+      (they count as requests that missed the goals). When no request finished or failed in the whole surge,
+      GuideLLM gives no attainment; both are then 0, so the analysis counts the pair as lost to that side
+      instead of leaving it out unseen. A goodput GuideLLM leaves out when the attainment is 0 is 0 too.
+    - surge.ttft_ms_median, surge.itl_ms_median and surge.output_tokens_per_s follow the rule of a load level: only
+      when no request failed and at least one finished."""
+    requests = level.get("requests") or {}
+    nothing_finished = not requests.get("successful") and not requests.get("errored")
+    attainment = level.get("slo_attainment")
+    goodput = level.get("goodput_rps")
+    if attainment is None and nothing_finished:
+        attainment = goodput = 0.0
+    elif goodput is None and attainment == 0:
+        goodput = 0.0
+    pairs = {"surge.slo_attainment": attainment, "surge.goodput_rps": goodput}
+    if level.get("usable"):
+        pairs.update({"surge.ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
+                      "surge.itl_ms_median": (level.get("itl_ms") or {}).get("median"),
+                      "surge.output_tokens_per_s": level.get("output_tokens_per_s")})
+    return {k: float(v) for k, v in pairs.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0}

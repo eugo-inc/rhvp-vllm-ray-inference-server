@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The comparison notebook (compare_images.ipynb): generated and unchanged, no outputs, the layout, the wording rules,
 the synthetic results file against the schema, and headless runs in REPLAY mode, on a results volume, and with no
-results at all.
+results at all; and a run in mode scaleout, in the notebook and in results.md.
 
 Run with: python -m pytest -q tests/test_compare_notebook.py
 """
@@ -23,7 +23,7 @@ SYNTHETIC = NOTEBOOKS / "compare-recordings" / "synthetic.json"
 sys.path.insert(0, str(NOTEBOOKS))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from rhvp_compare import cells, example, words  # noqa: E402
+from rhvp_compare import cells, example, report, show, words  # noqa: E402
 from test_notebook_rules import CAUSE, HARDWARE, VENDOR, _strings, _visible  # noqa: E402
 
 SCHEMA = json.loads((NOTEBOOKS / "rhvp_compare" / "results.schema.json").read_text())
@@ -47,7 +47,7 @@ def test_generated_without_outputs_and_with_stable_ids():
     assert nb.cells[0].source.startswith(f"# {words.TITLE}")
     code = [c.source for c in nb.cells if c.cell_type == "code"]
     assert code == ["from rhvp_compare import show\n\nshow.runs()", "show.verdicts()", "show.startup()",
-                    "show.energy()", "show.provenance()"]
+                    "show.energy()", "show.scale_out()", "show.provenance()"]
 
 
 def test_wording_rules():
@@ -101,7 +101,7 @@ def _execute(tmp_path, env: dict[str, str]):
 
 def test_replay_run(tmp_path):
     shown = _execute(tmp_path, {"RHVP_COMPARE_REPLAY": "{work}/compare-recordings/synthetic.json"})
-    assert set(shown) == {"runs", "s1-show", "s2-show", "s3-show", "s4-show"}
+    assert set(shown) == {"runs", "s1-show", "s2-show", "s3-show", "s4-show", "s5-show"}
     for cell_id, markup in shown.items():
         text = _visible(markup)
         assert text.startswith(words.REPLAY_STRIP), cell_id
@@ -115,8 +115,10 @@ def test_replay_run(tmp_path):
     assert words.SECONDARY_NOTE in _visible(shown["s2-show"]) and words.SECONDARY_NOTE in _visible(shown["s3-show"])
     assert words.SECONDARY_TITLE in verdicts
     assert "DCGM" in _visible(shown["s3-show"]) and "MORE_EFFICIENT" in _visible(shown["s3-show"])
-    provenance = _visible(shown["s4-show"])
+    assert words.SCALE_OFF in _visible(shown["s4-show"])  # a pairs run has no scale round
+    provenance = _visible(shown["s5-show"])
     assert "registry.example/inference-server@sha256:" in provenance and "A/A pairs" in provenance
+    assert "concurrent streams" in provenance
 
 
 def test_run_from_a_results_volume_and_from_an_empty_one(tmp_path):
@@ -130,3 +132,77 @@ def test_run_from_a_results_volume_and_from_an_empty_one(tmp_path):
     empty.mkdir()
     shown = _execute(tmp_path / "b", {"RHVP_COMPARE_RESULTS": str(empty)})
     assert all(words.NO_RESULTS in _visible(markup) for markup in shown.values())
+
+
+# ---- mode scaleout ----
+
+def test_a_synthetic_scale_out_run_is_valid():
+    data = example.synthesize_scale_out()
+    jsonschema.validate(data, SCHEMA)
+    assert data["run"]["synthetic"] is True and data["plan"]["mode"] == "scaleout"
+    assert data["plan"]["load"]["concurrencies"] == [] and data["plan"]["energy"]["source"] == "none"
+    scored = [r for r in data["rounds"] if r["kind"] == "scored"]
+    assert all(len(r["launches"]) == 2 and r["scale"]["new_replica_share"] > 0 for r in scored)
+    assert all(len(r["launches"]) == 1 and "scale" not in r for r in data["rounds"] if r["kind"] == "warmup")
+    verdicts = {row["id"]: row["verdict"] for row in data["analysis"]["metrics"]}
+    assert verdicts["scale.first_answer_s"] == "FASTER" and verdicts["surge.slo_attainment"] == "FASTER"
+    assert verdicts["scale.load_triggered_s"] == "INCONCLUSIVE"  # the made-up servers log no rhvp-scale line
+
+
+def test_replay_run_in_mode_scaleout(tmp_path):
+    path = tmp_path / "scale-out.json"
+    path.write_text(example.text(example.synthesize_scale_out()), encoding="utf-8")
+    shown = _execute(tmp_path / "run", {"RHVP_COMPARE_REPLAY": str(path)})
+    for cell_id, markup in shown.items():
+        text = _visible(markup)
+        assert words.SYNTHETIC_STRIP in text, cell_id
+        assert not VENDOR.search(text) and not HARDWARE.search(text) and not CAUSE.search(text), cell_id
+    verdicts = _visible(shown["s1-show"])
+    assert "new replica: time to first answer" in verdicts and "surge: share of requests within the latency goals" \
+        in verdicts
+    assert re.search(r"\b\d{2}\.\d% \b", verdicts)  # a share is shown as a percentage
+    assert words.ENERGY_OFF in _visible(shown["s3-show"])
+    scale = _visible(shown["s4-show"])
+    assert "Surge: 6 requests per second for 120 s" in scale and "30 s after the surge's first request" in scale
+    assert "time to first token at most 500 ms and inter-token latency at most 50 ms" in scale
+    assert words.SCALE_SHARE in scale and words.SCALE_REQUESTS_NOTE in scale and words.SCALE_SURGE_RULE in scale
+    assert words.SCALE_GPU_SHARED in scale and words.SCALE_GPU_NONE not in scale
+    assert words.SCALE_EVENTS.format(a=0, na=8, b=0, nb=8) in scale
+    assert "loading the weights" in scale  # the second replica's start phases
+    assert words.SCALE_OFF not in scale and words.SCALE_LATE.split(":")[0] not in scale
+    provenance = _visible(shown["s5-show"])
+    assert "6 requests per second for 120 s in each round" in provenance and "concurrent streams" not in provenance
+
+
+def _shown(monkeypatch, results: dict, call) -> str:
+    """The visible text of one show.* call on `results`, without a kernel."""
+    out = []
+    monkeypatch.setattr(show, "pick", lambda run=None: (results, [results], []))
+    monkeypatch.setattr(show.draw, "show", lambda *parts: out.extend(parts))
+    call()
+    return _visible("".join(out))
+
+
+def test_a_surge_left_out_and_a_late_replica_are_named(monkeypatch):
+    results = example.synthesize_scale_out()
+    late = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "B")
+    late["scale"]["new_replica"]["joined_during_surge"] = False
+    failed = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "A")
+    failed["levels"][0].update(usable=False, note="every request failed")
+    text = _shown(monkeypatch, results, show.scale_out)
+    assert words.SCALE_LATE.format(rounds=late["index"]) in text
+    assert words.LEVEL_SURGE.format(index=failed["index"], side="A") in text and "None streams" not in text
+    markdown = report.markdown(results)
+    assert f"round {failed['index']} (side A, scored), the surge:" in markdown
+    assert "The second replica" in markdown and "| B | 8 |" in markdown
+
+
+def test_the_scale_out_cell_with_no_forced_step_and_no_gpu(monkeypatch):
+    results = example.synthesize_scale_out()
+    for r in results["rounds"]:
+        r.pop("scale", None)
+    for side in results["plan"]["sides"]:
+        side["gpu"] = False
+    text = _shown(monkeypatch, results, show.scale_out)
+    assert words.SCALE_NONE in text and words.SCALE_SHARE not in text
+    assert words.SCALE_GPU_NONE in text and words.SCALE_GPU_SHARED not in text

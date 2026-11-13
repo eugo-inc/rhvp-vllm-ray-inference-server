@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The comparison notebook's cells, in order: what make_notebook.py writes into compare_images.ipynb.
 
-A title cell, one code cell that lists the runs, then four numbered sections, each a heading cell and one short code
+A title cell, one code cell that lists the runs, then five numbered sections, each a heading cell and one short code
 cell. Every sentence comes from words.py. Standard library only.
 """
 
@@ -13,7 +13,8 @@ __all__ = ["CODE", "MARKDOWN", "Cell", "cells"]  # CODE and MARKDOWN are part of
 
 IMPORT = "from rhvp_compare import show"
 RUNS_CALL = "show.runs()"
-SECTION_CALL = {1: "show.verdicts()", 2: "show.startup()", 3: "show.energy()", 4: "show.provenance()"}
+SECTION_CALL = {1: "show.verdicts()", 2: "show.startup()", 3: "show.energy()", 4: "show.scale_out()",
+                5: "show.provenance()"}
 
 
 def cells() -> list[Cell]:

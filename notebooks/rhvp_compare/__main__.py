@@ -31,6 +31,11 @@ def _validate(args) -> int:
     print(f"       B = {the_plan['sides'][1]['name']} ({the_plan['sides'][1]['image']})")
     print(f"rounds ({len(the_plan['rounds'])}; w = warm-up, * = A/A): {order}")
     print(f"energy: {the_plan['energy']['source']}")
+    scale = the_plan.get("scale_out")
+    if scale:
+        goals = ", ".join(f"{key} {value:g}" for key, value in scale["slo"].items() if value is not None)
+        print(f"mode scaleout: a surge of {scale['request_rate']:g} requests per second for {scale['surge_s']:g} s; "
+              f"the second replica asked for {scale['step_after_s']:g} s after the first request; goals {goals}")
     print(f"metrics: {floor['family_size']}; test {the_plan['analysis']['test']}, correction "
           f"{the_plan['analysis']['correction']}, alpha {the_plan['analysis']['alpha']}, tie band "
           f"{the_plan['analysis']['tie_band']}")

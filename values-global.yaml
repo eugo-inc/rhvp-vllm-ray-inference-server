@@ -67,8 +67,10 @@ global:
   compare:
     enabled: false
     # pairs    - paired rounds of the two sides (described above).
-    # scaleout - the scale-out benchmark. Designed, not built yet: the runner
-    #            refuses it.
+    # scaleout - the scale-out benchmark (the commented example at the end of
+    #            this block). It runs with scripts/compare-local.sh (docker)
+    #            for now: the OpenShift Job refuses it (PLAN_INVALID) until
+    #            its scale round is built.
     mode: pairs
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
     runName: vllm-two-releases
@@ -130,6 +132,43 @@ global:
       # auto: DCGM (NVIDIA GPU Operator) through the cluster's monitoring;
       # none: no tokens per joule.
       source: auto
+    # Mode scaleout, for scripts/compare-local.sh (its config file is JSON
+    # with these keys, plus model). Each round starts one replica of the side,
+    # then sends requests at a fixed rate (the surge) through a router that
+    # picks the replica with the fewest requests in flight, and starts a
+    # second replica of the same image stepAfterSeconds after the surge's
+    # first request. The primary metrics are the new replica's time to first
+    # answer and the share of the surge's requests within the latency goals;
+    # with two primaries, 7 or more pairs are needed for FASTER or SLOWER.
+    # Energy is not measured in this mode. compileCache: warm (docker only)
+    # keeps a side's compile caches from its warm-up round for its scored
+    # rounds; cold, the default, starts every replica with empty caches.
+    #   mode: scaleout
+    #   sides:
+    #     - name: vllm-0-32-0
+    #       image: docker.io/vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+    #       preset: vllm-openai
+    #       compileCache: cold
+    #     - name: vllm-0-33-0
+    #       image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
+    #       preset: vllm-openai
+    #       compileCache: cold
+    #   rounds: {pairs: 8, warmup: true, aaPairs: 0}
+    #   server:
+    #     # Each replica's share of the GPU: with sharedGpu, two replicas
+    #     # need it at most 0.475, so 0.85 above is refused in this mode.
+    #     gpuMemoryUtilization: 0.4
+    #     maxModelLen: 8192
+    #   scaleOut:
+    #     # Requests per second: pick a rate one replica cannot serve within
+    #     # the goals, so the second replica has work to take.
+    #     requestRate: 4
+    #     surgeSeconds: 300
+    #     stepAfterSeconds: 30
+    #     ttftMs: 1000     # goal: time to first token, at most
+    #     tpotMs: 100      # goal: inter-token latency, at most
+    #     # Both replicas of a side on one GPU (false: each its own GPU).
+    #     sharedGpu: true
 
 main:
   variant: prod
