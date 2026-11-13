@@ -387,7 +387,8 @@ def test_notebook_build(notebook, notebook_variant):
 @pytest.fixture(scope="module")
 def compare(render) -> dict[str, list[dict]]:
     return {name: docs(render / f"charts/{name}.yaml")
-            for name in ("notebook-compare", "notebook-compare-noenergy", "notebook-compare-sides")}
+            for name in ("notebook-compare", "notebook-compare-noenergy", "notebook-compare-sides",
+                         "notebook-compare-pull")}
 
 
 COMPARE_KINDS = {"Job", "PersistentVolumeClaim", "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
@@ -400,6 +401,7 @@ def test_compare_is_off_by_default(server, notebook):
     assert not kinds(notebook) & {"Job", "PersistentVolumeClaim", "ClusterRole"}
     deploy = one(notebook, "Deployment", "notebook")
     assert "RHVP_COMPARE_RESULTS" not in env_map(container(deploy, "notebook"))
+    assert "affinity" not in deploy["spec"]["template"]["spec"]
 
 
 def test_compare_leaves_the_server_replicas_to_the_runner(server, cg):
@@ -426,6 +428,11 @@ def test_compare_job(compare):
     pod = spec["template"]["spec"]
     assert pod["serviceAccountName"] == "image-compare" and pod["restartPolicy"] == "Never"
     assert pod["terminationGracePeriodSeconds"] == 300
+    sys.path.insert(0, str(REPO / "notebooks"))
+    from rhvp_compare import kube
+
+    # a stop inside a round (GuideLLM stopped, the server asked back, the side taken down, the last saves) fits
+    assert kube.stop_budget_seconds() < pod["terminationGracePeriodSeconds"]
     assert pod["securityContext"] == {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}}
     affinity = pod["affinity"]["podAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]
     assert affinity == {"labelSelector": {"matchLabels": {"app.kubernetes.io/name": "notebook"}},
@@ -447,6 +454,9 @@ def test_compare_job(compare):
     assert runner["terminationMessagePolicy"] == "FallbackToLogsOnError"
     status_ns = next(e for e in runner["env"] if e["name"] == "RHVP_COMPARE_STATUS_NAMESPACE")
     assert status_ns["valueFrom"] == {"fieldRef": {"fieldPath": "metadata.namespace"}}
+    pod_name = next(e for e in runner["env"] if e["name"] == "RHVP_COMPARE_POD_NAME")  # one run at a time
+    assert pod_name["valueFrom"] == {"fieldRef": {"fieldPath": "metadata.name"}}
+    assert spec["template"]["metadata"]["labels"]["app.kubernetes.io/name"] == "image-compare"
     for c in pod["initContainers"] + pod["containers"]:
         assert c["securityContext"] == {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
     assert "runAsUser" not in json.dumps(job)
@@ -458,14 +468,19 @@ def test_compare_job(compare):
 
 
 def test_compare_job_name_follows_the_pod_template(compare):
-    # A Job's pod template cannot change: bigger side pods must be a new Job, with the same config (and run id).
+    # A Job's pod template cannot change: bigger side pods, or another pull policy for the init container, must be a
+    # new Job, with the same config (and run id). The name hashes the whole rendered pod template.
     [job] = [d for d in compare["notebook-compare"] if d["kind"] == "Job"]
+    for variant in ("notebook-compare-sides", "notebook-compare-pull"):
+        [other] = [d for d in compare[variant] if d["kind"] == "Job"]
+        assert job["metadata"]["name"] != other["metadata"]["name"]
+        assert one(compare["notebook-compare"], "ConfigMap")["metadata"]["name"] == one(
+            compare[variant], "ConfigMap")["metadata"]["name"]
     [bigger] = [d for d in compare["notebook-compare-sides"] if d["kind"] == "Job"]
-    assert job["metadata"]["name"] != bigger["metadata"]["name"]
-    assert one(compare["notebook-compare"], "ConfigMap")["metadata"]["name"] == one(
-        compare["notebook-compare-sides"], "ConfigMap")["metadata"]["name"]
     env = env_map(bigger["spec"]["template"]["spec"]["containers"][0])
     assert json.loads(env["RHVP_COMPARE_SIDE_RESOURCES"])["limits"]["memory"] == "32Gi"
+    [pulled] = [d for d in compare["notebook-compare-pull"] if d["kind"] == "Job"]
+    assert pulled["spec"]["template"]["spec"]["initContainers"][0]["imagePullPolicy"] == "Always"
 
 
 def test_compare_config_is_global_compare_plus_the_model(compare):
@@ -494,7 +509,8 @@ def test_compare_rbac(compare):
          "verbs": ["get", "patch"]}]
     status = one(items, "Role", "image-compare-status")
     assert "namespace" not in status["metadata"]  # the release namespace, vllm-notebook
-    assert status["rules"] == [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["create", "get", "patch"]}]
+    assert status["rules"] == [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["create", "get", "patch"]},
+                               {"apiGroups": [""], "resources": ["pods"], "verbs": ["list"]}]
     assert one(items, "RoleBinding", "image-compare-status")["subjects"] == [
         {"kind": "ServiceAccount", "name": "image-compare", "namespace": "vllm-notebook"}]
     binding = one(items, "RoleBinding", "image-compare-sides")
@@ -517,6 +533,11 @@ def test_compare_notebook_mounts_the_results_read_only(compare):
     volume = next(v for v in deploy["spec"]["template"]["spec"]["volumes"] if v["name"] == "compare-results")
     assert volume["persistentVolumeClaim"] == {"claimName": "image-compare-results", "readOnly": True}
     assert deploy["spec"]["strategy"] == {"type": "Recreate"}
+    # a notebook pod that restarts during a run prefers the runner's node (the results volume is ReadWriteOnce)
+    [term] = deploy["spec"]["template"]["spec"]["affinity"]["podAffinity"][
+        "preferredDuringSchedulingIgnoredDuringExecution"]
+    assert term["podAffinityTerm"] == {"labelSelector": {"matchLabels": {"app.kubernetes.io/name": "image-compare"}},
+                                       "topologyKey": "kubernetes.io/hostname"}
     variant = compare["notebook-compare-noenergy"]
     [job] = [d for d in variant if d["kind"] == "Job"]
     assert job["spec"]["template"]["spec"]["initContainers"][0]["image"] == "quay.io/example/notebook:1.0"

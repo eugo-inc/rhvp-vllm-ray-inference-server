@@ -46,12 +46,12 @@ global:
   #     in ConfigMap compare-<run id>;
   #   - the notebook compare_images.ipynb shows the results.
   # Any change below starts a new run (a new Job); a finished run is not run
-  # again. Change it only after the current run has finished, or delete the
-  # running Job first: two runs at once share the GPU, and the first to end
-  # brings the live server back while the other is still measuring. A partial
-  # run's Job reads Failed; before you delete it, set enabled to false or start
-  # a new run, or a later sync creates it again and the run repeats. Setting
-  # enabled back to false deletes nothing.
+  # again. One run at a time: a runner that finds another one still going
+  # refuses to start and changes nothing (its Job reads Failed, exit 5), so
+  # change this only after the current run has finished, or delete the running
+  # Job first. A partial run's Job reads Failed; before you delete it, set
+  # enabled to false or start a new run, or a later sync creates it again and
+  # the run repeats. Setting enabled back to false deletes nothing.
   compare:
     enabled: false
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
@@ -59,8 +59,11 @@ global:
     # Exactly two sides: A, the baseline, first; then B, the candidate. Every
     # ratio in the results is B/A. preset:
     #   vllm-openai    an upstream vLLM OpenAI server image (vllm serve)
-    #   ray-serve-llm  this pattern's own server image, for example
-    #                  image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest
+    #   ray-serve-llm  this pattern's own server image, pinned by digest:
+    #     image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm@sha256:<digest>
+    #                  (oc get istag ray-serve-llm:latest -n vllm-inference
+    #                  shows it). The run id comes from this config only, so
+    #                  an image rebuilt under the same tag is not a new run.
     #   custom         set command and args yourself
     # args are added after the preset's own; env adds environment variables.
     # In both, {model_id}, {model_source}, {model_revision} and {port} are
@@ -91,10 +94,14 @@ global:
       outputTokens: 128
       secondsPerLevel: 60
     analysis:
-      # Declared before the run. A median ratio within 1/(1+tieBand) and
-      # 1+tieBand is a TIE.
+      # Declared before the run. TIE needs the median ratio and its whole
+      # confidence interval within 1/(1+tieBand) and 1+tieBand; the interval
+      # needs at least 6 usable pairs at ciLevel 0.95.
       tieBand: 0.05
       alpha: 0.05
+      ciLevel: 0.95
+      # Fewer usable pairs than this make a metric INCONCLUSIVE outright.
+      minPairs: 3
       test: sign             # sign or wilcoxon
       correction: holm       # holm, bonferroni, bh or none
       # The primary metrics: only they share the correction, so only their

@@ -325,7 +325,12 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
             "next to it", "unit": "one summary per round and metric; requests are never pooled across rounds",
             "test": test, "correction": correction, "tie_band": tie_band, "alpha": alpha, "min_pairs": min_pairs,
             "ci_level": ci_level, "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
-            "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band",
+            "tie_rule": "TIE when the median ratio and both ends of its confidence interval lie within 1/(1+tie_band) "
+            "and 1+tie_band; a median inside with an interval outside, or with no interval, is INCONCLUSIVE",
+            "direction_rule": "FASTER or SLOWER only when the test leans the same way as the median ratio",
+            "failure_rule": "a metric that lost a pair because one side failed on its own account (SIDE_FAILED, "
+            "SIDE_NEVER_READY, LOAD_FAILED, or failed requests at its level) is INCONCLUSIVE, and so is every metric "
+            "when the scored rounds ran on more than one node",
             "primary": [m["id"] for m in metrics if m["role"] == PRIMARY],
             "family_rule": "the correction runs over the primary metrics only; secondary metrics get the same test, "
             "interval and tie band with an uncorrected p-value, and their verdicts are descriptive",

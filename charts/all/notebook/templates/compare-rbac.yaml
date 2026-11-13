@@ -4,8 +4,9 @@
 # logs, scales the pattern's server Deployment to 0 and back, reads the Hugging
 # Face Secret there (to decide whether a side gets the token, by reference, and to
 # give GuideLLM the tokenizer of a gated model), writes its status ConfigMap in
-# this namespace, reads the GPU node's labels and the cluster version for the
-# results' provenance, and reads GPU power from the cluster's monitoring.
+# this namespace, lists the runner pods here (one run at a time), reads the GPU
+# node's labels and the cluster version for the results' provenance, and reads GPU
+# power from the cluster's monitoring.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -74,7 +75,8 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 # The run's status, ConfigMap compare-<run id>, in this namespace. Its name comes
-# from the run, so the rule cannot name it.
+# from the run, so the rule cannot name it. The runner also lists the runner pods
+# here: it refuses to start while an older one is still going.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -90,6 +92,12 @@ rules:
       - create
       - get
       - patch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

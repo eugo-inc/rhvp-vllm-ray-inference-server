@@ -2,10 +2,11 @@
 """Short, machine-readable views of a run, for readers that cannot open the results volume:
 
 - `status(results)`: progress and outcome: the phase, pairs and rounds done, an estimate of the time left, the
-  failure codes and the primary verdicts. On OpenShift the runner keeps it in ConfigMap `compare-<run id>` (key
-  status.json), with the whole results file (key result.json) as long as it fits, and updates both after every round.
+  failure codes, the load levels left out because requests failed, whether the live server is back, and the primary
+  verdicts. On OpenShift the runner keeps it in ConfigMap `compare-<run id>` (key status.json), with the whole
+  results file (key result.json) as long as it fits, and updates both after every round.
 - `termination(results)`: at most 4096 bytes for the runner container's termination message, which `oc get pod`
-  shows after the run: status, failure code, usable pairs and the verdict counts.
+  shows after the run: status, failure code, whether the live server is back, usable pairs and the verdict counts.
 - `log_lines(results)`: the whole results file as one compact JSON line between two marker lines, printed at the end
   of a run, for a reader that has only the Job's log.
 
@@ -66,6 +67,22 @@ def eta_seconds(results: Mapping) -> int | None:
     return max(0, round(sum(lengths) / len(lengths) * left))
 
 
+def levels_unusable(results: Mapping) -> list[dict]:
+    """The load levels of finished rounds (scored and A/A) left out of the comparison: requests failed there, or none
+    finished."""
+    out = []
+    for r in results.get("rounds") or []:
+        if r.get("status") != "ok" or r.get("kind") == "warmup":
+            continue
+        for level in r.get("levels") or []:
+            if level.get("usable") is False:
+                requests = level.get("requests") or {}
+                out.append({"index": r["index"], "side": r["side"], "kind": r["kind"],
+                            "concurrency": level.get("concurrency"), "errored": requests.get("errored"),
+                            "successful": requests.get("successful")})
+    return out
+
+
 def _primary(results: Mapping) -> list[dict]:
     rows = ((results.get("analysis") or {}).get("metrics")) or []
     return [{"id": row["id"], "verdict": row["verdict"], "median_ratio": row.get("median_ratio"),
@@ -89,6 +106,8 @@ def status(results: Mapping, now: float) -> dict:
         "rounds_total": len(results["plan"]["rounds"]),
         "rounds_failed": [{"index": r["index"], "side": r["side"], "kind": r["kind"],
                            "error_code": r.get("error_code")} for r in rounds if r.get("status") != "ok"],
+        "levels_unusable": levels_unusable(results),
+        "server_restored": run.get("server_restored"),
         "eta_seconds": eta_seconds(results),
         "updated_at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "started_at": run.get("started_at"),
@@ -112,7 +131,7 @@ def termination(results: Mapping) -> str:
     analysis = results.get("analysis") or {}
     done, total = pairs(results)
     data = {"run_id": run.get("id"), "status": run.get("status"), "error_code": run.get("error_code"),
-            "completed_pairs": done, "total_pairs": total,
+            "server_restored": run.get("server_restored"), "completed_pairs": done, "total_pairs": total,
             "pairs_usable_min": (analysis.get("method") or {}).get("pairs_usable_min"),
             "outcomes": analysis.get("outcomes"),
             "primary": {row["id"]: row["verdict"] for row in _primary(results)},
@@ -123,12 +142,13 @@ def termination(results: Mapping) -> str:
             return text
         data.pop(drop)
     return compact({"run_id": str(run.get("id"))[:200], "status": run.get("status"),
-                    "error_code": run.get("error_code")})
+                    "error_code": run.get("error_code"), "server_restored": run.get("server_restored")})
 
 
-def plan_invalid(message: str) -> dict:
-    """What the log and the termination message say when the config cannot be run (there is no results file)."""
-    return {"run": {"id": None, "status": "failed", "error_code": "PLAN_INVALID", "errors": [message[:2000]]}}
+def not_started(code: str, message: str, run_id: str | None = None) -> dict:
+    """What the log and the termination message say when no results file was written: the config cannot be run
+    (PLAN_INVALID), another comparison is running (RUN_ACTIVE), or the run failed before it began (RUNNER_FAILED)."""
+    return {"run": {"id": run_id, "status": "failed", "error_code": code, "errors": [message[:2000]]}}
 
 
 def log_lines(results: Mapping) -> list[str]:

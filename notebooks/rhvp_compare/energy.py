@@ -166,19 +166,30 @@ def selectors(pod: str, namespace: str, node: str | None) -> list[tuple[str, str
     return out
 
 
+def bearer(path: Path, token: str | None = None):
+    """An httpx auth callable that sends `token`, or else the token in the file at `path`, read again for every
+    request: the kubelet replaces a pod's service account token file before the token expires, and a run can last
+    two days."""
+    def apply(request):
+        value = token or (path.read_text(encoding="utf-8").strip() if path.is_file() else "")
+        if value:
+            request.headers["Authorization"] = f"Bearer {value}"
+        return request
+    return apply
+
+
 class Thanos:
     """Raw samples from the Thanos Querier, with the pod's service account token (needs cluster-monitoring-view)."""
 
-    def __init__(self, url: str, transport=None, token: str | None = None, verify=None) -> None:
+    def __init__(self, url: str, transport=None, token: str | None = None, verify=None,
+                 token_path: Path = SERVICE_ACCOUNT / "token") -> None:
         import httpx
 
-        if token is None and (SERVICE_ACCOUNT / "token").is_file():
-            token = (SERVICE_ACCOUNT / "token").read_text(encoding="utf-8").strip()
         if verify is None:
             ca = SERVICE_ACCOUNT / "service-ca.crt"
             verify = ssl.create_default_context(cafile=str(ca)) if ca.is_file() else True
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self._client = httpx.Client(base_url=url, headers=headers, verify=verify, timeout=30.0, transport=transport)
+        self._client = httpx.Client(base_url=url, auth=bearer(token_path, token), verify=verify, timeout=30.0,
+                                    transport=transport)
 
     def close(self) -> None:
         self._client.close()

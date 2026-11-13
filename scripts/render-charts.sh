@@ -156,6 +156,9 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
 helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
   --set global.compare.enabled=true --set compare.side.resources.limits.memory=32Gi \
   > "${RENDER_DIR}/charts/notebook-compare-sides.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true --set image.pullPolicy=Always \
+  > "${RENDER_DIR}/charts/notebook-compare-pull.yaml"
 echo "rendered charts/*-variant.yaml and charts/notebook-compare*.yaml"
 
 # ---- clustergroup chart (app of apps) ---------------------------------------------

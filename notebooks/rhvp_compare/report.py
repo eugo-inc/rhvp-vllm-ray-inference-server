@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from . import summary
+
 
 def _num(value, unit: str = "") -> str:
     if value is None:
@@ -109,4 +111,16 @@ def markdown(results: Mapping) -> str:
         lines += ["", "Rounds that did not finish:"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {r.get('error_code') or 'failed'}: "
                   f"{r.get('error') or r.get('status')}" for r in failed]
+    unusable = summary.levels_unusable(results)
+    if unusable:
+        lines += ["", "Load levels left out of the comparison:"]
+        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}), {u['concurrency']} streams: "
+                  f"{u['errored']} requests failed, {u['successful']} succeeded" for u in unusable]
+    lost = [row for row in rows if (row.get("pairs_lost") or {}).get("A") or (row.get("pairs_lost") or {}).get("B")]
+    if lost:
+        lines += ["", "Metrics that lost pairs because one side failed (so INCONCLUSIVE):"]
+        lines += [f"- {row['label']}: side A {row['pairs_lost']['A']}, side B {row['pairs_lost']['B']}" for row in lost]
+    if run.get("server_restored") is False:
+        lines += ["", "**The live server was not brought back.** " + "; ".join(
+            e for e in run.get("errors") or [] if "live server" in e)]
     return "\n".join(lines) + "\n"

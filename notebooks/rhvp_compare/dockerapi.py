@@ -10,6 +10,11 @@ Like OpenShift, each side runs as an arbitrary UID in group 0 by default (RHVP_C
 fresh tmpfs at /cache and the model weights on a named volume at /models, kept between rounds. GPU power comes from
 nvidia-smi in a small container that sees the same GPU (DCGM is not there).
 
+One run at a time: the runner container carries the label rhvp-compare.runner (compare-local.sh sets it); a run
+refuses to start while an older runner container is running. A server container that normally holds the GPU can be
+named in RHVP_COMPARE_SERVER_CONTAINER: the runner stops it before the first round and starts it again when the run
+ends, however it ends (the docker counterpart of scaling the pattern's server on OpenShift).
+
 Settings (environment variables):
 
 - RHVP_COMPARE_NETWORK: the docker network the runner is on (required)
@@ -19,6 +24,9 @@ Settings (environment variables):
 - RHVP_COMPARE_GPUS: "all" (default) or device ids such as "0"; give one id on a machine with several GPUs
 - RHVP_COMPARE_USER: the user the sides run as (default 1000660000:0)
 - RHVP_COMPARE_SHM: /dev/shm size in bytes (default 4 GiB)
+- RHVP_COMPARE_MEMORY: memory limit of each side, as docker writes it (for example 32g; default none)
+- RHVP_COMPARE_SERVER_CONTAINER: a container to stop for the run and start again after it (default none)
+- RHVP_COMPARE_RUNNER_NAME: the runner container's own name (default: its hostname, the container id)
 - DOCKER_SOCKET: the Engine API socket (default /var/run/docker.sock)
 """
 
@@ -26,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import struct
 import time
 from pathlib import Path
@@ -36,6 +45,25 @@ import httpx
 from . import energy, guidellm, logs, runner
 
 LABEL = "rhvp-compare.run"
+RUNNER_LABEL = "rhvp-compare.runner"
+#: Waits between the tries to start the server container again.
+RESTORE_BACKOFF_S = (2.0, 4.0, 8.0)
+
+
+def memory_bytes(text: str | None) -> int | None:
+    """A memory size as docker writes it (a number, then b, k, m or g) in bytes; None for an empty text."""
+    value = (text or "").strip().lower()
+    if not value:
+        return None
+    scale = {"b": 1, "k": 2**10, "m": 2**20, "g": 2**30}
+    number, unit = (value[:-1], scale[value[-1]]) if value[-1] in scale else (value, 1)
+    try:
+        out = int(float(number) * unit)
+    except ValueError:
+        out = 0
+    if out < 6 * 2**20:
+        raise runner.RoundError(f"RHVP_COMPARE_MEMORY is not a memory size docker takes (at least 6m): {text!r}")
+    return out
 
 
 def demux(raw: bytes) -> str:
@@ -98,10 +126,10 @@ class Docker:
         response = self.http.get(f"/containers/{cid}/json")
         return None if response.status_code == 404 else self._ok(response, "inspect a container").json()
 
-    def logs(self, cid: str) -> str:
+    def logs(self, cid: str, timeout_s: float = 300.0) -> str:
         response = self.http.get(f"/containers/{cid}/logs", params={"stdout": "1", "stderr": "1",
                                                                     "timestamps": "1"},
-                                 timeout=httpx.Timeout(300.0))
+                                 timeout=httpx.Timeout(timeout_s))
         return demux(self._ok(response, "read a log").content)
 
     def wait(self, cid: str, timeout_s: float) -> int:
@@ -121,6 +149,12 @@ class Docker:
         filters = json.dumps({"label": [f"{LABEL}={value}"]})
         response = self.http.get("/containers/json", params={"all": "1", "filters": filters})
         return [c["Id"] for c in self._ok(response, "list containers").json()]
+
+    def running(self, label: str) -> list[dict]:
+        """The running containers that carry `label` (any value)."""
+        filters = json.dumps({"label": [label], "status": ["running"]})
+        return list(self._ok(self.http.get("/containers/json", params={"filters": filters}),
+                             "list containers").json())
 
     def volume(self, name: str) -> None:
         if self.http.get(f"/volumes/{name}").status_code == 404:
@@ -212,15 +246,74 @@ class DockerBackend:
         self.user = env.get("RHVP_COMPARE_USER", "1000660000:0")
         self.shm = int(env.get("RHVP_COMPARE_SHM", str(4 * 2**30)))
         self.hf_token = env.get("HF_TOKEN", "") if env.get("HF_TOKEN", "").startswith("hf_") else ""
+        self.memory = memory_bytes(env.get("RHVP_COMPARE_MEMORY"))
+        self.server_container = env.get("RHVP_COMPARE_SERVER_CONTAINER", "").strip()
+        self.runner_name = env.get("RHVP_COMPARE_RUNNER_NAME", "").strip() or socket.gethostname()
         self.results_root = results_root
         self.run_id = ""
         self._gpu_facts: dict | None = None
+        self._server_stopped = False
+        self._restored = False
+        self.log_timeout_s, self.stop_grace_s = 300.0, 30
+
+    restore_before_teardown = False  # no scheduler: the server would take the GPU from the side still on it
+
+    def check_alone(self) -> None:
+        """Refuse to start while an older runner container is running (the oldest wins; ties by name)."""
+        def order(c: Mapping) -> tuple[int, str]:
+            return int(c.get("Created") or 0), (c.get("Names") or [""])[0]
+
+        def is_me(c: Mapping) -> bool:
+            return f"/{self.runner_name}" in (c.get("Names") or []) or str(c.get("Id", "")).startswith(
+                self.runner_name)
+
+        found = self.docker.running(RUNNER_LABEL)
+        mine = next((c for c in found if is_me(c)), None)
+        for c in sorted(found, key=order):
+            if not is_me(c) and (mine is None or order(c) < order(mine)):
+                name = (c.get("Names") or ["?"])[0].lstrip("/")
+                raise runner.RunActive(f"another comparison is running: runner container {name}. This run changed "
+                                       f"nothing; start it again once that one has ended.")
+
+    def on_stop(self) -> None:
+        """A stop has begun: shorter waits from now on (flags only)."""
+        self.log_timeout_s, self.stop_grace_s = 20.0, 10
+
+    def restore_server(self) -> bool | None:
+        """Start the server container stopped in prepare() again, and check that it runs. None when none was
+        stopped."""
+        if not self._server_stopped:
+            return True if self._restored else None
+        waits, last = iter(RESTORE_BACKOFF_S), ""
+        while True:
+            try:
+                self.docker.start(self.server_container)
+                state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+                if state.get("Running"):
+                    self._server_stopped, self._restored = False, True
+                    return True
+                last = f"it is {state.get('Status') or 'gone'} after the start"
+            except runner.RoundError as error:
+                last = str(error)
+            wait = next(waits, None)
+            if wait is None:
+                break
+            time.sleep(wait)
+        raise runner.RoundError(f"could not start container {self.server_container} again ({last}). Start it by "
+                                f"hand: docker start {self.server_container}")
 
     # ---- before and after the run ----
 
     def prepare(self, plan: Mapping) -> None:
         self.run_id = plan["run_id"]
         self.docker.network(self.network)
+        if self.server_container:
+            state = (self.docker.inspect(self.server_container) or {}).get("State")
+            if state is None:
+                raise runner.RoundError(f"RHVP_COMPARE_SERVER_CONTAINER names no container: {self.server_container}")
+            if state.get("Running"):
+                self._server_stopped = True  # set first: a stop that fails half-way is still undone
+                self.docker.stop(self.server_container, grace_s=30)
         self.docker.volume(self.models_volume)
         for ref in [s["image"] for s in plan["sides"]]:
             self.docker.pull(ref)
@@ -282,6 +375,8 @@ class DockerBackend:
             binds.append(f"{self.host_results}/{self.run_id}/llm.yaml:/config/llm.yaml:ro")
         host = {"NetworkMode": self.network, "Binds": binds, "ShmSize": self.shm,
                 "Tmpfs": {"/cache": "rw,exec,size=20g,mode=1777", "/tmp/r": "rw,exec,mode=1777"}}
+        if self.memory:
+            host.update({"Memory": self.memory, "MemorySwap": self.memory})  # no swap on top
         if spec.get("gpu"):
             host["DeviceRequests"] = _gpu_request(self.gpus)
         body: dict = {"Image": side["image"], "Cmd": list(spec["args"]), "User": self.user,
@@ -317,7 +412,7 @@ class DockerBackend:
         return NvidiaSmi(self.docker, handle["image"], self.gpus, f"{handle['name']}-power", self.run_id)
 
     def logs(self, handle: Mapping) -> str:
-        return self.docker.logs(handle["id"])
+        return self.docker.logs(handle["id"], timeout_s=self.log_timeout_s)
 
     def facts(self, handle: Mapping) -> dict:
         ref = handle["image"]
@@ -350,5 +445,5 @@ class DockerBackend:
         return self._gpu_facts or None
 
     def stop(self, handle: Mapping) -> None:
-        self.docker.stop(handle["id"], grace_s=30)
+        self.docker.stop(handle["id"], grace_s=self.stop_grace_s)
         self.docker.remove(handle["id"])

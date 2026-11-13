@@ -12,8 +12,9 @@ the B round next to it, so a slow drift in the machine lands on both sides of ev
 For each metric:
 
 - ratio r_i = B_i / A_i for every pair i with both values (A is the baseline, B the candidate);
-- the median ratio, and a distribution-free confidence interval for it from the order statistics of the ratios
-  (the interval that goes with the sign test);
+- the median ratio, on the log scale (for an even count the geometric mean of the two middle ratios, so swapping A
+  and B gives exactly the reciprocal), and a distribution-free confidence interval for it from the order statistics
+  of the ratios (the interval that goes with the sign test);
 - an exact two-sided sign test on the ratios: under "no difference", r_i > 1 and r_i < 1 are equally likely. Ratios
   exactly equal to 1 carry no sign and are left out (the usual zero rule), so they lower n;
 - an exact two-sided Wilcoxon signed-rank test on log r_i, ties given average ranks, the null distribution counted
@@ -24,7 +25,9 @@ For each metric:
 
 The floor. With n pairs, no exact two-sided sign or signed-rank p-value can be smaller than 2^(1-n): all n ratios
 on one side. Holm and Bonferroni multiply the smallest p by the family size m, so a FASTER or SLOWER verdict needs
-m * 2^(1-n) <= alpha. `floor_p` computes it; plan.py warns before the run when the plan cannot reach alpha.
+m * 2^(1-n) <= alpha. `floor_p` computes it for a plan (every metric with the same pairs); plan.py warns before the
+run when the plan cannot reach alpha. `floors` gives each metric its own floor once failed rounds have left the
+metrics with different numbers of pairs.
 """
 
 from __future__ import annotations
@@ -44,10 +47,18 @@ EFFICIENCY_WORDS = {BETTER: "MORE_EFFICIENT", TIE: "TIE", WORSE: "LESS_EFFICIENT
 
 #: Why a verdict is what it is.
 REASON_TOO_FEW = "too_few_pairs"
-REASON_IN_BAND = "median_ratio_inside_tie_band"
+REASON_IN_BAND = "interval_inside_tie_band"
+REASON_NO_INTERVAL = "median_inside_tie_band_but_too_few_pairs_for_an_interval"
+REASON_WIDE = "median_inside_tie_band_but_interval_is_not"
 REASON_SIGNIFICANT = "significant_outside_tie_band"
+REASON_DISAGREE = "test_and_median_disagree"
 REASON_NOT_SIGNIFICANT = "not_significant_outside_tie_band"
 REASON_FLOOR = "outside_tie_band_but_too_few_pairs_to_reach_alpha"
+#: Set by analyze.py over a verdict the rule above gave (never by `verdict`).
+REASON_ONE_SIDE = "pairs_lost_to_one_side_failing"
+REASON_NODES = "rounds_ran_on_more_than_one_node"
+REASONS = (REASON_TOO_FEW, REASON_IN_BAND, REASON_NO_INTERVAL, REASON_WIDE, REASON_SIGNIFICANT, REASON_DISAGREE,
+           REASON_NOT_SIGNIFICANT, REASON_FLOOR, REASON_ONE_SIDE, REASON_NODES)
 
 
 # ---- basic summaries ----
@@ -59,6 +70,17 @@ def median(values: Sequence[float]) -> float:
         raise ValueError("median of no values")
     mid = len(data) // 2
     return data[mid] if len(data) % 2 else (data[mid - 1] + data[mid]) / 2.0
+
+
+def median_ratio(values: Sequence[float]) -> float:
+    """The median of ratios, on the log scale: the middle ratio, or for an even count the geometric mean of the two
+    middle ratios. So the median of the A/B ratios is exactly the reciprocal of the median of the B/A ratios, and
+    which image is called A cannot move a ratio across the edge of the tie band."""
+    data = sorted(values)
+    if not data:
+        raise ValueError("median of no values")
+    mid = len(data) // 2
+    return data[mid] if len(data) % 2 else math.sqrt(data[mid - 1] * data[mid])
 
 
 def ratios(pairs: Sequence[tuple[float, float]]) -> list[float]:
@@ -88,6 +110,11 @@ class SignTest:
     above: int    # r > 1: B larger than A
     below: int    # r < 1: B smaller than A
     p: float      # exact two-sided p-value; 1.0 when n == 0
+
+    @property
+    def direction(self) -> int:
+        """+1 when the test leans to B larger than A, -1 to B smaller, 0 for neither."""
+        return (self.above > self.below) - (self.above < self.below)
 
 
 def sign_test(values: Sequence[float]) -> SignTest:
@@ -124,6 +151,7 @@ class WilcoxonTest:
     n: int          # log ratios that are not 0
     w_plus: float   # sum of the ranks of the positive log ratios
     p: float        # exact two-sided p-value; 1.0 when n == 0
+    direction: int = 0  # +1: W+ above its mean under "no difference" (B mostly larger), -1 below, 0 at it
 
 
 def wilcoxon_test(values: Sequence[float]) -> WilcoxonTest:
@@ -150,7 +178,8 @@ def wilcoxon_test(values: Sequence[float]) -> WilcoxonTest:
     patterns = 2 ** n
     low = sum(counts[: w_plus2 + 1]) / patterns
     high = sum(counts[w_plus2:]) / patterns
-    return WilcoxonTest(n, w_plus2 / 2.0, min(1.0, 2.0 * min(low, high)))
+    direction = (2 * w_plus2 > total) - (2 * w_plus2 < total)  # the mean of W+ (doubled) is total / 2
+    return WilcoxonTest(n, w_plus2 / 2.0, min(1.0, 2.0 * min(low, high)), direction)
 
 
 # ---- confidence interval for the median ratio ----
@@ -208,16 +237,49 @@ def adjust(pvalues: Sequence[float], method: str) -> list[float]:
     return out
 
 
+def _base_floor(pairs: int) -> float:
+    """The smallest exact two-sided p-value n pairs allow: 2^(1-n); 1.0 for fewer than one pair."""
+    return 1.0 if pairs < 1 else min(1.0, 2.0 ** (1 - pairs))
+
+
 def floor_p(pairs: int, family: int, correction: str) -> float:
     """The smallest adjusted p-value any metric can reach with `pairs` pairs and `family` metrics: 2^(1-n) for one
     metric, times m for Holm and Bonferroni (the smallest p is multiplied by m), unchanged for "bh" (when every
     metric sits at the floor) and for "none". 1.0 for fewer than one pair."""
-    if pairs < 1:
-        return 1.0
-    base = min(1.0, 2.0 ** (1 - pairs))
+    base = _base_floor(pairs)
     if correction in ("holm", "bonferroni"):
         return min(1.0, base * max(family, 1))
     return base
+
+
+def floors(pairs: Sequence[int], correction: str) -> list[float]:
+    """The smallest adjusted p-value each metric of a family can reach, from each metric's own number of pairs.
+
+    - none: the metric's own 2^(1-n).
+    - Bonferroni: m times that.
+    - Holm, exactly: a metric ranked after k others gets (m-k) times its own p, and never less than the Holm values
+      of the metrics ranked before it. So its floor is the smallest, over k, of the larger of (m-k) times its own
+      floor and the Holm values of the k metrics with the smallest floors at those floors (only metrics whose floor
+      is not above its own can rank before it). With equal pairs this is m * 2^(1-n), as `floor_p` says.
+    - Benjamini-Hochberg: a lower bound, the metric's own 2^(1-n) (no adjusted p-value is below its raw p-value).
+    """
+    if correction not in CORRECTIONS:
+        raise ValueError(f"unknown correction {correction!r}; one of {', '.join(CORRECTIONS)}")
+    base = [_base_floor(n) for n in pairs]
+    m = len(base)
+    if correction in ("none", "bh"):
+        return base
+    if correction == "bonferroni":
+        return [min(1.0, f * m) for f in base]
+    out = []
+    for i, own in enumerate(base):
+        ahead = sorted(f for j, f in enumerate(base) if j != i and f <= own)
+        best, before = m * own, 0.0
+        for k, f in enumerate(ahead, start=1):
+            before = max(before, (m - k + 1) * f)  # the Holm value of the metric ranked k-th
+            best = min(best, max(before, (m - k) * own))
+        out.append(min(1.0, best))
+    return out
 
 
 def pairs_needed(family: int, correction: str, alpha: float) -> int:
@@ -244,13 +306,18 @@ class Verdict:
 
 
 def verdict(median_ratio: float | None, p_adjusted: float | None, better: str, tie_band: float, alpha: float,
-            n_pairs: int, min_pairs: int, reachable: bool = True) -> Verdict:
+            n_pairs: int, min_pairs: int, reachable: bool = True, interval: Interval | None = None,
+            direction: int | None = None) -> Verdict:
     """The pre-declared rule, in this order:
 
     1. fewer than `min_pairs` usable pairs: inconclusive (too few pairs);
-    2. the median ratio inside the tie band: tie (whatever the p-value; a difference smaller than the band was
-       declared not to matter before the run);
-    3. outside the band and the adjusted p-value <= alpha: better or worse, by the metric's direction;
+    2. the median ratio inside the tie band: tie only when the whole confidence interval for the median also lies
+       inside the band (whatever the p-value; a difference smaller than the band was declared not to matter before
+       the run). Otherwise inconclusive: a median inside the band with an interval that reaches outside it, or with
+       too few pairs for an interval at all, does not show the two images are within the band;
+    3. outside the band and the adjusted p-value <= alpha: better or worse, by the metric's direction, when the
+       test leans the same way as the median (`direction`: +1 for B larger, -1 for B smaller; the sign test and the
+       signed-rank test can come out significant on the other side of 1 from the median); otherwise inconclusive;
     4. outside the band and not significant: inconclusive, with the floor named when the plan could never have
        reached alpha (`reachable` False).
     """
@@ -259,9 +326,16 @@ def verdict(median_ratio: float | None, p_adjusted: float | None, better: str, t
     if n_pairs < max(min_pairs, 1) or median_ratio is None:
         return Verdict(INCONCLUSIVE, REASON_TOO_FEW)
     if inside_band(median_ratio, tie_band):
-        return Verdict(TIE, REASON_IN_BAND)
+        if interval is None or interval.low is None or interval.high is None:
+            return Verdict(INCONCLUSIVE, REASON_NO_INTERVAL)
+        if inside_band(interval.low, tie_band) and inside_band(interval.high, tie_band):
+            return Verdict(TIE, REASON_IN_BAND)
+        return Verdict(INCONCLUSIVE, REASON_WIDE)
     if p_adjusted is not None and p_adjusted <= alpha:
-        b_is_better = median_ratio < 1.0 if better == LOWER else median_ratio > 1.0
+        b_larger = median_ratio > 1.0
+        if direction is not None and direction != (1 if b_larger else -1):
+            return Verdict(INCONCLUSIVE, REASON_DISAGREE)
+        b_is_better = not b_larger if better == LOWER else b_larger
         return Verdict(BETTER if b_is_better else WORSE, REASON_SIGNIFICANT)
     return Verdict(INCONCLUSIVE, REASON_NOT_SIGNIFICANT if reachable else REASON_FLOOR)
 

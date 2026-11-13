@@ -10,9 +10,17 @@ runner that was killed outright by one round at most.
 
 The live server. Before the first round the runner scales the pattern's own server Deployment to 0, so the GPU and
 the ReadWriteOnce model PVC are free, and when the run ends (complete, partial, stopped or failed) it scales it back
-(to RHVP_COMPARE_SERVER_REPLICAS, default 1). Argo CD ignores the Deployment's replicas (variants/prod), so a sync
-during the run does not bring the server back onto the GPU. The runner also waits until no other GPU pod is left in
-the namespace before each round.
+(to RHVP_COMPARE_SERVER_REPLICAS, default 1), trying again for about a minute and reading the scale back to check.
+On a stop it does that first, before the side is taken down: the server's pod waits for the GPU. Argo CD ignores the
+Deployment's replicas (variants/prod), so a sync during the run does not bring the server back onto the GPU. The
+runner also waits until no other GPU pod is left in the namespace before each round.
+
+One run at a time. Before it changes anything the runner lists the runner pods in its own namespace
+(app.kubernetes.io/name=image-compare): when another one is Pending or Running and is older (or as old, with a name
+that sorts first), this run refuses to start. The oldest always wins, and nothing is left behind to go stale.
+
+One node. Every side pod after the first is pinned to the node the first one ran on (its kubernetes.io/hostname
+label), so all rounds use the same GPU node; the results record every node a round ran on.
 
 Progress. After every round the runner writes ConfigMap compare-<run id> in its own namespace: status.json (see
 summary.py) and result.json, the whole results file while it fits.
@@ -33,6 +41,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import ssl
 import time
 from pathlib import Path
@@ -44,6 +53,7 @@ from . import energy, guidellm, runner
 
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 SIDE_APP = "image-compare-side"
+RUNNER_APP = "image-compare"
 LABEL_RUN = "rhvp-compare/run"
 PART_OF = "vllm-ray-inference-server"
 #: Labels of the run's status ConfigMap.
@@ -55,24 +65,58 @@ FATAL_WAITING = ("InvalidImageName", "CreateContainerConfigError", "CreateContai
 PULL_WAITING = ("ErrImagePull", "ImagePullBackOff")
 
 
+#: Timeouts, in seconds. Once a stop has begun (`hurry`) every call gets the short ones, so what is left after the
+#: server is asked back fits the runner pod's grace period (see `stop_budget_seconds`).
+API_TIMEOUT_S, LOG_TIMEOUT_S, DELETE_WAIT_S = 30.0, 60.0, 180.0
+HURRY_TIMEOUT_S, HURRY_DELETE_WAIT_S = 10.0, 30.0
+#: Waits between the tries to scale the server back, and how long the tries may go on (counted from the first);
+#: a later call after that makes one try more.
+RESTORE_BACKOFF_S = (2.0, 4.0, 8.0, 16.0)
+RESTORE_WINDOW_S = 60.0
+#: How long GuideLLM may take to stop (guidellm._stop: SIGTERM, 15 s, SIGKILL, 15 s).
+GUIDELLM_STOP_S = 30.0
+
+
+def stop_budget_seconds() -> float:
+    """The longest a stop inside a round can take with every API call at its short timeout: GuideLLM stopped, the
+    server scaled back (tries in the window, the last one started at its end, then one more after the teardown;
+    each try a PATCH and a read), the side's teardown (its log, its pod and node, the delete and the wait), two saves
+    with their status writes, and the cleanup's list and delete. terminationGracePeriodSeconds in the notebook chart
+    must be above it (tests/test_charts.py checks)."""
+    t = HURRY_TIMEOUT_S
+    restore = RESTORE_WINDOW_S + 2 * t + 2 * t
+    teardown = t + 2 * t + t + HURRY_DELETE_WAIT_S + t
+    saves = 2 * 2 * t
+    cleanup = 2 * t
+    return GUIDELLM_STOP_S + restore + teardown + saves + cleanup
+
+
 class Kube:
     """The few Kubernetes API calls the backend needs. Error texts carry the HTTP status, never a URL or a token."""
 
     def __init__(self, base_url: str | None = None, token: str | None = None, verify=None,
-                 transport: httpx.BaseTransport | None = None) -> None:
+                 transport: httpx.BaseTransport | None = None, token_path: Path = SERVICE_ACCOUNT / "token") -> None:
         if base_url is None:
             host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
             port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
             base_url = f"https://[{host}]:{port}" if ":" in host else f"https://{host}:{port}"
-        if token is None and (SERVICE_ACCOUNT / "token").is_file():
-            token = (SERVICE_ACCOUNT / "token").read_text(encoding="utf-8").strip()
         if verify is None:
             ca = SERVICE_ACCOUNT / "ca.crt"
             verify = ssl.create_default_context(cafile=str(ca)) if ca.is_file() else True
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self.http = httpx.Client(base_url=base_url, headers=headers, verify=verify, timeout=30.0, transport=transport)
+        self.timeout_s, self.log_timeout_s = API_TIMEOUT_S, LOG_TIMEOUT_S
+        self.hurried = False
+        self.http = httpx.Client(base_url=base_url, auth=energy.bearer(token_path, token), verify=verify,
+                                 timeout=API_TIMEOUT_S, transport=transport)
+
+    def hurry(self) -> None:
+        """Short timeouts from now on: a stop has begun."""
+        self.hurried = True
+        self.timeout_s = self.log_timeout_s = HURRY_TIMEOUT_S
 
     def _call(self, method: str, path: str, what: str, ok_missing: bool = False, **kwargs) -> httpx.Response | None:
+        kwargs["timeout"] = kwargs.get("timeout", self.timeout_s)
+        if self.hurried:
+            kwargs["timeout"] = min(kwargs["timeout"], HURRY_TIMEOUT_S)
         try:
             response = self.http.request(method, path, **kwargs)
         except httpx.HTTPError as error:
@@ -109,7 +153,7 @@ class Kube:
 
     def log(self, namespace: str, name: str, container: str) -> str:
         response = self._call("GET", f"/api/v1/namespaces/{namespace}/pods/{name}/log", f"read the log of {name}",
-                              params={"container": container, "timestamps": "true"}, timeout=300.0)
+                              params={"container": container, "timestamps": "true"}, timeout=self.log_timeout_s)
         return response.text
 
     def node(self, name: str) -> dict | None:
@@ -260,6 +304,7 @@ class KubeBackend:
         self.server_deployment = env.get("RHVP_COMPARE_SERVER_DEPLOYMENT", "ray-serve-llm")
         self.server_replicas = int(env.get("RHVP_COMPARE_SERVER_REPLICAS", "1"))
         self.status_namespace = env.get("RHVP_COMPARE_STATUS_NAMESPACE") or _own_namespace()
+        self.pod_name = env.get("RHVP_COMPARE_POD_NAME") or socket.gethostname()
         try:
             self.resources = json.loads(env.get("RHVP_COMPARE_SIDE_RESOURCES") or "{}")
         except ValueError:
@@ -272,8 +317,36 @@ class KubeBackend:
         self.use_token = False
         self._token: str | None = None
         self._scaled_down = False
+        self._restored = False
+        self._restore_deadline: float | None = None
+        self.pin_node: str | None = None  # the kubernetes.io/hostname of the first side's node
+        self.delete_wait_s = DELETE_WAIT_S
+
+    restore_before_teardown = True  # the server's pod waits for the GPU while the side is taken down
 
     # ---- before and after the run ----
+
+    def check_alone(self) -> None:
+        """Refuse to start while another runner pod in this namespace is Pending or Running and is older."""
+        if not self.status_namespace:
+            return
+        pods = self.kube.pods(self.status_namespace, f"app.kubernetes.io/name={RUNNER_APP}")
+
+        def order(pod: Mapping) -> tuple[str, str]:
+            meta = pod.get("metadata") or {}
+            return meta.get("creationTimestamp") or "", meta.get("name") or ""
+
+        mine = next((p for p in pods if (p.get("metadata") or {}).get("name") == self.pod_name), None)
+        for pod in sorted(pods, key=order):
+            meta, phase = pod.get("metadata") or {}, (pod.get("status") or {}).get("phase")
+            if meta.get("name") == self.pod_name or phase not in ("Pending", "Running"):
+                continue
+            if mine is None or order(pod) < order(mine):
+                job = (meta.get("labels") or {}).get("job-name")
+                raise runner.RunActive(
+                    f"another comparison is running: runner pod {meta.get('name')} ({phase}"
+                    f"{', Job ' + job if job else ''}) in {self.status_namespace}. This run changed nothing; start "
+                    f"it again (delete its Job and sync) once that one has ended.")
 
     def prepare(self, plan: Mapping) -> None:
         self.run_id = plan["run_id"]
@@ -293,22 +366,43 @@ class KubeBackend:
         for pod in self.kube.pods(self.namespace, f"{LABEL_RUN}={self.run_id}"):
             self.kube.delete_pod(self.namespace, pod["metadata"]["name"], grace_s=0)
 
-    def cleanup(self) -> None:
-        """Delete the run's side pods and bring the pattern's server back; both are tried, the first error raised."""
-        errors: list[Exception] = []
-        if self.run_id:
-            try:
-                self._delete_run_pods()
-            except Exception as error:
-                errors.append(error)
-        if self._scaled_down:
+    def restore_server(self) -> bool | None:
+        """Scale the pattern's server back and read the scale to check; tries again with waits for up to
+        RESTORE_WINDOW_S from the first try. True once it is back, None when it was never scaled down."""
+        if not self._scaled_down:
+            return True if self._restored else None
+        if self._restore_deadline is None:
+            self._restore_deadline = self.clock() + RESTORE_WINDOW_S
+        waits = iter(RESTORE_BACKOFF_S)
+        while True:
             try:
                 self.kube.scale(self.namespace, self.server_deployment, self.server_replicas)
-                self._scaled_down = False
-            except Exception as error:
-                errors.append(error)
-        if errors:
-            raise errors[0]
+                now = self.kube.replicas(self.namespace, self.server_deployment)
+                if now == self.server_replicas:
+                    self._scaled_down, self._restored = False, True
+                    return True
+                last = f"its scale reads {now} replicas after the change"
+            except runner.RoundError as error:
+                last = str(error)
+            wait = next(waits, None)
+            if wait is None or self.clock() + wait > self._restore_deadline:
+                break
+            self.sleep(wait)
+        raise runner.RoundError(
+            f"could not scale {self.server_deployment} back to {self.server_replicas} ({last}). Bring it back by hand: "
+            f"oc delete pod -n {self.namespace} -l app.kubernetes.io/name={SIDE_APP} && oc scale "
+            f"deployment/{self.server_deployment} --replicas={self.server_replicas} -n {self.namespace}")
+
+    def on_stop(self) -> None:
+        """A stop has begun: short timeouts and waits from now on. Sets flags only (it may run in the signal
+        handler)."""
+        self.kube.hurry()
+        self.delete_wait_s = HURRY_DELETE_WAIT_S
+
+    def cleanup(self) -> None:
+        """Delete the run's side pods (the runner has asked the server back first)."""
+        if self.run_id:
+            self._delete_run_pods()
 
     def publish(self, run_id: str, status_text: str, result_text: str | None) -> None:
         if not self.status_namespace:
@@ -383,7 +477,9 @@ class KubeBackend:
                 "activeDeadlineSeconds": side_deadline(plan, round_),
                 "enableServiceLinks": False,
                 "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
-                "nodeSelector": {"kubernetes.io/arch": self.arch}, "tolerations": tolerations,
+                "nodeSelector": {"kubernetes.io/arch": self.arch,
+                                 **({"kubernetes.io/hostname": self.pin_node} if self.pin_node else {})},
+                "tolerations": tolerations,
                 "containers": [container], "volumes": volumes,
             },
         }
@@ -469,17 +565,21 @@ class KubeBackend:
         if node_name:
             node = self.kube.node(node_name)
             if node:
+                labels = (node.get("metadata") or {}).get("labels") or {}
                 out["node"] = node_facts(node)
                 if handle.get("gpu"):
-                    out["gpu"] = gpu_facts((node.get("metadata") or {}).get("labels") or {})
+                    out["gpu"] = gpu_facts(labels)
+                if self.pin_node is None and labels.get("kubernetes.io/hostname"):
+                    self.pin_node = labels["kubernetes.io/hostname"]  # every later side runs on this node
         return out
 
-    def _delete_and_wait(self, name: str, wait_s: float = 180.0) -> None:
+    def _delete_and_wait(self, name: str) -> None:
         self.kube.delete_pod(self.namespace, name)
-        deadline = self.clock() + wait_s
+        start = self.clock()
         while self.kube.pod(self.namespace, name) is not None:
-            if self.clock() > deadline:
-                raise runner.RoundError(f"pod {name} was not gone {wait_s:g} s after it was deleted")
+            waited = self.clock() - start
+            if waited > self.delete_wait_s:  # shortened when a stop begins during the wait
+                raise runner.RoundError(f"pod {name} was not gone {waited:.0f} s after it was deleted")
             self.sleep(2.0)
 
     def stop(self, handle: dict) -> None:

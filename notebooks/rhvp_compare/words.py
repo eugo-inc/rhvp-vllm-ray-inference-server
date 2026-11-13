@@ -24,11 +24,13 @@ SECTION_TITLE = {
 SECTION_TEXT = {
     1: ("One row per metric. B/A is the median, over the pairs, of side B's figure divided by side A's in the same "
         "pair; the interval next to it is a distribution-free confidence interval for that median. The verdict "
-        "follows a rule fixed before the first round: inside the tie band it is TIE; outside it, B is FASTER or "
-        "SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) only when the p-value is at most alpha; "
-        "otherwise INCONCLUSIVE. Only the primary metrics, declared before the first round, count as findings: "
-        "their p-values are corrected for the number of primary metrics. The secondary metrics below them use "
-        "the same rule on an uncorrected p-value, so their verdicts only describe the run."),
+        "follows a rule fixed before the first round: TIE when the median and its whole interval lie inside the "
+        "tie band; outside the band, B is FASTER or SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) "
+        "only when the p-value is at most alpha and the test leans the same way as the median; otherwise "
+        "INCONCLUSIVE. A metric is also INCONCLUSIVE when one side failed in some pair on its own account, or when "
+        "the rounds ran on more than one node. Only the primary metrics, declared before the first round, count as "
+        "findings: their p-values are corrected for the number of primary metrics. The secondary metrics below them "
+        "use the same rule on an uncorrected p-value, so their verdicts only describe the run."),
     2: ("Time to ready runs from just before the runner asks for the side's pod until the server lists the model; "
         "time to first answer, until the first generated text of a streamed request comes back. Both are timed by "
         "the runner, the same way for every image, and the warm-up rounds (which pull the image and download the "
@@ -60,6 +62,9 @@ REPLAY_UNUSABLE = "REPLAY is on, but its results file could not be read ({error}
 RUN_LINE = "Run {run} · {status} · {done} of {planned} rounds measured · {platform}"
 RUN_FAILED_ROUNDS = "Rounds that failed: {rounds}."
 RUN_CODE = "Why the run did not finish: {code}."
+RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
+RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
+RUN_LOST = "Pairs lost to one side failing, per metric: {lost}. Those metrics are INCONCLUSIVE."
 RUN_OTHERS = "Other runs in the results volume: {runs}."
 SIDE_LINE = "A = {a} · B = {b}"
 

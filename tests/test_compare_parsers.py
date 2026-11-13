@@ -20,7 +20,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
-from rhvp_compare import dockerapi, energy, guidellm, kube, logs, plan as plans  # noqa: E402
+from rhvp_compare import dockerapi, energy, guidellm, kube, logs, plan as plans, runner  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
 REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1.json").read_text())
@@ -300,17 +300,25 @@ def test_image_digest_from_the_pod():
 
 
 def _side_backend(secret: str | None = None, server_replicas: int | None = None,
-                  configmaps: dict | None = None) -> tuple[kube.KubeBackend, list]:
+                  configmaps: dict | None = None, scale_fails: int = 0, runner_pods: list | None = None,
+                  clock=None) -> tuple[kube.KubeBackend, list]:
+    """A KubeBackend on a fake API. `scale_fails`: how many scale-ups answer HTTP 503 before one goes through."""
     calls = []
+    state = {"replicas": server_replicas, "fails": scale_fails}
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         calls.append((request.method, request.url.path, body))
         if request.url.path.endswith("/deployments/ray-serve-llm/scale"):
-            if server_replicas is None:
+            if state["replicas"] is None:
                 return httpx.Response(404, json={"message": "not found"})
-            assert request.method == "GET" or request.headers["content-type"] == "application/merge-patch+json"
-            return httpx.Response(200, json={"spec": {"replicas": server_replicas}})
+            if request.method == "PATCH":
+                assert request.headers["content-type"] == "application/merge-patch+json"
+                if body["spec"]["replicas"] > 0 and state["fails"] > 0:
+                    state["fails"] -= 1
+                    return httpx.Response(503, json={"message": "unavailable"})
+                state["replicas"] = body["spec"]["replicas"]
+            return httpx.Response(200, json={"spec": {"replicas": state["replicas"]}})
         if configmaps is not None and "/configmaps" in request.url.path:
             name = request.url.path.rsplit("/", 1)[1]
             if request.method == "PATCH":
@@ -325,16 +333,20 @@ def _side_backend(secret: str | None = None, server_replicas: int | None = None,
             if secret is None:
                 return httpx.Response(404, json={"message": "not found"})
             return httpx.Response(200, json={"data": {"hftoken": base64.b64encode(secret.encode()).decode()}})
+        if request.url.path == "/api/v1/namespaces/nb/pods" and request.method == "GET":
+            assert request.url.params["labelSelector"] == "app.kubernetes.io/name=image-compare"
+            return httpx.Response(200, json={"items": runner_pods or []})
         if request.url.path.endswith("/pods") and request.method == "GET":
             return httpx.Response(200, json={"items": []})
         return httpx.Response(404, json={})
 
     client = kube.Kube(base_url="https://api.example:6443", token="t", verify=False,
                        transport=httpx.MockTransport(handler))
-    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb",
+    env = {"RHVP_COMPARE_ARCH": "arm64", "RHVP_COMPARE_STATUS_NAMESPACE": "nb", "RHVP_COMPARE_POD_NAME": "me",
            "RHVP_COMPARE_SIDE_RESOURCES": json.dumps({"requests": {"cpu": "2", "memory": "12Gi"},
                                                       "limits": {"memory": "24Gi"}})}
-    return kube.KubeBackend(kube=client, env=env, sleep=lambda s: None), calls
+    extra = {"clock": clock} if clock else {}
+    return kube.KubeBackend(kube=client, env=env, sleep=lambda s: None, **extra), calls
 
 
 def test_the_live_server_is_scaled_down_for_the_run_and_back_after():
@@ -343,24 +355,120 @@ def test_the_live_server_is_scaled_down_for_the_run_and_back_after():
     scale = [(method, body) for method, path, body in calls if path.endswith("/scale")]
     assert scale == [("GET", None), ("PATCH", {"spec": {"replicas": 0}})]
     calls.clear()
-    backend.cleanup()
-    assert [(m, b) for m, p, b in calls if p.endswith("/scale")] == [("PATCH", {"spec": {"replicas": 1}})]
+    assert backend.restore_server() is True
+    # scaled back, then read back to check
+    assert [(m, b) for m, p, b in calls if p.endswith("/scale")] == [("PATCH", {"spec": {"replicas": 1}}),
+                                                                   ("GET", None)]
     calls.clear()
-    backend.cleanup()  # once only
+    assert backend.restore_server() is True  # once only
     assert not [c for c in calls if c[1].endswith("/scale")]
     absent, calls = _side_backend(server_replicas=None)  # no server Deployment: nothing to scale
     absent.prepare(_plan())
-    absent.cleanup()
+    assert absent.restore_server() is None
     assert [m for m, p, b in calls if p.endswith("/scale")] == ["GET"]
 
 
-def test_cleanup_brings_the_server_back_even_when_deleting_pods_fails():
+def test_a_scale_back_that_fails_is_tried_again():
+    backend, calls = _side_backend(server_replicas=1, scale_fails=3)
+    backend.prepare(_plan())
+    assert backend.restore_server() is True
+    assert [b for m, p, b in calls if p.endswith("/scale") and m == "PATCH"][-4:] == [{"spec": {"replicas": 1}}] * 4
+
+
+def test_a_scale_back_that_keeps_failing_says_how_to_bring_the_server_back():
+    now = [0.0]
+
+    def clock():
+        now[0] += 5.0  # each look at the clock is 5 s later: the minute of tries runs out
+        return now[0]
+    backend, calls = _side_backend(server_replicas=1, scale_fails=99, clock=clock)
+    backend.prepare(_plan())
+    with pytest.raises(runner.RoundError) as caught:
+        backend.restore_server()
+    text = str(caught.value)
+    assert "HTTP 503" in text and "oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference" in text
+    assert "oc delete pod -n vllm-inference -l app.kubernetes.io/name=image-compare-side" in text
+    tries = len([1 for m, p, b in calls if p.endswith("/scale") and m == "PATCH" and b["spec"]["replicas"] == 1])
+    assert 2 <= tries <= 5
+    with pytest.raises(runner.RoundError):  # asked again at the end: one more try
+        backend.restore_server()
+
+
+def test_cleanup_deletes_the_run_pods_only():
     backend, calls = _side_backend(server_replicas=1)
     backend.prepare(_plan())
-    backend.kube.pods = lambda ns, selector=None: (_ for _ in ()).throw(RuntimeError("API down"))
-    with pytest.raises(RuntimeError, match="API down"):
-        backend.cleanup()
-    assert calls[-1][1].endswith("/scale") and calls[-1][2] == {"spec": {"replicas": 1}}
+    calls.clear()
+    backend.cleanup()
+    assert not [c for c in calls if c[1].endswith("/scale")]
+    assert [(m, p) for m, p, b in calls] == [("GET", "/api/v1/namespaces/vllm-inference/pods")]
+
+
+def _runner_pod(name: str, created: str, phase: str = "Running") -> dict:
+    return {"metadata": {"name": name, "creationTimestamp": created, "labels": {"job-name": f"job-{name}"}},
+            "status": {"phase": phase}}
+
+
+@pytest.mark.parametrize("others, refused", [
+    ([], False),
+    ([_runner_pod("old", "2026-01-01T00:00:00Z")], True),
+    ([_runner_pod("old", "2026-01-01T00:00:00Z", "Pending")], True),
+    ([_runner_pod("old", "2026-01-01T00:00:00Z", "Succeeded")], False),  # ended: no longer a run
+    ([_runner_pod("old", "2026-01-01T00:00:00Z", "Failed")], False),
+    ([_runner_pod("young", "2026-01-03T00:00:00Z")], False),  # the older one (this one) goes on; the other refuses
+    ([_runner_pod("a-same-age", "2026-01-02T00:00:00Z")], True),  # same age: the name that sorts first wins
+])
+def test_one_run_at_a_time(others, refused):
+    pods = [_runner_pod("me", "2026-01-02T00:00:00Z")] + others
+    backend, calls = _side_backend(runner_pods=pods)
+    if refused:
+        with pytest.raises(runner.RunActive, match="another comparison is running: runner pod"):
+            backend.check_alone()
+    else:
+        backend.check_alone()
+    assert calls == [("GET", "/api/v1/namespaces/nb/pods", None)]  # only looked
+
+
+def test_later_sides_run_on_the_first_sides_node():
+    backend, _ = _side_backend()
+    plan = _plan()
+    backend.prepare(plan)
+    side = plan["sides"][0]
+    first = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    assert "kubernetes.io/hostname" not in first["spec"]["nodeSelector"]
+    backend.kube.node = lambda name: {"metadata": {"name": name, "labels": {"kubernetes.io/hostname": "gpu-1"}}}
+    backend._pod = lambda handle, fresh=False: {"spec": {"nodeName": "gpu-1.example"}}
+    assert backend.facts({"name": "p", "gpu": True})["node_name"] == "gpu-1.example"
+    later = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    assert later["spec"]["nodeSelector"] == {"kubernetes.io/arch": "arm64", "kubernetes.io/hostname": "gpu-1"}
+
+
+def test_a_stop_shortens_every_wait():
+    backend, _ = _side_backend()
+    assert (backend.kube.timeout_s, backend.kube.log_timeout_s, backend.delete_wait_s) == (30.0, 60.0, 180.0)
+    backend.on_stop()
+    assert (backend.kube.timeout_s, backend.kube.log_timeout_s) == (kube.HURRY_TIMEOUT_S, kube.HURRY_TIMEOUT_S)
+    assert backend.delete_wait_s == kube.HURRY_DELETE_WAIT_S
+    assert kube.stop_budget_seconds() < 300  # the chart's grace period (tests/test_charts.py checks the chart)
+
+
+def test_the_token_is_read_again_for_every_request(tmp_path):
+    token = tmp_path / "token"
+    token.write_text("first\n")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, json={"items": []})
+    client = kube.Kube(base_url="https://api.example:6443", verify=False, token_path=token,
+                       transport=httpx.MockTransport(handler))
+    client.pods("ns")
+    token.write_text("second\n")  # the kubelet rotated it
+    client.pods("ns")
+    assert seen == ["Bearer first", "Bearer second"]
+    thanos = energy.Thanos("https://thanos.example:9091", verify=False, token_path=token,
+                           transport=httpx.MockTransport(handler))
+    thanos._client.get("/x")
+    assert seen[-1] == "Bearer second"
 
 
 def test_the_status_configmap_is_created_then_merged():
@@ -517,3 +625,100 @@ def test_repository_of_an_image_reference():
     assert dockerapi.repository("docker.io/vllm/vllm-openai:v0.33.0@sha256:ab") == "docker.io/vllm/vllm-openai"
     assert dockerapi.repository("localhost:5000/x") == "localhost:5000/x"
     assert dockerapi.repository("x:1") == "x"
+
+
+class FakeDocker:
+    """The Engine API calls DockerBackend makes for the run lock and the server container."""
+
+    def __init__(self, running=None, server_state=None, start_fails: int = 0):
+        self.running_list = running or []
+        self.server_state = server_state
+        self.start_fails = start_fails
+        self.calls = []
+
+    def running(self, label):
+        self.calls.append(("running", label))
+        return self.running_list
+
+    def inspect(self, cid):
+        self.calls.append(("inspect", cid))
+        return None if self.server_state is None else {"State": dict(self.server_state)}
+
+    def stop(self, cid, grace_s=30):
+        self.calls.append(("stop", cid))
+        self.server_state = {"Running": False, "Status": "exited"}
+
+    def start(self, cid):
+        self.calls.append(("start", cid))
+        if self.start_fails:
+            self.start_fails -= 1
+            raise runner.RoundError("docker could not start a container: HTTP 500")
+        self.server_state = {"Running": True, "Status": "running"}
+
+    def network(self, name):
+        pass
+
+    def volume(self, name):
+        pass
+
+    def pull(self, ref):
+        pass
+
+    def run(self, name, body, timeout_s=300.0, log_to=None):
+        return 0, ""
+
+
+def _docker_backend(docker, **env) -> dockerapi.DockerBackend:
+    base = {"RHVP_COMPARE_NETWORK": "n", "RHVP_COMPARE_HOST_RESULTS": "/tmp/r", "RHVP_COMPARE_RUNNER_NAME": "me"}
+    return dockerapi.DockerBackend(docker=docker, env={**base, **env})
+
+
+@pytest.mark.parametrize("text, expected", [("", None), ("32g", 32 * 2**30), ("512m", 512 * 2**20),
+                                            ("1073741824", 2**30)])
+def test_side_memory_limit(text, expected):
+    assert dockerapi.memory_bytes(text) == expected
+    with pytest.raises(runner.RoundError):
+        dockerapi.memory_bytes("lots")
+    backend = _docker_backend(FakeDocker(), RHVP_COMPARE_MEMORY=text)
+    assert backend.memory == expected
+
+
+def _container(name: str, created: int) -> dict:
+    return {"Id": f"{name}-id", "Names": [f"/{name}"], "Created": created}
+
+
+@pytest.mark.parametrize("others, refused", [
+    ([], False),
+    ([_container("old", 100)], True),
+    ([_container("young", 300)], False),
+])
+def test_one_local_run_at_a_time(others, refused):
+    docker = FakeDocker(running=[_container("me", 200)] + others)
+    backend = _docker_backend(docker)
+    if refused:
+        with pytest.raises(runner.RunActive, match="runner container old"):
+            backend.check_alone()
+    else:
+        backend.check_alone()
+    assert docker.calls == [("running", dockerapi.RUNNER_LABEL)]
+
+
+def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypatch):
+    monkeypatch.setattr(dockerapi.time, "sleep", lambda s: None)
+    docker = FakeDocker(server_state={"Running": True}, start_fails=1)
+    backend = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    assert ("stop", "live") in docker.calls
+    assert backend.restore_server() is True  # the first start failed, the second went through
+    assert [c for c in docker.calls if c[0] == "start"] == [("start", "live")] * 2
+    assert backend.restore_server() is True and len([c for c in docker.calls if c[0] == "start"]) == 2
+    stuck = FakeDocker(server_state={"Running": True}, start_fails=99)
+    backend = _docker_backend(stuck, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    with pytest.raises(runner.RoundError, match="docker start live"):
+        backend.restore_server()
+    idle = _docker_backend(FakeDocker(server_state={"Running": False}), RHVP_COMPARE_SERVER_CONTAINER="live")
+    idle.prepare(_plan())
+    assert idle.restore_server() is None  # it was not running: left alone
+    with pytest.raises(runner.RoundError, match="names no container"):
+        _docker_backend(FakeDocker(), RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())

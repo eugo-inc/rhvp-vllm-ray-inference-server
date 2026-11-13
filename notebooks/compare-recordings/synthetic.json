@@ -8,6 +8,7 @@
   "started_at": "2026-01-01T00:00:00.000Z",
   "finished_at": "2026-01-01T02:15:15.353Z",
   "platform": "openshift",
+  "server_restored": true,
   "synthetic": true,
   "notes": [
    "Synthetic: written by notebooks/rhvp_compare/example.py, never measured."
@@ -252,7 +253,9 @@
    "min_pairs": 3,
    "ci_level": 0.95,
    "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
-   "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band",
+   "tie_rule": "TIE when the median ratio and both ends of its confidence interval lie within 1/(1+tie_band) and 1+tie_band; a median inside with an interval outside, or with no interval, is INCONCLUSIVE",
+   "direction_rule": "FASTER or SLOWER only when the test leans the same way as the median ratio",
+   "failure_rule": "a metric that lost a pair because one side failed on its own account (SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, or failed requests at its level) is INCONCLUSIVE, and so is every metric when the scored rounds ran on more than one node",
    "primary": [
     "startup.first_answer_s",
     "c32.ttft_ms_median",
@@ -444,6 +447,12 @@
    "kernel": "0.0",
    "container_runtime": "example"
   },
+  "nodes": [
+   {
+    "name": "gpu-node-1",
+    "gpu": "Example-GPU"
+   }
+  ],
   "cluster": {
    "openshift_version": "4.20.0"
   }
@@ -5587,7 +5596,7 @@
  "analysis": {
   "tool": {
    "name": "rhvp_compare.analyze",
-   "version": "1"
+   "version": "2"
   },
   "method": {
    "baseline": "A",
@@ -5602,7 +5611,9 @@
    "min_pairs": 3,
    "ci_level": 0.95,
    "zero_rule": "ratios exactly 1 carry no sign and are left out of both tests",
-   "tie_rule": "TIE when 1/(1+tie_band) <= median ratio <= 1+tie_band",
+   "tie_rule": "TIE when the median ratio and both ends of its confidence interval lie within 1/(1+tie_band) and 1+tie_band; a median inside with an interval outside, or with no interval, is INCONCLUSIVE",
+   "direction_rule": "FASTER or SLOWER only when the test leans the same way as the median ratio",
+   "failure_rule": "a metric that lost a pair because one side failed on its own account (SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, or failed requests at its level) is INCONCLUSIVE, and so is every metric when the scored rounds ran on more than one node",
    "primary": [
     "startup.first_answer_s",
     "c32.ttft_ms_median",
@@ -5624,6 +5635,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 93.01203375804306,
     "b_median": 91.22010803137087,
     "ratios": [
@@ -5638,7 +5655,7 @@
      0.9570538424142017,
      0.9469621171278598
     ],
-    "median_ratio": 0.9806462837362049,
+    "median_ratio": 0.9806439966265255,
     "ci": {
      "low": 0.9528674842193545,
      "high": 1.0264334303361176,
@@ -5651,7 +5668,7 @@
     "reachable": true,
     "outcome": "tie",
     "verdict": "TIE",
-    "reason": "median_ratio_inside_tie_band"
+    "reason": "interval_inside_tie_band"
    },
    {
     "id": "startup.first_answer_s",
@@ -5661,6 +5678,12 @@
     "kind": "speed",
     "role": "primary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 94.26146834092427,
     "b_median": 76.72348542966368,
     "ratios": [
@@ -5675,7 +5698,7 @@
      0.805511160377289,
      0.7898740348945661
     ],
-    "median_ratio": 0.8124074981723295,
+    "median_ratio": 0.8124074558014936,
     "ci": {
      "low": 0.7898740348945661,
      "high": 0.830452597240026,
@@ -5698,6 +5721,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 21.902952577307538,
     "b_median": 22.390482373863577,
     "ratios": [
@@ -5712,7 +5741,7 @@
      1.0311108819728085,
      1.0226130445632895
     ],
-    "median_ratio": 1.0183869003989692,
+    "median_ratio": 1.0183781314471174,
     "ci": {
      "low": 0.9946362381906905,
      "high": 1.0311108819728085,
@@ -5725,7 +5754,7 @@
     "reachable": true,
     "outcome": "tie",
     "verdict": "TIE",
-    "reason": "median_ratio_inside_tie_band"
+    "reason": "interval_inside_tie_band"
    },
    {
     "id": "c1.itl_ms_median",
@@ -5735,6 +5764,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 6.1610345012932175,
     "b_median": 5.454768928736248,
     "ratios": [
@@ -5749,7 +5784,7 @@
      0.8990691422458995,
      0.889078940797137
     ],
-    "median_ratio": 0.8923910268140007,
+    "median_ratio": 0.892390672037886,
     "ci": {
      "low": 0.8801484823299035,
      "high": 0.8990691422458995,
@@ -5772,6 +5807,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 159.95297382252983,
     "b_median": 177.20360592576736,
     "ratios": [
@@ -5786,7 +5827,7 @@
      1.082214584379975,
      1.0869350057859997
     ],
-    "median_ratio": 1.1101506917497195,
+    "median_ratio": 1.1101485461794676,
     "ci": {
      "low": 1.0843897535684353,
      "high": 1.1322751649018428,
@@ -5809,6 +5850,12 @@
     "kind": "efficiency",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 1.7001456170223082,
     "b_median": 1.8312800036397912,
     "ratios": [
@@ -5823,7 +5870,7 @@
      1.0931389516839158,
      1.0519402605497779
     ],
-    "median_ratio": 1.0820929945331366,
+    "median_ratio": 1.0820502274575994,
     "ci": {
      "low": 1.0519402605497779,
      "high": 1.1221254285392988,
@@ -5846,6 +5893,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 30.952982739759868,
     "b_median": 31.258415138438572,
     "ratios": [
@@ -5860,7 +5913,7 @@
      0.9844332048465404,
      1.0046219367161002
     ],
-    "median_ratio": 1.0098850297721853,
+    "median_ratio": 1.0098848234194528,
     "ci": {
      "low": 0.995550900453039,
      "high": 1.0275378805754791,
@@ -5873,7 +5926,7 @@
     "reachable": true,
     "outcome": "tie",
     "verdict": "TIE",
-    "reason": "median_ratio_inside_tie_band"
+    "reason": "interval_inside_tie_band"
    },
    {
     "id": "c8.itl_ms_median",
@@ -5883,6 +5936,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 7.414147337747851,
     "b_median": 6.647293577592052,
     "ratios": [
@@ -5897,7 +5956,7 @@
      0.8881896279274814,
      0.9024361187020083
     ],
-    "median_ratio": 0.8974302829161709,
+    "median_ratio": 0.8974284220223648,
     "ci": {
      "low": 0.8881896279274814,
      "high": 0.9044078361925761,
@@ -5920,6 +5979,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 1051.1171788771821,
     "b_median": 1164.2769538576072,
     "ratios": [
@@ -5934,7 +5999,7 @@
      1.1070302635594087,
      1.12574665504962
     ],
-    "median_ratio": 1.1032022201393972,
+    "median_ratio": 1.1032022165745552,
     "ci": {
      "low": 1.0965194623807497,
      "high": 1.12574665504962,
@@ -5957,6 +6022,12 @@
     "kind": "efficiency",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 6.543467850859152,
     "b_median": 7.167350950064856,
     "ratios": [
@@ -5971,7 +6042,7 @@
      1.0891857880527538,
      1.0893019601246237
     ],
-    "median_ratio": 1.0889063509467678,
+    "median_ratio": 1.0889063150919407,
     "ci": {
      "low": 1.0726978397123923,
      "high": 1.1033314981092648,
@@ -5994,6 +6065,12 @@
     "kind": "speed",
     "role": "primary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 57.368762107208624,
     "b_median": 58.274464995767104,
     "ratios": [
@@ -6008,7 +6085,7 @@
      1.0182262547098218,
      1.0323852720470992
     ],
-    "median_ratio": 1.0123785090176336,
+    "median_ratio": 1.0123772319662705,
     "ci": {
      "low": 0.9905216301343507,
      "high": 1.0323852720470992,
@@ -6021,7 +6098,7 @@
     "reachable": true,
     "outcome": "tie",
     "verdict": "TIE",
-    "reason": "median_ratio_inside_tie_band"
+    "reason": "interval_inside_tie_band"
    },
    {
     "id": "c32.itl_ms_median",
@@ -6031,6 +6108,12 @@
     "kind": "speed",
     "role": "secondary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 11.845070673777553,
     "b_median": 10.650310194642284,
     "ratios": [
@@ -6045,7 +6128,7 @@
      0.8883055818771198,
      0.8805283545654395
     ],
-    "median_ratio": 0.9005060892435537,
+    "median_ratio": 0.9004965005409786,
     "ci": {
      "low": 0.8883055818771198,
      "high": 0.9142892703607124,
@@ -6068,6 +6151,12 @@
     "kind": "speed",
     "role": "primary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 2576.7271438544103,
     "b_median": 2887.9977837707384,
     "ratios": [
@@ -6082,7 +6171,7 @@
      1.0934337683950117,
      1.1026751978683547
     ],
-    "median_ratio": 1.1073704945457354,
+    "median_ratio": 1.1073611110090955,
     "ci": {
      "low": 1.0955322445085944,
      "high": 1.1263673275148491,
@@ -6105,6 +6194,12 @@
     "kind": "efficiency",
     "role": "primary",
     "n_pairs": 10,
+    "pairs_lost": {
+     "A": 0,
+     "B": 0,
+     "both": 0,
+     "other": 0
+    },
     "a_median": 11.138977878269625,
     "b_median": 12.228479731927608,
     "ratios": [
@@ -6119,7 +6214,7 @@
      1.1065269497558103,
      1.080989379910102
     ],
-    "median_ratio": 1.0998403586114205,
+    "median_ratio": 1.0998392335534124,
     "ci": {
      "low": 1.0740322037792351,
      "high": 1.1106958802728488,

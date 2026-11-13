@@ -31,6 +31,21 @@ spec:
           type: RuntimeDefault
       nodeSelector:
         kubernetes.io/arch: {{ .Values.arch | quote }}
+      {{- if include "notebook.compareEnabled" . }}
+      # The comparison's runner shares the ReadWriteOnce results volume with this
+      # pod and was placed on this pod's node. A notebook pod that restarts during a
+      # run (a new image, a drain) prefers the runner's node, so the volume does not
+      # have to be on two nodes at once.
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: image-compare
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
       containers:
         # The image's entrypoint (notebooks/entrypoint.sh) copies the baked-in
         # notebooks into /work and runs JupyterLab on 127.0.0.1:8888 with root_dir

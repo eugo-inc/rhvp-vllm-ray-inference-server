@@ -71,10 +71,14 @@ class FakeBackend:
     platform = "docker"
 
     def __init__(self, fail_round: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
-                 load_error: bool = False, term_in_round: int | None = None):
+                 load_error: bool = False, term_in_round: int | None = None, errored: dict | None = None,
+                 nodes: tuple[str, ...] = ("node-1",)):
         self.fail_round, self.hang_once, self.fail_code = fail_round, hang_once, fail_code
         self.load_error, self.term_in_round = load_error, term_in_round
+        self.errored = errored or {}  # round index -> the concurrency level where 40 requests fail
+        self.nodes = nodes  # the node of round i is nodes[i % len(nodes)]
         self.started, self.stopped, self.prepared, self.cleaned = [], [], False, False
+        self.events: list = []
 
     def prepare(self, plan):
         self.prepared = True
@@ -113,6 +117,8 @@ class FakeBackend:
         wobble = 1.0 + 0.001 * round_["index"]
         for bench in data["benchmarks"]:
             metrics = bench["metrics"]
+            if bench["config"]["strategy"]["streams"] == self.errored.get(round_["index"]):
+                metrics["request_totals"]["errored"] = 40
             metrics["inter_token_latency_ms"]["successful"]["median"] *= slower * wobble
             metrics["output_tokens_per_second"]["total"]["mean"] /= slower * wobble
             metrics["time_to_first_token_ms"]["successful"]["median"] *= wobble
@@ -127,14 +133,43 @@ class FakeBackend:
         return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
 
     def facts(self, handle):
-        return {"node_name": "node-1", "image_digest": f"registry.example/server@sha256:{handle['side'] * 64}",
+        node = self.nodes[handle["round"]["index"] % len(self.nodes)]
+        return {"node_name": node, "image_digest": f"registry.example/server@sha256:{handle['side'] * 64}",
                 "gpu": {"product": "Test GPU", "driver": "1", "memory_mib": 1, "count": 1, "source": "fake"}}
 
     def stop(self, handle):
         self.stopped.append(handle["round"]["index"])
+        self.events.append(("stop", handle["round"]["index"]))
 
     def cleanup(self):
         self.cleaned = True
+        self.events.append(("cleanup",))
+
+
+class ServerBackend(FakeBackend):
+    """Takes a live server away in prepare and brings it back in restore_server, like kube.py; `restore_fails`
+    makes every restore raise."""
+
+    restore_before_teardown = True
+
+    def __init__(self, restore_fails: bool = False, **kw):
+        super().__init__(**kw)
+        self.restore_fails, self.server_up = restore_fails, True
+
+    def prepare(self, plan):
+        super().prepare(plan)
+        self.server_up = False
+
+    def restore_server(self):
+        self.events.append(("restore",))
+        if self.restore_fails:
+            raise runner.RoundError("could not scale ray-serve-llm back to 1 (HTTP 503). Bring it back by hand: oc "
+                                    "scale deployment/ray-serve-llm --replicas=1 -n vllm-inference")
+        self.server_up = True
+        return True
+
+    def on_stop(self):
+        self.events.append(("on_stop",))
 
 
 class PublishingBackend(FakeBackend):
@@ -442,3 +477,127 @@ def test_the_pinned_guidellm_image_is_the_same_everywhere():
     helpers = (ROOT / "charts/all/notebook/templates/_helpers.tpl").read_text()
     script = (ROOT / "scripts/compare-local.sh").read_text()
     assert plans.GUIDELLM_IMAGE in helpers and plans.GUIDELLM_IMAGE in script
+
+
+def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
+    """main_run with the fake server; returns (exit code, the results root, the termination message file)."""
+    path = tmp_path / "compare.json"
+    path.write_text(json.dumps(config(**extra)))
+    message = tmp_path / "termination-log"
+    original = runner.Runner.__init__
+
+    def init(self, *a, **kw):
+        original(self, *a, client=lambda url: httpx.Client(base_url=url, transport=server()),
+                 sleep=lambda s: None, **kw)
+    monkeypatch.setattr(runner.Runner, "__init__", init)
+    root = tmp_path / "results"
+    code = runner.main_run(str(path), str(root), backend, env={"RHVP_COMPARE_TERMINATION_LOG": str(message)})
+    return code, root, message
+
+
+def test_requests_that_fail_on_one_side_make_its_metrics_inconclusive(tmp_path):
+    """Side B loses 40 requests at 4 streams in two of its scored rounds. Those two pairs drop out of the 4-stream
+    metrics; the 8 pairs left would make B look better than it was, so the metrics are INCONCLUSIVE, the run is
+    partial (REQUESTS_FAILED) and the levels are listed everywhere a reader looks."""
+    backend = PublishingBackend(errored={4: 4, 8: 4})  # rounds 4 and 8 are side B's scored rounds of pairs 1 and 3
+    results, _, the_runner = run(tmp_path, backend, rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+    jsonschema.validate(results, SCHEMA)
+    assert [(r["index"], r["side"]) for r in results["rounds"] if r["index"] in (4, 8)] == [(4, "B"), (8, "B")]
+    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
+    for metric in ("c4.ttft_ms_median", "c4.itl_ms_median", "c4.output_tokens_per_s", "c4.tokens_per_joule"):
+        assert rows[metric]["n_pairs"] == 8
+        assert rows[metric]["pairs_lost"] == {"A": 0, "B": 2, "both": 0, "other": 0}
+        assert (rows[metric]["verdict"], rows[metric]["reason"]) == ("INCONCLUSIVE", "pairs_lost_to_one_side_failing")
+    assert rows["c1.itl_ms_median"]["verdict"] == "SLOWER" and rows["c1.itl_ms_median"]["pairs_lost"]["B"] == 0
+    assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "REQUESTS_FAILED"
+    status = backend.published[-1][1]
+    assert [(u["index"], u["side"], u["concurrency"], u["errored"]) for u in status["levels_unusable"]] == [
+        (4, "B", 4, 40), (8, "B", 4, 40)]
+    text = (the_runner.dir / "results.md").read_text()
+    assert "round 4 (side B, scored), 4 streams: 40 requests failed" in text
+    assert "side A 0, side B 2" in text
+
+
+def test_a_round_the_side_itself_failed_counts_against_it(tmp_path):
+    results, _, _ = run(tmp_path, FakeBackend(fail_round=5), rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+    row = {r["id"]: r for r in results["analysis"]["metrics"]}["c1.itl_ms_median"]
+    assert row["pairs_lost"] == {"A": 0, "B": 1, "both": 0, "other": 0} and row["verdict"] == "INCONCLUSIVE"
+    not_hers, _, _ = run(tmp_path / "gpu", FakeBackend(fail_round=5, fail_code=runner.GPU_NOT_FREE),
+                         rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+    row = {r["id"]: r for r in not_hers["analysis"]["metrics"]}["c1.itl_ms_median"]
+    assert row["pairs_lost"] == {"A": 0, "B": 0, "both": 0, "other": 1} and row["verdict"] == "SLOWER"
+
+
+def test_rounds_on_two_nodes_make_every_verdict_inconclusive(tmp_path):
+    results, _, _ = run(tmp_path, FakeBackend(nodes=("node-1", "node-2")))
+    jsonschema.validate(results, SCHEMA)
+    assert {row["reason"] for row in results["analysis"]["metrics"]} <= {"rounds_ran_on_more_than_one_node",
+                                                                         "median_inside_tie_band_but_interval_is_not",
+                                                                         "not_significant_outside_tie_band"}
+    assert {row["verdict"] for row in results["analysis"]["metrics"]} == {"INCONCLUSIVE"}
+    assert [n["name"] for n in results["provenance"]["nodes"]] == ["node-2", "node-1"]
+
+
+def test_the_live_server_comes_back_and_the_run_says_so(tmp_path, monkeypatch):
+    backend = ServerBackend()
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    assert code == 0 and backend.server_up
+    assert backend.events[-2:] == [("restore",), ("cleanup",)]  # back first, then the cleanup
+    [path] = root.glob("*/results.json")
+    assert json.loads(path.read_text())["run"]["server_restored"] is True
+    assert json.loads(message.read_text())["server_restored"] is True
+
+
+def test_a_server_that_does_not_come_back_is_exit_4(tmp_path, monkeypatch, capsys):
+    backend = ServerBackend(restore_fails=True)
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    assert code == runner.EXIT_SERVER_NOT_RESTORED == 4
+    [path] = root.glob("*/results.json")
+    results = json.loads(path.read_text())
+    jsonschema.validate(results, SCHEMA)
+    assert results["run"]["status"] == "complete" and results["run"]["server_restored"] is False
+    assert any("oc scale deployment/ray-serve-llm --replicas=1" in e for e in results["run"]["errors"])
+    assert json.loads(message.read_text())["server_restored"] is False
+    assert "error: the live server was not brought back" in capsys.readouterr().out
+    assert "The live server was not brought back" in (path.parent / "results.md").read_text()
+
+
+def test_a_stop_asks_the_server_back_before_the_teardown(tmp_path):
+    backend = ServerBackend(term_in_round=3)
+    results, _, _ = run(tmp_path, backend)
+    assert results["run"]["error_code"] == "STOPPED" and results["run"]["server_restored"] is True
+    events = backend.events
+    assert events.index(("restore",)) < events.index(("stop", 3)) < events.index(("cleanup",))
+    assert events.count(("restore",)) == 1 and ("on_stop",) in events
+
+
+def test_a_second_run_refuses_to_start_and_changes_nothing(tmp_path, monkeypatch):
+    backend = ServerBackend()
+
+    def busy():
+        raise runner.RunActive("another comparison is running: runner pod compare-x-1 (Running)")
+    backend.check_alone = busy
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    assert code == runner.EXIT_RUN_ACTIVE == 5
+    assert not backend.prepared and backend.events == [] and backend.server_up  # nothing touched
+    assert not list(root.glob("*/results.json")) if root.exists() else True
+    short = json.loads(message.read_text())
+    assert short["error_code"] == "RUN_ACTIVE" and short["status"] == "failed"
+
+
+def test_a_run_that_fails_outside_a_round_is_exit_3(tmp_path, monkeypatch):
+    backend = ServerBackend()
+    backend.describe = lambda: (_ for _ in ()).throw(KeyError("boom"))  # recorded as a note, not a failure
+    backend.gpu_free = lambda plan, side: None
+    original = backend.prepare
+
+    def prepare(plan):
+        original(plan)
+        raise runner.RoundError("could not list pods in vllm-inference: HTTP 403")
+    backend.prepare = prepare
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    assert code == runner.EXIT_FAILED == 3
+    [path] = root.glob("*/results.json")
+    results = json.loads(path.read_text())
+    assert results["run"]["status"] == "failed" and results["run"]["error_code"] == "RUNNER_FAILED"
+    assert results["run"]["server_restored"] is True and backend.server_up  # brought back all the same

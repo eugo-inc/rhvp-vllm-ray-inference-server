@@ -27,6 +27,7 @@
         "started_at",
         "finished_at",
         "platform",
+        "server_restored",
         "notes",
         "errors"
       ],
@@ -45,17 +46,18 @@
             "partial",
             "failed"
           ],
-          "description": "complete: every planned round finished; partial: the run ended with failed or missing rounds; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."
+          "description": "complete: every planned round finished, with every load level usable; partial: the run ended with failed or missing rounds, or with load levels where requests failed; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."
         },
         "error_code": {
           "enum": [
             null,
             "ROUNDS_FAILED",
+            "REQUESTS_FAILED",
             "STOPPED",
             "RUN_TIMEOUT",
             "RUNNER_FAILED"
           ],
-          "description": "null when every planned round finished. ROUNDS_FAILED: every round ran and some failed (partial); STOPPED: stopped by SIGTERM, for example a deleted Job (partial); RUN_TIMEOUT: stopped near the Job's time limit (partial); RUNNER_FAILED: the run failed outside a round, for example before the first one (failed). A config that cannot be run (PLAN_INVALID) writes no results file; that code appears only in the log summary and the termination message."
+          "description": "null when every planned round finished. ROUNDS_FAILED: every round ran and some failed (partial); REQUESTS_FAILED: every round ran, but at some load level of some round requests failed or none finished, and that level is left out (partial); STOPPED: stopped by SIGTERM, for example a deleted Job (partial); RUN_TIMEOUT: stopped near the Job's time limit (partial); RUNNER_FAILED: the run failed outside a round, for example before the first one (failed). A config that cannot be run (PLAN_INVALID), and a run that found another comparison running (RUN_ACTIVE), write no results file; those codes appear only in the log summary and the termination message."
         },
         "started_at": {
           "type": "string"
@@ -71,6 +73,13 @@
             "openshift",
             "docker"
           ]
+        },
+        "server_restored": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the live server the backend took away for the run is back: on OpenShift the pattern's server Deployment scaled back (and read back), under docker the container named in RHVP_COMPARE_SERVER_CONTAINER started again. null when nothing was taken away (or not yet asked back); false makes the runner exit 4."
         },
         "synthetic": {
           "type": "boolean",
@@ -248,6 +257,31 @@
                 "string",
                 "null"
               ]
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "description": "Every node and GPU a round ran on, in the order first seen (node and gpu above keep the first). More than one node makes every verdict INCONCLUSIVE.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "gpu"
+            ],
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "gpu": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           }
         },
@@ -1044,6 +1078,7 @@
         "kind",
         "role",
         "n_pairs",
+        "pairs_lost",
         "a_median",
         "b_median",
         "ratios",
@@ -1090,6 +1125,34 @@
           "type": "integer",
           "description": "Pairs where both rounds measured this metric."
         },
+        "pairs_lost": {
+          "type": "object",
+          "required": [
+            "A",
+            "B",
+            "both",
+            "other"
+          ],
+          "description": "Scored pairs that ran at least one round but give no ratio for this metric, by cause. A or B: only that side failed on its own account (its round failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at this metric's load level); both: both sides did; other: any other cause (a round stopped, not run yet, the GPU not free, a missing power reading). Any A or B makes the verdict INCONCLUSIVE (reason pairs_lost_to_one_side_failing).",
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "both": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "other": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
         "a_median": {
           "$ref": "#/$defs/number_or_null"
         },
@@ -1104,7 +1167,8 @@
           "description": "B/A per pair, in pair order."
         },
         "median_ratio": {
-          "$ref": "#/$defs/number_or_null"
+          "$ref": "#/$defs/number_or_null",
+          "description": "The median of the ratios on the log scale: the middle ratio, or for an even count the geometric mean of the two middle ones, so swapping A and B gives exactly the reciprocal."
         },
         "ci": {
           "type": "object",
@@ -1147,7 +1211,7 @@
         },
         "reachable": {
           "type": "boolean",
-          "description": "Whether this metric's pairs could reach alpha at all (after the correction, for a primary metric)."
+          "description": "Whether this metric's pairs could reach alpha at all: for a primary metric, the smallest corrected p-value its own number of pairs allows next to the other primary metrics' (exact for Holm and Bonferroni, a lower bound for bh); for a secondary metric, 2^(1-n)."
         },
         "outcome": {
           "enum": [
@@ -1172,11 +1236,17 @@
         "reason": {
           "enum": [
             "too_few_pairs",
-            "median_ratio_inside_tie_band",
+            "interval_inside_tie_band",
+            "median_inside_tie_band_but_too_few_pairs_for_an_interval",
+            "median_inside_tie_band_but_interval_is_not",
             "significant_outside_tie_band",
+            "test_and_median_disagree",
             "not_significant_outside_tie_band",
-            "outside_tie_band_but_too_few_pairs_to_reach_alpha"
-          ]
+            "outside_tie_band_but_too_few_pairs_to_reach_alpha",
+            "pairs_lost_to_one_side_failing",
+            "rounds_ran_on_more_than_one_node"
+          ],
+          "description": "Why the verdict is what it is. TIE needs the median and its whole interval inside the tie band; FASTER/SLOWER need a corrected p-value at most alpha with the test leaning the same way as the median; the last two reasons override any other verdict."
         }
       }
     },
@@ -1210,7 +1280,7 @@
             "pairs_usable_min",
             "min_adjusted_p"
           ],
-          "description": "plan.analysis, plus family_size (the number of primary metrics), the pairs planned, the fewest usable pairs of a primary metric, and the smallest adjusted p-value those pairs allow."
+          "description": "plan.analysis, plus family_size (the number of primary metrics), the pairs planned, the fewest usable pairs of a primary metric, and min_adjusted_p: the smallest corrected p-value any primary metric's pairs allow."
         },
         "metrics": {
           "type": "array",
@@ -1286,6 +1356,8 @@
         "rounds_done",
         "rounds_total",
         "rounds_failed",
+        "levels_unusable",
+        "server_restored",
         "eta_seconds",
         "started_at",
         "finished_at",
@@ -1337,6 +1409,24 @@
               "error_code"
             ]
           }
+        },
+        "levels_unusable": {
+          "type": "array",
+          "description": "Load levels of finished rounds left out of the comparison because requests failed there, or none finished.",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "side",
+              "kind",
+              "concurrency",
+              "errored",
+              "successful"
+            ]
+          }
+        },
+        "server_restored": {
+          "$ref": "#/properties/run/properties/server_restored"
         },
         "eta_seconds": {
           "type": [

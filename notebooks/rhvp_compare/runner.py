@@ -6,9 +6,19 @@ The loop knows nothing about Kubernetes or docker: a Backend does the platform w
 fake one in the tests). A round that fails is recorded with its reason and a fixed failure code (ROUND_CODES), and
 the run goes on; the comparison then has one pair fewer for the metrics that round would have given.
 
-SIGTERM (a deleted Job, or the Job's time limit) stops the run without waiting for the round: the round is cut short
-and recorded as STOPPED, its side is taken down, the backend cleans up (on OpenShift it also brings the pattern's
-server back), and the results file is saved as partial, all within the runner pod's grace period.
+SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the round: the round
+is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is saved as
+partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
+slow teardown, so a teardown that runs out of time cannot leave it at 0.
+
+One run at a time. Before it touches anything (the results file, the status, the live server), the runner asks the
+backend whether another comparison is running, and refuses to start if one is (RUN_ACTIVE): two runs would take the
+GPU from each other, and the first to end would bring the live server back under the other.
+
+The live server. The backend may scale the pattern's own server down for the run (kube.py) or stop a container
+(dockerapi.py); the runner asks it back however the run ends, and records in run.server_restored whether that
+worked. A server that could not be brought back makes the run exit 4, whatever its status, with the command that
+brings it back in the log.
 
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
 table), and rounds/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
@@ -22,6 +32,7 @@ import json
 import os
 import signal
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -48,11 +59,17 @@ RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a
 ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
+REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
+#                                      finished), so that level is left out (status partial)
 RUN_TIMEOUT = "RUN_TIMEOUT"      # stopped near the Job's time limit (status partial); STOPPED for any other stop
 RUNNER_FAILED = "RUNNER_FAILED"  # the run failed outside a round, for example before the first one (status failed)
 PLAN_INVALID = "PLAN_INVALID"    # the config cannot be run; no results file, only the summary in the log and the
 #                                  termination message
-RUN_CODES = (ROUNDS_FAILED, STOPPED, RUN_TIMEOUT, RUNNER_FAILED, PLAN_INVALID)
+RUN_ACTIVE = "RUN_ACTIVE"        # another comparison was running, so this one did not start and changed nothing; no
+#                                  results file, only the summary in the log and the termination message
+RUN_CODES = (ROUNDS_FAILED, REQUESTS_FAILED, STOPPED, RUN_TIMEOUT, RUNNER_FAILED, PLAN_INVALID, RUN_ACTIVE)
+#: Exit codes of `python -m rhvp_compare run`.
+EXIT_COMPLETE, EXIT_PARTIAL, EXIT_CONFIG, EXIT_FAILED, EXIT_SERVER_NOT_RESTORED, EXIT_RUN_ACTIVE = 0, 1, 2, 3, 4, 5
 
 
 class RoundError(Exception):
@@ -61,6 +78,10 @@ class RoundError(Exception):
     def __init__(self, message: str, code: str = RUNNER_ERROR) -> None:
         super().__init__(message)
         self.code = code
+
+
+class RunActive(Exception):
+    """Another comparison is running; the message names it. Raised before anything is changed."""
 
 
 class Stopped(BaseException):
@@ -106,8 +127,16 @@ class Backend(Protocol):
 
     def cleanup(self) -> None: ...
 
-    # Optional: `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
-    # results volume finds it (kube.py: a ConfigMap). The runner calls it after every save when the backend has it.
+    # Optional, each called only when the backend has it:
+    # - `check_alone()`: raise RunActive when another comparison is running. Called before anything is changed.
+    # - `restore_server() -> bool | None`: bring back the live server the backend took away in prepare(); True once
+    #   it is back (and checked), None when there was nothing to bring back; raises when it could not. Called again
+    #   until it has worked, so it must do nothing once the server is back.
+    # - `restore_before_teardown` (bool): ask the server back as soon as a stop begins, before the round's side is
+    #   taken down (Kubernetes: its pod waits for the GPU); otherwise after the teardown (docker: no scheduler).
+    # - `on_stop()`: a stop has begun; shorten the waits of what is left (log reads, deletes) to fit the grace period.
+    # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
+    #   results volume finds it (kube.py: a ConfigMap). Called after every save.
 
 
 def write_json(path: Path, data: Mapping) -> None:
@@ -136,6 +165,7 @@ class Runner:
         self.clock, self.wall, self.sleep = clock, wall, sleep
         self.results: dict = {}
         self._stopping = False
+        self._stop_begun = False
         self._interruptible = False
         self._publish_failed = False
         self.deadline_s = deadline_s  # the Job's time limit, to tell RUN_TIMEOUT from any other stop
@@ -148,14 +178,14 @@ class Runner:
             "schema": plans.SCHEMA,
             "run": {"id": self.plan["run_id"], "name": self.plan["run_name"], "status": "running",
                     "error_code": None, "started_at": utc_now(), "finished_at": None,
-                    "platform": self.backend.platform, "notes": [], "errors": []},
+                    "platform": self.backend.platform, "server_restored": None, "notes": [], "errors": []},
             "plan": self.plan,
             "provenance": {"harness": dict(HARNESS),
                            "load_tool": {"name": "guidellm", "image": self.plan["load"]["image"], "version": None},
                            "seeds": {"load": self.plan["load"]["seed"], "server": self.plan["server"]["seed"]},
                            "sides": {s["key"]: {"image": s["image"], "image_digest": None, "server_version": None}
                                      for s in self.plan["sides"]},
-                           "gpu": None, "node": None, "cluster": None},
+                           "gpu": None, "node": None, "nodes": [], "cluster": None},
             "rounds": [],
             "analysis": None,
         }
@@ -194,25 +224,31 @@ class Runner:
         if self.already_done():
             self.results = json.loads(self.path.read_text(encoding="utf-8"))
             return self.results
+        check_alone = getattr(self.backend, "check_alone", None)
+        if check_alone is not None:
+            check_alone()  # RunActive: another run is going; nothing here has been touched, and nothing is cleaned up
         if self.path.is_file():  # an earlier attempt that did not finish: keep it beside the new one
             os.replace(self.path, self.dir / f"results.attempt-{int(self.wall())}.json")
         self.results = self._new_results()
         self.save()
-        previous = signal.getsignal(signal.SIGTERM) if hasattr(signal, "SIGTERM") else None
-        try:
-            signal.signal(signal.SIGTERM, self._on_term)
-        except ValueError:  # not the main thread (tests)
-            previous = None
+        previous: dict = {}
+        for sig in (signal.SIGTERM, signal.SIGINT):  # SIGINT: Ctrl-C on scripts/compare-local.sh
+            try:
+                previous[sig] = signal.signal(sig, self._on_term)
+            except ValueError:  # not the main thread (tests)
+                break
         try:
             self.backend.prepare(self.plan)
             self._describe()
             for round_ in self.plan["rounds"]:
                 if self._stopping:
+                    self._begin_stop()
                     break
                 self.results["rounds"].append(self.measure(round_))
                 self.save()
             self._settle()
         except Stopped:  # a stop that landed outside a round's own handling
+            self._begin_stop()
             self._settle()
         except Exception as error:  # recorded, then raised for the Job's exit code
             self.results["run"]["status"] = "failed"
@@ -220,15 +256,50 @@ class Runner:
             self.results["run"]["errors"].append(f"{type(error).__name__}: {error}")
             raise
         finally:
+            self._restore()  # before the cleanup's deletes, and before the last save says how it went
             try:
                 self.backend.cleanup()
             except Exception as error:  # recorded; the run's own outcome stands
                 self.results["run"]["errors"].append(f"cleanup: {type(error).__name__}: {error}")
             self.results["run"]["finished_at"] = utc_now()
             self.save()
-            if previous is not None:
-                signal.signal(signal.SIGTERM, previous)
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
         return self.results
+
+    def _restore(self) -> None:
+        """Ask the backend to bring the live server back, and record whether it is back (run.server_restored)."""
+        restore = getattr(self.backend, "restore_server", None)
+        run = self.results["run"]
+        if restore is None or run.get("server_restored") is True:
+            return
+        try:
+            back = restore()
+        except Exception as error:  # recorded, and the exit code says so (EXIT_SERVER_NOT_RESTORED)
+            run["server_restored"] = False
+            message = f"the live server was not brought back: {error}"
+            if message not in run["errors"]:
+                run["errors"].append(message)
+            return
+        run["server_restored"] = True if back else None
+
+    def _backend_on_stop(self) -> None:
+        on_stop = getattr(self.backend, "on_stop", None)
+        if on_stop is not None:
+            try:
+                on_stop()
+            except Exception:  # only shortens waits; the stop goes on without it
+                pass
+
+    def _begin_stop(self) -> None:
+        """A stop has begun: bring the live server back now when the backend can do that before the side is taken
+        down (on OpenShift its pod waits for the GPU), so a teardown that runs out of time cannot leave it at 0."""
+        if self._stop_begun:
+            return
+        self._stop_begun = True
+        self._backend_on_stop()
+        if getattr(self.backend, "restore_before_teardown", False):
+            self._restore()
 
     def _settle(self) -> None:
         """The run's status and failure code once the loop has ended."""
@@ -241,12 +312,16 @@ class Runner:
             run["errors"].append("stopped near the Job's time limit" if late else "stopped by SIGTERM")
         elif failed or not done:
             run["status"], run["error_code"] = "partial", ROUNDS_FAILED
+        elif summary.levels_unusable(self.results):
+            run["status"], run["error_code"] = "partial", REQUESTS_FAILED
         else:
             run["status"], run["error_code"] = "complete", None
 
     def _on_term(self, signum, frame) -> None:  # noqa: ARG002 (signal handler signature)
-        """Stop: inside a round, cut it short now (Stopped); between rounds, the loop stops before the next one."""
+        """Stop: inside a round, cut it short now (Stopped); between rounds, the loop stops before the next one. The
+        backend's on_stop only sets flags (shorter waits for what is left), so it is safe here."""
         self._stopping = True
+        self._backend_on_stop()
         if self._interruptible:
             self._interruptible = False
             raise Stopped()
@@ -285,6 +360,7 @@ class Runner:
                 self._interruptible = False
         except Stopped:
             record["error"], record["error_code"] = "stopped by SIGTERM during the round", STOPPED
+            self._begin_stop()
         except RoundError as error:
             record["error"], record["error_code"] = str(error), error.code
         except probe.StartFailed as error:
@@ -425,6 +501,9 @@ class Runner:
             for key in ("node", "gpu"):
                 if facts.get(key) and not prov.get(key):
                     prov[key] = facts[key]
+            seen = {"name": facts.get("node_name"), "gpu": (facts.get("gpu") or {}).get("product")}
+            if (seen["name"] or seen["gpu"]) and seen not in prov.setdefault("nodes", []):
+                prov["nodes"].append(seen)  # every node and GPU the run used; `node` and `gpu` keep the first
         except Exception as error:
             record.setdefault("notes", []).append(f"facts not read: {type(error).__name__}")
         try:
@@ -445,15 +524,25 @@ def _finish(results: Mapping, termination_log: str | None) -> None:
             print(f"note: the termination message was not written ({type(error).__name__})", flush=True)
 
 
+def exit_code(results: Mapping) -> int:
+    """0 complete, 1 partial, 3 failed; 4 whenever the live server was not brought back."""
+    run = results.get("run") or {}
+    if run.get("server_restored") is False:
+        return EXIT_SERVER_NOT_RESTORED
+    return {"complete": EXIT_COMPLETE, "partial": EXIT_PARTIAL}.get(run.get("status"), EXIT_FAILED)
+
+
 def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping[str, str] | None = None) -> int:
-    """Build the plan, run it, print where the results are. Exit code 0 when every round finished, 1 for a partial
-    run (so its Job reads Failed); a config error (exit 2) and a failed run raise."""
+    """Build the plan, run it, print where the results are. The exit code: 0 when every round finished, 1 for a
+    partial run (so its Job reads Failed), 3 for a run that failed outside a round, 4 when the live server was not
+    brought back (whatever else happened), 5 when another comparison was running (nothing changed). A config error
+    raises PlanError (exit 2)."""
     env = os.environ if env is None else env
     termination_log = env.get("RHVP_COMPARE_TERMINATION_LOG") or None
     try:
         the_plan = plans.load(config_path, backend.platform)
     except plans.PlanError as error:
-        _finish(summary.plan_invalid(str(error)), termination_log)
+        _finish(summary.not_started(PLAN_INVALID, str(error)), termination_log)
         raise
     floor = the_plan["floor"]
     print(f"run {the_plan['run_id']}: {len(the_plan['rounds'])} rounds, {the_plan['pairs']} scored pairs, "
@@ -464,13 +553,24 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
     deadline = env.get("RHVP_COMPARE_DEADLINE_SECONDS")
     runner = Runner(the_plan, backend, Path(results_root), deadline_s=float(deadline) if deadline else None)
     try:
-        results = runner.run()
-    finally:
-        if runner.results:
-            _finish(runner.results, termination_log)
-    print(f"results: {runner.path} (status {results['run']['status']}, code {results['run'].get('error_code')})",
-          flush=True)
+        runner.run()
+    except RunActive as error:
+        print(f"not started: {error}", flush=True)
+        _finish(summary.not_started(RUN_ACTIVE, str(error), the_plan["run_id"]), termination_log)
+        return EXIT_RUN_ACTIVE
+    except Exception as error:  # recorded in the results file (status failed, RUNNER_FAILED) by Runner.run
+        traceback.print_exc()
+        if not runner.results:  # before the results file existed
+            _finish(summary.not_started(RUNNER_FAILED, f"{type(error).__name__}: {error}", the_plan["run_id"]),
+                    termination_log)
+            return EXIT_FAILED
+    results = runner.results
+    _finish(results, termination_log)
+    run = results["run"]
+    print(f"results: {runner.path} (status {run['status']}, code {run.get('error_code')})", flush=True)
     for row in (results.get("analysis") or {}).get("metrics") or []:
         print(f"  {row['label']} ({row.get('role', 'primary')}): {row['verdict']} (pairs {row['n_pairs']})",
               flush=True)
-    return 0 if results["run"]["status"] == "complete" else 1
+    for line in run.get("errors") or []:
+        print(f"error: {line}", flush=True)
+    return exit_code(results)

@@ -115,7 +115,7 @@ def synthesize() -> dict:
         "schema": plans.SCHEMA,
         "run": {"id": plan["run_id"], "name": plan["run_name"], "status": "complete", "error_code": None,
                 "started_at": _iso(START),
-                "finished_at": _iso(clock), "platform": "openshift", "synthetic": True,
+                "finished_at": _iso(clock), "platform": "openshift", "server_restored": True, "synthetic": True,
                 "notes": ["Synthetic: written by notebooks/rhvp_compare/example.py, never measured."], "errors": []},
         "plan": plan,
         "provenance": {
@@ -129,6 +129,7 @@ def synthesize() -> dict:
                     "source": "made up"},
             "node": {"name": "gpu-node-1", "arch": "amd64", "instance_type": "example.large", "os_image": "example",
                      "kernel": "0.0", "container_runtime": "example"},
+            "nodes": [{"name": "gpu-node-1", "gpu": "Example-GPU"}],
             "cluster": {"openshift_version": "4.20.0"},
         },
         "rounds": rounds,

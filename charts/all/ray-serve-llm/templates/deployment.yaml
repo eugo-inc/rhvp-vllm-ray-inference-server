@@ -10,8 +10,6 @@ metadata:
     image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"ray-serve-llm:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"server\")].image"}]'
   {{- end }}
 spec:
-  # 0 while global.compare.enabled: the image comparison's side pods need this
-  # server's GPU and its model volume.
   # The image comparison's runner scales this to 0 for a run and back to 1 when it
   # ends; Argo CD ignores replicas (variants/prod/values-prod.yaml).
   replicas: 1

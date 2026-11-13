@@ -101,20 +101,87 @@ def test_tie_band_is_symmetric_in_log_space():
     assert stats.inside_band(1.0, 0.0)
 
 
-@pytest.mark.parametrize("median_ratio, p_adj, better, n, reachable, outcome, reason", [
-    (0.80, 0.01, stats.LOWER, 10, True, stats.BETTER, stats.REASON_SIGNIFICANT),
-    (1.25, 0.01, stats.LOWER, 10, True, stats.WORSE, stats.REASON_SIGNIFICANT),
-    (1.25, 0.01, stats.HIGHER, 10, True, stats.BETTER, stats.REASON_SIGNIFICANT),
-    (0.80, 0.01, stats.HIGHER, 10, True, stats.WORSE, stats.REASON_SIGNIFICANT),
-    (1.03, 0.001, stats.LOWER, 10, True, stats.TIE, stats.REASON_IN_BAND),
-    (0.80, 0.20, stats.LOWER, 10, True, stats.INCONCLUSIVE, stats.REASON_NOT_SIGNIFICANT),
-    (0.80, 1.00, stats.LOWER, 4, False, stats.INCONCLUSIVE, stats.REASON_FLOOR),
-    (0.80, 0.01, stats.LOWER, 2, True, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
-    (None, None, stats.LOWER, 0, False, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
+TIGHT = stats.Interval(1.01, 1.04, 0.98)   # inside the 5% band
+WIDE = stats.Interval(0.80, 1.30, 0.98)    # reaches outside it
+NONE = stats.Interval(None, None, None)    # too few pairs for an interval
+
+
+@pytest.mark.parametrize("median_ratio, p_adj, better, n, reachable, interval, direction, outcome, reason", [
+    (0.80, 0.01, stats.LOWER, 10, True, WIDE, -1, stats.BETTER, stats.REASON_SIGNIFICANT),
+    (1.25, 0.01, stats.LOWER, 10, True, WIDE, 1, stats.WORSE, stats.REASON_SIGNIFICANT),
+    (1.25, 0.01, stats.HIGHER, 10, True, WIDE, 1, stats.BETTER, stats.REASON_SIGNIFICANT),
+    (0.80, 0.01, stats.HIGHER, 10, True, WIDE, -1, stats.WORSE, stats.REASON_SIGNIFICANT),
+    (1.03, 0.001, stats.LOWER, 10, True, TIGHT, 1, stats.TIE, stats.REASON_IN_BAND),
+    (1.02, 1.0, stats.HIGHER, 10, True, WIDE, 0, stats.INCONCLUSIVE, stats.REASON_WIDE),
+    (1.02, 1.0, stats.HIGHER, 3, True, NONE, 0, stats.INCONCLUSIVE, stats.REASON_NO_INTERVAL),
+    (0.80, 0.01, stats.LOWER, 50, True, WIDE, 1, stats.INCONCLUSIVE, stats.REASON_DISAGREE),
+    (0.80, 0.20, stats.LOWER, 10, True, WIDE, -1, stats.INCONCLUSIVE, stats.REASON_NOT_SIGNIFICANT),
+    (0.80, 1.00, stats.LOWER, 4, False, NONE, -1, stats.INCONCLUSIVE, stats.REASON_FLOOR),
+    (0.80, 0.01, stats.LOWER, 2, True, NONE, -1, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
+    (None, None, stats.LOWER, 0, False, NONE, 0, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
 ])
-def test_verdict_rule(median_ratio, p_adj, better, n, reachable, outcome, reason):
-    decided = stats.verdict(median_ratio, p_adj, better, 0.05, 0.05, n, 3, reachable)
+def test_verdict_rule(median_ratio, p_adj, better, n, reachable, interval, direction, outcome, reason):
+    decided = stats.verdict(median_ratio, p_adj, better, 0.05, 0.05, n, 3, reachable, interval, direction)
     assert (decided.outcome, decided.reason) == (outcome, reason)
+
+
+def test_a_tie_needs_the_interval_inside_the_band():
+    """A median inside the band is not enough: three pairs (no interval), or ten whose interval runs from 0.75 to
+    1.35, do not show the two images are within 5%."""
+    for values in ([0.8, 1.02, 1.3], [0.70, 0.75, 0.8, 0.9, 1.0, 1.04, 1.1, 1.3, 1.35, 1.40]):
+        ratio, interval = stats.median_ratio(values), stats.median_interval(values)
+        assert stats.inside_band(ratio, 0.05)
+        decided = stats.verdict(ratio, 1.0, stats.HIGHER, 0.05, 0.05, len(values), 3, True, interval, 0)
+        assert decided.outcome == stats.INCONCLUSIVE
+    close = [1.01, 1.02, 0.99, 1.03, 1.0, 1.02, 0.98, 1.01, 1.02, 1.0]
+    decided = stats.verdict(stats.median_ratio(close), 1.0, stats.HIGHER, 0.05, 0.05, 10, 3, True,
+                            stats.median_interval(close), stats.sign_test(close).direction)
+    assert (decided.outcome, decided.reason) == (stats.TIE, stats.REASON_IN_BAND)
+
+
+def test_the_direction_comes_from_the_test_not_only_the_median():
+    """27 pairs where B is 5% faster and 23 where it is 50% slower: the median says faster, the signed-rank test is
+    significant because B is mostly slower. That is not FASTER."""
+    values = [0.95] * 27 + [1.5] * 23
+    wilcoxon = stats.wilcoxon_test(values)
+    assert wilcoxon.p < 0.01 and wilcoxon.direction == 1
+    assert stats.sign_test(values).direction == -1
+    decided = stats.verdict(stats.median_ratio(values), wilcoxon.p * 4, stats.LOWER, 0.05, 0.05, 50, 8, True,
+                            stats.median_interval(values), wilcoxon.direction)
+    assert (decided.outcome, decided.reason) == (stats.INCONCLUSIVE, stats.REASON_DISAGREE)
+    assert stats.wilcoxon_test([1.0, 1.0]).direction == 0
+
+
+def test_the_median_ratio_does_not_depend_on_which_image_is_a():
+    values = [0.9, 0.95, 0.97, 0.99, 1.0, 1.101, 1.11, 1.12, 1.15, 1.2]
+    assert stats.median_ratio(values) == pytest.approx(1 / stats.median_ratio([1 / r for r in values]))
+    assert stats.median_ratio(values) == pytest.approx(math.sqrt(1.0 * 1.101))
+    assert stats.median_ratio([1.3, 1.02, 0.8]) == 1.02
+    with pytest.raises(ValueError):
+        stats.median_ratio([])
+
+
+@pytest.mark.parametrize("pairs, correction, expected", [
+    ([10, 10, 10, 10], "holm", [4 * 2 ** -9] * 4),
+    ([10, 6, 6, 6], "holm", [2 ** -9 * 4, 3 * 2 ** -5, 3 * 2 ** -5, 3 * 2 ** -5]),
+    ([10, 10, 10, 7], "holm", [4 * 2 ** -9, 4 * 2 ** -9, 4 * 2 ** -9, 2 ** -6]),
+    ([10, 7], "bonferroni", [2 * 2 ** -9, 2 * 2 ** -6]),
+    ([10, 7], "none", [2 ** -9, 2 ** -6]),
+    ([0, 3], "holm", [1.0, 0.5]),
+])
+def test_each_metric_has_its_own_floor(pairs, correction, expected):
+    assert stats.floors(pairs, correction) == pytest.approx(expected)
+
+
+def test_holm_floors_are_what_holm_gives_at_the_floors():
+    """With every metric at its own smallest p-value, Holm's adjusted p-value of the metric with the most pairs, and
+    the floor of the one with the fewest, are what `floors` says."""
+    pairs = [10, 6, 6, 6]
+    adjusted = stats.adjust([2.0 ** (1 - n) for n in pairs], "holm")
+    floors = stats.floors(pairs, "holm")
+    assert adjusted[0] == pytest.approx(floors[0])
+    assert min(adjusted[1:]) == pytest.approx(floors[1])
+    assert floors[1] > 0.05  # three 6-pair metrics cannot reach alpha next to a 10-pair one
 
 
 def test_verdict_words():

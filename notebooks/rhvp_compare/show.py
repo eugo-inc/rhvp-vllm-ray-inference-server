@@ -19,7 +19,7 @@ from pathlib import Path
 
 from rhvp_bench import draw
 
-from . import stats, words
+from . import stats, summary, words
 
 GOOD, BAD, NEUTRAL, OPEN = "#1E7B45", "#B3261E", draw.MUTED, draw.AMBER
 VERDICT_COLOUR = {"FASTER": GOOD, "MORE_EFFICIENT": GOOD, "SLOWER": BAD, "LESS_EFFICIENT": BAD, "TIE": NEUTRAL,
@@ -165,8 +165,19 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
               for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
+    unusable = [f"round {u['index']} side {u['side']} at {u['concurrency']} streams"
+                for u in summary.levels_unusable(results)]
+    if unusable:
+        parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
     if run.get("error_code"):
         parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
+    lost = [f"{row['label']} (A {row['pairs_lost']['A']}, B {row['pairs_lost']['B']})"
+            for row in (results.get("analysis") or {}).get("metrics") or []
+            if (row.get("pairs_lost") or {}).get("A") or (row.get("pairs_lost") or {}).get("B")]
+    if lost:
+        parts.append(line(words.RUN_LOST.format(lost="; ".join(lost))))
+    if run.get("server_restored") is False:
+        parts.append(draw.notice(words.RUN_SERVER))
     return parts
 
 
