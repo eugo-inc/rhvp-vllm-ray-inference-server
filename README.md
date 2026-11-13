@@ -540,6 +540,15 @@ message.
 docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi` instead of DCGM.
 `tests/fixtures/compare-local-mock.json` is a small config that needs no GPU: two GuideLLM mock servers.
 
+- `SIDE_MEMORY` (for example `32g`) and `RUNNER_MEMORY` (default `8g`) limit the containers' memory. On a GPU whose
+  memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
+- `SERVER_CONTAINER` names a container that normally holds the GPU: the runner stops it before the first round and
+  starts it again when the run ends, the counterpart of scaling the pattern's server on OpenShift.
+- One comparison runs at a time here too: a second `compare-local.sh` refuses to start (exit 5) while the first
+  runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
+- Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
+  namespace).
+
 ### Comparing with this pattern's own server
 
 Ray decides the vLLM version: the `ray[llm]` release pins exactly one vLLM. The comparison therefore works on whole
@@ -554,16 +563,17 @@ under the same tag is not a new run: change the digest, or `runName`.
 - No round has started a real inference server yet: every end-to-end run used GuideLLM's mock server, without a
   GPU. The example config (two vLLM releases) has not been run; the `vllm-openai` preset's arguments, the start as
   an arbitrary UID, the log phases and `GET /version` are covered by unit tests only.
-- Tokens per joule has not been computed from DCGM samples. Both power readers are tested only against hand-written
-  answers in the documented formats (a Prometheus `query_range` matrix, and nvidia-smi CSV lines); the DCGM label
-  names the reader matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) have not been checked
-  against a real DCGM exporter.
+- Tokens per joule has not been computed from real power samples, from DCGM or from nvidia-smi. Both power readers
+  are tested only against hand-written answers in the documented formats (a Prometheus `query_range` matrix, and
+  nvidia-smi CSV lines); the DCGM label names the reader matches on (`exported_pod`, `exported_namespace`, `pod`,
+  `Hostname`) have not been checked against a real DCGM exporter.
 - No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
-  a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the
-  status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
-  `STOPPED`, deleted the side and brought the server back within seconds. That says nothing about OpenShift's
-  restricted security context, the internal registry, the cluster's monitoring or Argo CD. The whole run has also
-  been tried with docker (`scripts/compare-local.sh`), against the same mock server.
+  a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote
+  the status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
+  `STOPPED`, deleted the side and brought the server back within seconds. That run came before the refusal of a
+  second run, the scale read-back and the early restore on a stop; those are covered by unit tests only. None of it
+  says anything about OpenShift's restricted security context, the internal registry, the cluster's monitoring or
+  Argo CD. The whole run has also been tried with docker (`scripts/compare-local.sh`), against the same mock server.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - The length of a run, and so of the server's outage, is an estimate.
 

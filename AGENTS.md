@@ -191,11 +191,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 - Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
-to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). Not checked
-yet: tokens per joule from DCGM (both power readers are tested only against hand-written answers in the documented
-formats, and the DCGM label names the reader matches on have not been checked against a real DCGM exporter); a run
-on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); and the length of
-a run (an estimate of 2 to 3 hours with the defaults).
+to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). That run
+came before the refusal of a second run, the scale read-back and the early restore on a stop, which are covered by
+unit tests only. Not checked yet: any round against a real inference server (every end-to-end run used GuideLLM's
+mock server, without a GPU); tokens per joule from real power samples (both power readers are tested only against
+hand-written answers in the documented formats, and the DCGM label names the reader matches on have not been
+checked against a real DCGM exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry,
+Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
 
 ## How to deploy
 

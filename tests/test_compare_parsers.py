@@ -665,7 +665,8 @@ class FakeDocker:
         pass
 
     def run(self, name, body, timeout_s=300.0, log_to=None):
-        return 0, ""
+        self.calls.append(("run", name, body))
+        return 0, getattr(self, "run_log", "")
 
 
 def _docker_backend(docker, **env) -> dockerapi.DockerBackend:
@@ -722,3 +723,18 @@ def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypat
     assert idle.restore_server() is None  # it was not running: left alone
     with pytest.raises(runner.RoundError, match="names no container"):
         _docker_backend(FakeDocker(), RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())
+
+
+def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):
+    monkeypatch.setattr(dockerapi.time, "sleep", lambda s: None)
+    docker = FakeDocker()
+    backend = _docker_backend(docker)
+    backend.run_id = "t-12345678"
+    side = {"image": "x/a:1", "gpu": True}
+    backend.gpu_free({}, side)
+    [(_, _, body)] = [c for c in docker.calls if c[0] == "run"]
+    assert body["HostConfig"]["PidMode"] == "host" and body["HostConfig"]["Memory"] == dockerapi.HELPER_MEMORY
+    docker.run_log = "2026-01-01T00:00:00Z 4242\n"  # another program on the GPU
+    with pytest.raises(runner.RoundError, match="another program holds the GPU") as caught:
+        backend.gpu_free({}, side, wait_s=0)
+    assert caught.value.code == runner.GPU_NOT_FREE

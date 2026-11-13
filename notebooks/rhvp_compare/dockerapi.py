@@ -46,6 +46,8 @@ from . import energy, guidellm, logs, runner
 
 LABEL = "rhvp-compare.run"
 RUNNER_LABEL = "rhvp-compare.runner"
+#: The memory limit of the small helper containers (the volume's permissions, the GPU checks, the power sampler).
+HELPER_MEMORY = 256 * 2**20
 #: Waits between the tries to start the server container again.
 RESTORE_BACKOFF_S = (2.0, 4.0, 8.0)
 
@@ -212,7 +214,8 @@ class NvidiaSmi:
             "Image": self.image, "Entrypoint": ["nvidia-smi"],
             "Cmd": ["-i", "0", "--query-gpu=power.draw", "--format=csv,noheader,nounits", "-lms", "500"],
             "Labels": {LABEL: self.run_id},
-            "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus)}})
+            "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus),
+                           "Memory": HELPER_MEMORY}})
         self.docker.start(self.cid)
 
     def stop(self) -> None:
@@ -322,7 +325,7 @@ class DockerBackend:
             "Image": plan["sides"][0]["image"], "User": "0:0", "Entrypoint": ["sh", "-c"],
             "Cmd": ["mkdir -p /models/hf && chgrp 0 /models /models/hf && chmod g+rwx /models /models/hf"],
             "Labels": {LABEL: self.run_id}, "HostConfig": {"Binds": [f"{self.models_volume}:/models"],
-                                                          "NetworkMode": "none"}})
+                                                          "NetworkMode": "none", "Memory": HELPER_MEMORY}})
         if code != 0:
             raise runner.RoundError(f"could not make the models volume writable (exit {code})")
         llm = self.results_root / self.run_id / "llm.yaml"
@@ -356,7 +359,10 @@ class DockerBackend:
             code, log = self.docker.run(self._name("gpu-check"), {
                 "Image": side["image"], "Entrypoint": ["nvidia-smi"],
                 "Cmd": ["--query-compute-apps=pid", "--format=csv,noheader"], "Labels": {LABEL: self.run_id},
-                "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus)}}, timeout_s=60)
+                # the host's process namespace: without it nvidia-smi in a container lists no other program's GPU
+                # processes (seen with the NVIDIA Container Toolkit), and the check would always pass
+                "HostConfig": {"NetworkMode": "none", "PidMode": "host", "DeviceRequests": _gpu_request(self.gpus),
+                               "Memory": HELPER_MEMORY}}, timeout_s=60)
             busy = [text for _, text in logs.lines(log) if text.strip()]
             if code == 0 and not busy:
                 return
@@ -433,7 +439,8 @@ class DockerBackend:
                 "Image": image, "Entrypoint": ["nvidia-smi"],
                 "Cmd": ["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
                 "Labels": {LABEL: self.run_id},
-                "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus)}}, timeout_s=60)
+                "HostConfig": {"NetworkMode": "none", "DeviceRequests": _gpu_request(self.gpus),
+                               "Memory": HELPER_MEMORY}}, timeout_s=60)
             rows = [text for _, text in logs.lines(log) if text.strip()]
             if code == 0 and rows:
                 first = [x.strip() for x in rows[0].split(",")]

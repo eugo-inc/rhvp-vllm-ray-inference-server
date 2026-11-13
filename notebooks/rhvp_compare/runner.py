@@ -370,6 +370,8 @@ class Runner:
         except Exception as error:  # a fault in one round must not lose the rounds before it
             record["error"], record["error_code"] = f"{type(error).__name__}: {error}", RUNNER_ERROR
         finally:
+            if self._stopping:  # also a stop that came in after the round's own work: the server back first
+                self._begin_stop()
             if held["handle"] is not None:
                 self._after(held["handle"], record, out_dir, rel)
             record["finished_at"] = utc_now()
