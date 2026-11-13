@@ -829,6 +829,30 @@ def test_a_signal_before_the_server_stop_leaves_it_running(tmp_path, sig, at):
     assert signal.getsignal(sig) != the_runner._on_term  # the earlier handler is back
 
 
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_server_that_stopped_by_itself_is_recorded_also_in_a_run_stopped_during_the_pulls(tmp_path, sig):
+    """The live server exits by itself during a pull, and a stop lands in the same pull: the run still records it
+    (run.server_found_down, a note, results.md), and neither stops nor starts it."""
+    held = {}
+
+    def exit_then_signal():
+        docker.server_state = {"Running": False, "Status": "exited"}
+        assert signal.getsignal(sig) == held["runner"]._on_term
+        os.kill(os.getpid(), sig)
+
+    docker = HookDocker(exit_then_signal, at="pull", server_state={"Running": True, "Status": "running"})
+    backend = _docker_backend(docker, results_root=tmp_path, RHVP_COMPARE_SERVER_CONTAINER="live")
+    the_runner = held["runner"] = runner.Runner(_plan(), backend, tmp_path, sleep=lambda s: None)
+    results = the_runner.run()
+    assert docker.hook is None  # the signal was sent
+    assert _stops(docker) == [] and not [c for c in docker.calls if c[0] == "start"]
+    run = results["run"]
+    assert (run["status"], run["error_code"], run["server_restored"]) == ("partial", runner.STOPPED, None)
+    assert run["server_found_down"] == "exited"
+    assert any(note.startswith(runner.FOUND_DOWN) for note in run["notes"])
+    assert "**The live server had stopped by itself**" in (the_runner.dir / "results.md").read_text()
+
+
 def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):
     monkeypatch.setattr(dockerapi.time, "sleep", lambda s: None)
     docker = FakeDocker()

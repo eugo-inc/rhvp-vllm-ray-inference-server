@@ -546,7 +546,8 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   both images are pulled, and starts it again when the run ends, the counterpart of scaling the pattern's server on
   OpenShift. A stop during the pulls leaves it running. A container that was running when the run began but has
   stopped by itself (or been removed) by the end of the pulls is left as it is, and nothing starts it after the run:
-  the run says so in `run.server_found_down`, `results.md` and the log's last lines.
+  the run says so in `run.server_found_down`, `results.md` and the log's last lines, also when the run itself was
+  stopped during the pulls.
 - One comparison runs at a time here too: a second `compare-local.sh` refuses to start (exit 5) while the first
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
 - Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
