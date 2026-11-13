@@ -57,6 +57,7 @@ def test_holm_known_answers(raw, adjusted):
 
 
 def test_holm_wording():
+    assert stats.plain_family(0) == "no case tested yet"
     assert stats.plain_family(1) == "one case tested"
     assert stats.plain_family(4) == "corrected for testing 4 cases at once"
 
@@ -261,6 +262,16 @@ def test_an_order_that_never_changes_is_unresolved():
     assert (got["outcome"], got["reason"]) == ("unresolved", "order_unbalanced") and got["order_split"] == [0, 8]
 
 
+def test_a_twins_zero_leaves_its_round_out_of_the_floor_with_a_note():
+    per_round = _noisy(10.0, 10.0)
+    per_round["B~same"][1] = 0.0
+    rows, positions = _rows(per_round)
+    got = analyze.analyse(rows, positions, TWINS, CASES)
+    assert got["comparisons"][0]["floor"]["subject"]["n"] == 7
+    assert got["notes"] == ["side B's twin had a figure of 0 on t in round(s) 2; those rounds are left out of side "
+                            "B's floor"]
+
+
 def test_the_floor_is_the_largest_over_its_group_and_a_twin_that_differs_is_loud():
     cases = [{"id": i, "better": "lower", "kind": "time", "role": "secondary", "group": "secondary:t"}
              for i in ("c1/t", "c8/t")]
@@ -272,4 +283,7 @@ def test_the_floor_is_the_largest_over_its_group_and_a_twin_that_differs_is_loud
     got = analyze.analyse(rows, positions, TWINS, cases)
     floors = {c["case"]: c["floor"]["baseline"]["value"] for c in got["comparisons"]}
     assert floors["c1/t"] == pytest.approx(0.04) and floors["c8/t"] == pytest.approx(0.04)
-    assert any("differs from its twin" in note for note in got["notes"])
+    # The twin of A differs on every round of both cases: said as what was measured, with no cause.
+    assert got["notes"] == [
+        f"side A and its twin differed on {case} the same way in 8 of 8 rounds (p = 0.00781, not corrected for the "
+        f"4 comparisons of a side with its twin)" for case in ("c1/t", "c8/t")]

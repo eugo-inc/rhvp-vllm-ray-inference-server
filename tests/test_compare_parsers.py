@@ -112,6 +112,35 @@ def test_run_stops_a_hung_load_and_reports_a_bad_exit(tmp_path):
     assert (tmp_path / "out" / "guidellm.log").read_text() == "no\n"
 
 
+class _Halt(BaseException):
+    pass
+
+
+def test_a_stop_while_a_timed_out_guidellm_is_taken_down_kills_it_and_keeps_the_time_out(tmp_path):
+    # GuideLLM ignores SIGTERM; the runner's stop lands while run() waits for it to exit after the time-out.
+    plan = _plan(timeoutSeconds=30)
+    plan["load"]["timeout_s"] = 1
+    stubborn = tmp_path / "stubborn.sh"
+    stubborn.write_text("#!/bin/sh\necho $$ > \"$(dirname \"$0\")/pid\"\ntrap '' TERM\nwhile :; do sleep 1; done\n")
+    stubborn.chmod(0o755)
+
+    def halt(signum, frame):
+        raise _Halt()
+
+    previous = signal.signal(signal.SIGALRM, halt)
+    signal.setitimer(signal.ITIMER_REAL, 2.0)  # 1 s after the time-out, inside the 15 s wait for SIGTERM to work
+    try:
+        with pytest.raises(_Halt) as caught:
+            guidellm.run(plan, "http://side:8000", tmp_path / "out", executable=str(stubborn))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert caught.value.load_timed_out  # the runner counts the time-out all the same
+    pid = int((tmp_path / "pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # and GuideLLM was killed, not left running
+
+
 def test_run_returns_the_report(tmp_path):
     fake = tmp_path / "fake.sh"
     fake.write_text('#!/bin/sh\nfor a in "$@"; do case "$a" in kind=json,path=*) echo "{}" > "${a#kind=json,path=}";; '
@@ -179,6 +208,15 @@ def test_window_power_prefers_the_energy_counter():
     assert by_power.method == "power_mean" and by_power.mean_w == pytest.approx(100.0) and by_power.samples == 9
     too_few = energy.window_power(power[:1], 0, 9, 2)
     assert too_few.mean_w is None and "at least 2" in too_few.note
+    # The plan's minimum holds for the counter too: a DCGM exporter at its default 30 s gives a 60 s level 2 readings
+    # of each, and no figure.
+    slow_power = [energy.Sample(0, 200.0), energy.Sample(30, 200.0)]
+    slow_counter = [energy.Sample(0, 0), energy.Sample(30, 6_000_000)]
+    refused = energy.window_power(slow_power, 0, 60, 10, slow_counter)
+    assert refused.mean_w is None and refused.method is None and "at least 10 are needed" in refused.note
+    ten = [energy.Sample(6 * i, 200.0) for i in range(10)]
+    by_counter = energy.window_power(ten, 0, 60, 10, slow_counter)  # enough power samples: the counter gives the mean
+    assert by_counter.method == "energy_counter" and by_counter.mean_w == pytest.approx(200.0)
 
 
 def test_flat_values_keep_a_zero():
@@ -258,7 +296,8 @@ def test_repeated_counter_values_are_dropped_before_the_division():
     counter = [energy.Sample(10, 0), energy.Sample(11, 500_000), energy.Sample(12, 1_000_000),
                energy.Sample(13, 1_000_000)]
     assert energy.collapse(counter) == counter[:3]
-    assert energy.window_power([], 10, 13, 2, counter).mean_w == pytest.approx(500.0)
+    power = [energy.Sample(t, 400.0) for t in (10, 11, 12, 13)]
+    assert energy.window_power(power, 10, 13, 2, counter).mean_w == pytest.approx(500.0)
     flat = [energy.Sample(10, 5000), energy.Sample(11, 5000)]
     power = [energy.Sample(10, 90), energy.Sample(11, 110)]
     result = energy.window_power(power, 10, 11, 2, flat)  # one distinct value: fall back to the power samples

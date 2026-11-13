@@ -255,7 +255,7 @@ class Runner:
             old = json.loads(self.path.read_text(encoding="utf-8"))
         except ValueError:
             return False
-        return (old.get("run") or {}).get("status") == "complete"
+        return old.get("schema") == plans.SCHEMA and (old.get("run") or {}).get("status") == "complete"
 
     # ---- the run ----
 
@@ -266,7 +266,7 @@ class Runner:
         check_alone = getattr(self.backend, "check_alone", None)
         if check_alone is not None:
             check_alone()  # RunActive: another run is going; nothing here has been touched, and nothing is cleaned up
-        if self.path.is_file():  # an earlier attempt that did not finish: keep it beside the new one
+        if self.path.is_file():  # an earlier attempt that did not finish, or one of an earlier schema: keep it
             os.replace(self.path, self.dir / f"results.attempt-{int(self.wall())}.json")
         self.results = self._new_results()
         self.save()
@@ -455,13 +455,8 @@ class Runner:
             handle, target = self._start_side(launch, side, spec, record, out_dir, rel, held)
             if launch["kind"] == plans.WARMUP:
                 return
-            if tries:  # only now has the launch run again
-                record["load_retries"] = tries
-                record.setdefault("notes", []).append(
-                    f"the launch ran once more from a new start of the side, with the same requests (the first try's "
-                    f"files are the *.try-{tries}.* files)")
             try:
-                record["levels"] = self._load(launch, handle, target, out_dir, rel, record)
+                record["levels"] = self._load(launch, handle, target, out_dir, rel, record, tries)
             except guidellm.LoadError as error:
                 if not error.timed_out:
                     raise
@@ -471,6 +466,10 @@ class Runner:
                 tries += 1
                 self._discard_try(record, out_dir, rel, held, error, tries, first_note)
                 continue
+            except BaseException as error:  # such as a stop while GuideLLM was taken down after a time-out
+                if getattr(error, "load_timed_out", False):
+                    record["load_timeouts"] += 1
+                raise
             record["values"].update(guidellm.flat_values(record["levels"]))
             return
 
@@ -488,6 +487,11 @@ class Runner:
             t0 = self.clock()
             handle = held["handle"] = self.backend.start(self.plan, launch, side, spec)
             record["starts"] += 1
+            if retries:  # only now has the side started again
+                record["start_retries"] += 1
+                record.setdefault("notes", []).append(
+                    "the side was started once more after vLLM's start-up memory check, and its start is timed "
+                    "from then")
             deadline = t0 + timeout
             target = self.backend.endpoint(handle, deadline)
             alive = lambda: self.backend.alive(handle)  # noqa: E731
@@ -521,13 +525,12 @@ class Runner:
             return False
         if not logs.memory_profiling_failed(text):
             return False
-        record["start_retries"] += 1
         name = f"server.attempt-{attempt}.log"
         (out_dir / name).write_text(text, encoding="utf-8")
         record["artifacts"][f"server_log_attempt_{attempt}"] = f"{rel}/{name}"
         record.setdefault("notes", []).append(
-            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side was started once "
-            f"more, and its start is timed from then ({name} is the log of the start that stopped)")
+            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side is to be taken down "
+            f"and started once more ({name} is the log of the start that stopped)")
         self.backend.stop(handle)
         return True
 
@@ -563,7 +566,7 @@ class Runner:
         notes = record.setdefault("notes", [])
         for i in range(first_note, len(notes)):  # such as a power sampler that did not start in that try
             notes[i] = f"try {tries}: {kept_names(notes[i])}"
-        notes.append(f"{kept_names(str(error))}; the side is taken down, and the launch runs once more from a new "
+        notes.append(f"{kept_names(str(error))}; the side is to be taken down and the launch run once more from a new "
                      f"start with the same requests (that try's files are the *.try-{tries}.* files)")
         name, key = f"server.try-{tries}.log", f"server_log_try_{tries}"
         held["log_as"] = (name, key)  # a stop from here on: the teardown keeps this try's log under its own name
@@ -577,7 +580,8 @@ class Runner:
         held["handle"] = None
         held.pop("log_as", None)
 
-    def _load(self, launch: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
+    def _load(self, launch: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict,
+              retry: int = 0) -> list[dict]:
         sampler = None
         if self.plan["energy"]["source"] != "none":
             try:
@@ -589,6 +593,11 @@ class Runner:
                 sampler = None
         for stale in ("guidellm.json", "guidellm.log"):  # from an earlier attempt of the run in a reused folder
             (out_dir / stale).unlink(missing_ok=True)
+        if retry:  # only now does the load run again
+            record["load_retries"] = retry
+            record.setdefault("notes", []).append(
+                f"the launch ran once more from a new start of the side, with the same requests (the first try's "
+                f"files are the *.try-{retry}.* files)")
         try:
             report_path = self.backend.run_load(self.plan, launch, target, out_dir)
         finally:
@@ -710,10 +719,12 @@ def plan_lines(the_plan: Mapping) -> list[str]:
                    "one_sided_floor)")
     elif not power["reachable"]:
         out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
-                   f"verdict; with {the_plan['rounds']} every case gets NO VERDICT (too_few_rounds)")
+                   f"verdict; with {the_plan['rounds']} every primary case gets NO VERDICT (too_few_rounds), and "
+                   f"the secondary cases are graded on their own")
     else:
         out.append(f"a verdict on a primary case needs {power['must_agree']} of the {the_plan['rounds']} rounds to "
-                   f"lean the same way; at most {power['max_primary_cases']} primary cases can get one")
+                   f"lean the same way; at most {min(power['max_primary_cases'], power['family_size'])} primary "
+                   f"cases can get one")
     if not the_plan["balance"]["balanced"]:
         out.append(f"note: {the_plan['rounds']} rounds do not balance the run order; multiples of "
                    f"{the_plan['balance']['step']} do")

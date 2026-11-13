@@ -122,7 +122,7 @@ global:
       # Operator) through the cluster's monitoring, read every 2 s while the
       # comparison is on; none: no tokens per joule. A level with fewer power
       # samples than energy.minSamples (10) gets no figure, and at 8 rounds one
-      # missing figure costs that case its verdict.
+      # missing figure of side A or B costs a primary case its verdict.
       source: auto
 
 main:

@@ -94,7 +94,12 @@ def run(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None
         try:
             code = process.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            _stop(process)
+            try:
+                _stop(process)
+            except BaseException as error:  # the runner was told to stop while GuideLLM was taken down
+                _kill(process)
+                error.load_timed_out = True  # the time-out happened all the same: the runner counts it
+                raise
             raise LoadError(f"GuideLLM did not finish within {timeout_s:g} s and was stopped; see guidellm.log",
                             timed_out=True) from None
         except BaseException:  # the runner was told to stop: take GuideLLM down with it
@@ -103,6 +108,14 @@ def run(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None
     if code != 0 or not report.is_file():
         raise LoadError(f"GuideLLM exited with code {code}; see guidellm.log")
     return report
+
+
+def _kill(process: subprocess.Popen) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        pass
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -173,8 +186,9 @@ def levels(report: Mapping) -> list[dict]:
 
 def flat_values(level_list: list[Mapping]) -> dict[str, float]:
     """The comparison's per-launch figures from the usable levels (case ids as in plan.case_family). A figure of 0
-    is kept (a level whose requests finished without one output token has 0 tokens per second): the analysis gives
-    that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen."""
+    is kept (a level whose requests finished without one output token has 0 tokens per second): on side A or B the
+    analysis gives that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen; on a twin, that
+    round is left out of its side's floor, with a note."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")

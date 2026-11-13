@@ -18,10 +18,12 @@ Two sources of power samples, each a list of (time, watts):
 
 For a level's window [start, end] (from GuideLLM's report):
 
-- with two or more energy-counter samples inside the window: mean power = (E_last - E_first) / (t_last - t_first),
-  after dropping repeats of an unchanged counter value (a scrape faster than the exporter's own update repeats the
-  last value, and a repeat at either end would stretch or shrink the time the energy is divided by);
-- otherwise the mean of the power samples inside the window, which needs at least `min_samples` of them;
+- no figure unless the window holds at least `min_samples` power samples, also when the energy counter is there;
+- with two or more distinct energy-counter readings inside the window: mean power = (E_last - E_first) /
+  (t_last - t_first), after dropping repeats of an unchanged counter value (a scrape faster than the exporter's own
+  update repeats the last value, and a repeat at either end would stretch or shrink the time the energy is divided
+  by);
+- otherwise the mean of the power samples inside the window;
 - tokens per joule = the level's output tokens per second / mean power (W = J/s), and joules per token its inverse.
 
 With fewer samples the figure is left out with a note, never estimated from one sample. Standard library only, plus
@@ -101,7 +103,7 @@ def inside(samples: Iterable[Sample], start: float, end: float) -> list[Sample]:
 @dataclass(frozen=True)
 class Power:
     mean_w: float | None
-    samples: int
+    samples: int         # the power samples in the window, whichever method gives the mean
     method: str | None   # "energy_counter" or "power_mean"
     note: str | None
 
@@ -117,17 +119,18 @@ def collapse(samples: list[Sample]) -> list[Sample]:
 
 def window_power(power: Iterable[Sample], start: float, end: float, min_samples: int = 2,
                  counter: Iterable[Sample] = ()) -> Power:
-    """Mean GPU power over [start, end]: from the energy counter when it has two distinct samples in the window,
-    else the mean of the power samples (at least `min_samples` of them)."""
+    """Mean GPU power over [start, end], given at least `min_samples` power samples in the window: from the energy
+    counter when it has two distinct readings there, else the mean of the power samples."""
     in_counter = collapse(inside(counter, start, end))
+    in_power = inside(power, start, end)
+    needed = max(min_samples, 1)
+    if len(in_power) < needed:
+        return Power(None, len(in_power), None, f"{len(in_power)} power samples in the window; at least {needed} are "
+                     f"needed")
     if len(in_counter) >= 2 and in_counter[-1].t > in_counter[0].t:
         joules = (in_counter[-1].value - in_counter[0].value) / 1000.0
         if joules >= 0:
-            return Power(joules / (in_counter[-1].t - in_counter[0].t), len(in_counter), "energy_counter", None)
-    in_power = inside(power, start, end)
-    if len(in_power) < max(min_samples, 1):
-        return Power(None, len(in_power), None, f"{len(in_power)} power samples in the window; at least "
-                     f"{max(min_samples, 1)} are needed")
+            return Power(joules / (in_counter[-1].t - in_counter[0].t), len(in_power), "energy_counter", None)
     return Power(sum(s.value for s in in_power) / len(in_power), len(in_power), "power_mean", None)
 
 

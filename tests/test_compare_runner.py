@@ -636,8 +636,9 @@ def test_each_try_of_a_retried_launch_gets_its_own_memory_check_retry(tmp_path):
     assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
     assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log_try_1"]).read_text()
     # The first try's note is marked as that try's, and names its log as kept.
-    [old] = [n for n in l3["notes"] if n.startswith("try 1:")]
-    assert "server.attempt-1.try-1.log is the log of the start that stopped" in old
+    old = [n for n in l3["notes"] if n.startswith("try 1:")]
+    assert any("server.attempt-1.try-1.log is the log of the start that stopped" in n for n in old)
+    assert any("started once more after vLLM's start-up memory check" in n for n in old)
     text = (the_runner.dir / "results.md").read_text()
     assert "- launch 3 (A): started 4 times in all, then finished" in text
     assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
@@ -703,7 +704,7 @@ def test_the_first_tries_notes_are_marked_as_that_tries(tmp_path):
     assert first["status"] == "ok" and first["levels"][0]["energy"]["mean_power_w"] == pytest.approx(100.0)
     assert "try 1: power sampling did not start: RuntimeError" in first["notes"]
     assert not any(n.startswith("power sampling") for n in first["notes"])  # the second try's sampler started
-    [why] = [n for n in first["notes"] if "the side is taken down" in n]
+    [why] = [n for n in first["notes"] if "the side is to be taken down" in n]
     assert "see guidellm.try-1.log" in why  # the time-out's own text names the kept log, not the second try's
 
 
@@ -763,6 +764,64 @@ def test_a_second_try_that_never_loads_says_so(tmp_path, backend, code, starts):
     if code == "STOPPED":  # the teardown kept the first try's log under its own name, and nothing as the launch's
         assert "server_log_try_1" in failed["artifacts"] and "server_log" not in failed["artifacts"]
         assert "server.log" not in {p.name for p in (the_runner.dir / "launches/01-A-scored").iterdir()}
+
+
+class GpuBusyAfterTheMemoryCheck(FakeBackend):
+    """Launch 1's first start stops at vLLM's memory check; the GPU check before its start again fails."""
+
+    def gpu_free(self, plan, side):
+        super().gpu_free(plan, side)
+        if len(self.gpu_checks) == 2:
+            raise runner.RoundError("another program held the GPU", runner.GPU_NOT_FREE)
+
+
+def test_a_memory_check_retry_counts_only_once_the_side_starts_again(tmp_path):
+    results, backend, the_runner = run(tmp_path, GpuBusyAfterTheMemoryCheck(dies={1: 1}), rounds=ONE_ROUND)
+    failed = results["launches"][0]
+    assert (failed["error_code"], failed["starts"], failed["start_retries"]) == ("GPU_NOT_FREE", 1, 0)
+    assert backend.started.count((1, "A")) == 1
+    assert not any("started once more after" in note for note in failed["notes"])
+    assert any("to be taken down and started once more" in note for note in failed["notes"])
+    assert "server_log_attempt_1" in failed["artifacts"]  # the log of the start that stopped is kept
+    assert "started again after vLLM" not in (the_runner.dir / "results.md").read_text()
+
+
+class TermInSecondSampler(FakeBackend):
+    """SIGTERM lands while the second try's power sampler starts, before its GuideLLM run."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.samplers = 0
+
+    def sampler(self, plan, handle):
+        self.samplers += 1
+        if self.samplers == 2:
+            os.kill(os.getpid(), signal.SIGTERM)
+        return FakeSampler()
+
+
+def test_load_retries_counts_only_once_the_second_load_begins(tmp_path):
+    results, backend, the_runner = run(tmp_path, TermInSecondSampler(hang_once=True), rounds=ONE_ROUND)
+    failed = results["launches"][0]
+    assert (failed["error_code"], failed["starts"], failed["load_timeouts"], failed["load_retries"]) == (
+        "STOPPED", 2, 1, 0)
+    assert backend.loads == [(1, 1)]
+    assert not any("ran once more" in note for note in failed["notes"])
+    assert "- launch 1 (A): timed out 1 time, did not run again, then STOPPED" in (
+        the_runner.dir / "results.md").read_text()
+
+
+def test_a_finished_results_file_of_the_earlier_schema_is_kept_and_the_run_runs(tmp_path):
+    plan = plans.build(config(rounds=ONE_ROUND), "docker")
+    folder = tmp_path / plan["run_id"]
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text(json.dumps({"schema": "rhvp-image-compare/1", "run": {"status": "complete"},
+                                                     "rounds": []}))
+    results, backend, the_runner = run(tmp_path, rounds=ONE_ROUND)
+    assert results["schema"] == plans.SCHEMA and results["run"]["status"] == "complete" and backend.started
+    [kept] = list(folder.glob("results.attempt-*.json"))
+    assert json.loads(kept.read_text())["schema"] == "rhvp-image-compare/1"
+    assert cli.main(["report", str(kept)]) == 2 and cli.main(["analyze", str(kept)]) == 2
 
 
 class DiesThenStopFails(FakeBackend):
@@ -996,7 +1055,21 @@ def test_rounds_too_few_for_the_primary_cases_still_grade_the_secondary_ones(tmp
     assert (rows["c4/output_tokens_per_s"]["verdict"], rows["c4/output_tokens_per_s"]["reason"]) == (
         "NO VERDICT", "too_few_rounds")
     assert rows["c1/itl_ms_median"]["verdict"] == "SLOWER" and rows["c1/itl_ms_median"]["p_raw"] == 2 ** -5
-    assert any("need at least 8 rounds" in line for line in runner.plan_lines(results["plan"]))
+    [note] = [line for line in runner.plan_lines(results["plan"]) if "need at least 8 rounds" in line]
+    assert "every primary case gets NO VERDICT" in note and "secondary cases are graded" in note
+    assert "at most 4 primary cases can get one" in runner.plan_lines(
+        plans.build(config(rounds={"count": 16, "warmup": True, "twins": "both"}), "docker"))[1]
+
+
+def test_a_side_that_differs_from_its_twin_is_shown_with_no_cause(tmp_path):
+    results, _, _ = run(tmp_path, rounds=ONE_ROUND)
+    twins = results["analysis"]["same_vs_same"]
+    twins[0]["p_raw"] = 2 ** -7
+    head = "".join(show._head(results, [], []))
+    shown = words.TWIN_DIFFERS.format(cases=words.TWIN_DIFFERS_CASE.format(
+        side=twins[0]["side"], case=twins[0]["case"], p="0.00781"),
+        tested=sum(1 for t in twins if t["p_raw"] is not None))  # one round: only the case set here has a p-value
+    assert shown in head and "bias" not in head
 
 
 def test_the_live_server_comes_back_and_the_run_says_so(tmp_path, monkeypatch):

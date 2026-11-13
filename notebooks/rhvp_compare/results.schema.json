@@ -86,7 +86,7 @@
             "string",
             "null"
           ],
-          "description": "Set when the live server was running when the run began but had stopped by itself before the backend came to take it away: its state then (under docker the container's status, such as exited, or gone when the container had been removed). The backend left it as it was, so nothing brings it back after the run and server_restored stays null; run.notes, results.md and the log say so too. null otherwise; files written before this field existed do not have it."
+          "description": "Set when the live server was running when the run began but had stopped by itself during the image pulls, before the runner would have stopped it (also in a run that was itself stopped during the pulls): its state then (under docker the container's status, such as exited, or gone when the container had been removed). The backend left it as it was, so nothing brings it back after the run and server_restored stays null; run.notes, results.md and the log say so too. null otherwise; files written before this field existed do not have it."
         },
         "synthetic": {
           "type": "boolean",
@@ -604,7 +604,7 @@
             "min_samples": {
               "type": "integer",
               "minimum": 2,
-              "description": "No tokens per joule from fewer power samples (or energy-counter readings) in a level's window."
+              "description": "No tokens per joule from fewer power samples in a level's window, also when the energy counter gives the mean."
             }
           }
         },

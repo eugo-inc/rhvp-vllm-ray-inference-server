@@ -185,7 +185,7 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
         if r.get("load_timeouts")]
     if timed_out:
         parts.append(line(words.RUN_LOAD_RETRIED.format(launches=", ".join(timed_out), how=words.LOAD_RETRIED_HOW)))
-    unusable = [f"launch {u['index']} ({u['side']}) at {u['concurrency']} streams"
+    unusable = [words.RUN_LEVEL.format(index=u["index"], side=u["side"], concurrency=u["concurrency"])
                 for u in summary.levels_unusable(results)]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
@@ -196,8 +196,11 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
             for row in analysis.get("comparisons") or [] if any((row.get("lost") or {}).values())]
     if lost:
         parts.append(line(words.RUN_LOST.format(lost="; ".join(lost))))
-    if analysis.get("notes"):
-        parts.append(draw.notice(words.RUN_NOTES.format(notes="; ".join(analysis["notes"]))))
+    twins = [t for t in analysis.get("same_vs_same") or [] if t.get("p_raw") is not None]
+    differs = [words.TWIN_DIFFERS_CASE.format(side=t["side"], case=t["case"], p=f"{t['p_raw']:.3g}")
+               for t in twins if t["p_raw"] < 0.05]
+    if differs:
+        parts.append(draw.notice(words.TWIN_DIFFERS.format(cases="; ".join(differs), tested=len(twins))))
     if run.get("server_restored") is False:
         parts.append(draw.notice(words.RUN_SERVER))
     return parts
@@ -271,7 +274,8 @@ def verdicts(run: str | None = None) -> None:
                                                              needed=power["min_rounds"])))
         else:
             parts.append(line(words.POWER_NOTE.format(rounds=plan["rounds"], family=power["family_size"],
-                                                      agree=power["must_agree"], most=power["max_primary_cases"])))
+                                                      agree=power["must_agree"],
+                                                      most=min(power["max_primary_cases"], power["family_size"]))))
     draw.show(*parts)
 
 

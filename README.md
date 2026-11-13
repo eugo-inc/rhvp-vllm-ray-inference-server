@@ -382,8 +382,8 @@ the current side down; the server's pod then waits for the GPU. It tries the sca
 back to check.
 
 With the default settings a run is 8 rounds of 4 server starts, plus one warm-up start per side: 34 server starts.
-Each start is followed by three 60-second load levels, the power read and the teardown. We estimate about 4 to 6
-hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but we have not timed a run on a cluster.
+Each measured start is followed by three 60-second load levels, the power read and the teardown. We estimate about
+4 to 6 hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but we have not timed a run on a cluster.
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
@@ -498,7 +498,10 @@ The rule is fixed before the first launch and written into the results (`plan.an
   `abs(median - 1)`: how far two launches of one image land apart. A side's floor on a case is the largest over the
   cases of the same metric and role (for example every secondary inter-token latency), so one quiet level does not
   set a low bar for the others. The bar is side B's floor plus side A's. Each floor lists its spread and the rounds
-  outside the usual range (named, never dropped), and is marked provisional from fewer than 8 rounds.
+  outside the usual range (named, never dropped), and is marked provisional from fewer than 8 rounds. When a side
+  and its twin differ with an uncorrected p below 0.05, the results and the notebook say so; with the 28 such
+  comparisons of a default run, one turns up by chance in up to about 1 run in 5 (fewer when a launch's cases move
+  together).
 - **The test.** An exact two-sided sign test over the rounds whose two figures differ.
 - **Primary cases.** By default: time to first answer, and at the highest concurrency the median time to first
   token, the output tokens per second and the output tokens per joule. Only these share Holm's correction for
@@ -514,7 +517,8 @@ The rule is fixed before the first launch and written into the results (`plan.an
   (`more_than_one_node`); a launch of side A or B that failed on its own account, in a round where the other side
   did not (`side_failed`: its launch failed with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests
   failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
-  a figure of 0, such as no output tokens (`nonpositive_value`); one paired round (`single_measurement`); fewer
+  a figure of 0 on side A or B, such as no output tokens (`nonpositive_value`; a twin's 0 leaves that round out of
+  its side's floor, with a note in `analysis.notes`); one paired round (`single_measurement`); fewer
   rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side only, or a floor of exactly 0
   (`no_floor`, `one_sided_floor`, `zero_floor`).
 
@@ -607,8 +611,8 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   starts that side once more in the same launch and times its start from the new start; the launch's
   `start_retries`, `results.md` and the notebook say so. A second such exit of that start fails the launch
   (`SIDE_FAILED`). The same measurement sets the size of the server's KV cache, so memory that other programs take
-  in those seconds shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same
-  image got in the other rounds. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as
+  in those seconds shrinks it: in one launch of a smoke run a server got a small fraction of the KV cache the same
+  image got in its other launches. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as
   quiet as you can during a run.
 
 ### Comparing with this pattern's own server

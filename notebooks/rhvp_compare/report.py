@@ -75,8 +75,8 @@ def markdown(results: Mapping) -> str:
                  f"{len(plan['launches'])} launches. Load: GuideLLM, {load['prompt_tokens']} prompt and "
                  f"{load['output_tokens']} output tokens per request, {load['seconds_per_level']:.0f} s at each of "
                  f"{', '.join(str(c) for c in load['concurrencies'])} concurrent streams, seed {load['seed']}.")
-    lines.append(f"Method: B/A per round; exact two-sided sign test, Holm's correction over the "
-                 f"{power['family_size']} primary cases ({rule.get('plain') or power['plain']}), alpha "
+    lines.append(f"Method: B/A per round; exact two-sided sign test, Holm's correction over the primary cases "
+                 f"that have a p-value ({rule.get('plain') or power['plain']}; {power['family_size']} declared), alpha "
                  f"{plan['analysis']['alpha']}; the bar is the noise each side's twin measured (rule "
                  f"{plan['analysis']['rule']}). Energy: {plan['energy']['label']}, source {plan['energy']['source']}, "
                  f"at least {plan['energy']['min_samples']} power samples per level.")

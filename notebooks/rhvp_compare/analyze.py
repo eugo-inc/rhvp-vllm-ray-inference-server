@@ -119,11 +119,15 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
 
     # Floors: per side and case, then the largest over each group.
     case_floor: dict[tuple[str, str], stats.Floor | None] = {}
-    same_vs_same, notes = [], []
+    same_vs_same, notes, differs = [], [], []
     for side, twin in sorted(twin_of.items()):
         for case in cases:
             own, copy_ = _by_round(rows, side, case["id"]), _by_round(rows, twin, case["id"])
             both = [r for r in _paired(own, copy_) if own[r] > 0 and copy_[r] > 0]
+            zero = [r for r in _paired(own, copy_) if copy_[r] <= 0 < own[r]]  # side A or B at 0: nonpositive_value
+            if zero:
+                notes.append(f"side {side}'s twin had a figure of 0 on {case['id']} in round(s) "
+                             f"{', '.join(map(str, zero))}; those rounds are left out of side {side}'s floor")
             ratios = {r: own[r] / copy_[r] for r in both}
             floor = stats.floor(ratios)
             case_floor[(side, case["id"])] = floor
@@ -137,8 +141,11 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
                                  "outlier_rounds": list(floor.outlier_rounds), "provisional": floor.provisional,
                                  "p_raw": test.p if test else None, "order_split": [first, len(both) - first]})
             if test and test.p < 0.05:
-                notes.append(f"side {side} differs from its twin on {case['id']} more often than chance (p = "
-                             f"{test.p:.3g}, uncorrected): the machine or the run order is biasing the run")
+                differs.append((side, case["id"], max(lower, higher), lower + higher, test.p))
+    tested = sum(1 for row in same_vs_same if row["p_raw"] is not None)
+    for side, case_id, most, untied, p in differs:  # what was measured; never a cause
+        notes.append(f"side {side} and its twin differed on {case_id} the same way in {most} of {untied} rounds (p = "
+                     f"{p:.3g}, not corrected for the {tested} comparisons of a side with its twin)")
     groups: dict[str, list[str]] = {}
     for case in cases:
         groups.setdefault(case.get("group") or case["id"], []).append(case["id"])

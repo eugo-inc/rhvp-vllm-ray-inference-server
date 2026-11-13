@@ -26,7 +26,8 @@ SECTION_TITLE = {
 SECTION_TEXT = {
     1: ("One row per case. B/A is the median, over the rounds, of side B's figure divided by side A's in the same "
         "round. The bar is the noise the twins measured: side B's noise floor plus side A's, where a side's floor is "
-        "how far the median of side / twin lies from 1, the largest over the cases of one metric. The verdict "
+        "how far the median of side / twin lies from 1, the largest over the cases of one metric and role (primary "
+        "or secondary). The verdict "
         "follows a rule fixed before the first round, from the exact sign test over the rounds: outside the bar and "
         "significant, B is FASTER or SLOWER (times) or BETTER or WORSE (rates and tokens per joule); inside the bar "
         "and not significant, TIE; inside the bar but significant, or outside the bar but not significant, "
@@ -79,11 +80,15 @@ LOAD_RETRIED_HOW = ("After a time-out the side was taken down and the launch ran
 LOAD_RETRIED_RAN = "{index} ({side}): ran again"
 LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
+RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
             "(side_failed).")
 RUN_OTHERS = "Other runs in the results volume: {runs}."
-RUN_NOTES = "Notes from the analysis: {notes}."
+TWIN_DIFFERS = ("Differed from its twin in more rounds than chance would usually give: {cases}. These p-values are not "
+                "corrected for the {tested} comparisons of a side with its twin in this run; with that many, one this "
+                "low can turn up by chance.")
+TWIN_DIFFERS_CASE = "side {side} on {case} (p = {p})"
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----
@@ -119,8 +124,9 @@ LOAD_TIMEOUTS = ("GuideLLM timed out {a} times in the launches of side A and {b}
                  "included. Each such launch ran again from a new start, or failed.")
 LOAD_TIMEOUTS_ONE_SIDED = ("Only side {side} timed out: a load that stalls on one side only is a difference the "
                            "verdicts above do not show.")
-METHOD_LINE = ("Exact two-sided sign test over the rounds, Holm's correction over {family} primary cases ({plain}), "
-               "alpha {alpha:g}; the bar comes from the twins. All declared before the first round.")
+METHOD_LINE = ("Exact two-sided sign test over the rounds, Holm's correction over the primary cases that have a "
+               "p-value ({plain}; {family} declared), alpha {alpha:g}; the bar comes from the twins. All declared "
+               "before the first round.")
 NO_FIGURE = "-"
 
 # ---- section 2: start-up ----

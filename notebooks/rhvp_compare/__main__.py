@@ -58,9 +58,23 @@ def _run(args) -> int:
     return runner.main_run(args.config, str(results), _backend(args.backend, results))
 
 
+class OtherSchema(Exception):
+    """A results file written under another rule (another schema id)."""
+
+
+def _read(path: Path) -> dict:
+    """A results file of this schema; another one is refused (exit 2) with what it is."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    schema = data.get("schema") if isinstance(data, dict) else None
+    if schema != plans.SCHEMA:
+        raise OtherSchema(f"{path} is a results file of schema {schema or 'none'}, not {plans.SCHEMA}; it was "
+                          f"written under an earlier rule and is not read")
+    return data
+
+
 def _analyze(args) -> int:
     path = Path(args.results_file)
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = _read(path)
     data["analysis"] = analyze.analyze(data)
     if args.write:
         runner.write_json(path, data)
@@ -70,7 +84,7 @@ def _analyze(args) -> int:
 
 
 def _report(args) -> int:
-    print(report.markdown(json.loads(Path(args.results_file).read_text(encoding="utf-8"))))
+    print(report.markdown(_read(Path(args.results_file))))
     return 0
 
 
@@ -99,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except plans.PlanError as error:
         print(f"config error: {error}", file=sys.stderr)
+        return 2
+    except OtherSchema as error:
+        print(f"error: {error}", file=sys.stderr)
         return 2
     except runner.RoundError as error:
         print(f"error: {error}", file=sys.stderr)
