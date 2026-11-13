@@ -50,7 +50,8 @@
 #   HF_TOKEN        passed on when it starts with hf_ (gated models)
 #   RUNNER_MEMORY   memory limit of the runner container, GuideLLM included (default 8g)
 #   SIDE_MEMORY     memory limit of each side's container, as docker writes it (default none, for example 32g)
-#   SERVER_CONTAINER  a container that normally holds the GPU: stopped for the run, started again after it
+#   SERVER_CONTAINER  a container that normally holds the GPU: stopped for the run, started again after it (one
+#                   that stopped by itself before the run took it is left as it is; results.md says so)
 #   STOP_TIMEOUT    seconds the runner has to stop cleanly after docker stop (default 120)
 set -euo pipefail
 

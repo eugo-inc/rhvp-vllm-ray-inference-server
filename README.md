@@ -555,7 +555,9 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
 - `SERVER_CONTAINER` names a container that normally holds the GPU: the runner stops it before the first round, once
   both images are pulled, and starts it again when the run ends, the counterpart of scaling the pattern's server on
-  OpenShift. A stop during the pulls leaves it running.
+  OpenShift. A stop during the pulls leaves it running. A container that was running when the run began but has
+  stopped by itself (or been removed) by the end of the pulls is left as it is, and nothing starts it after the run:
+  the run says so in `run.server_found_down`, `results.md` and the log's last lines.
 - One comparison runs at a time here too: a second `compare-local.sh` refuses to start (exit 5) while the first
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
 - Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process

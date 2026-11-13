@@ -10,6 +10,8 @@ Run with: python -m pytest -q tests/test_compare_parsers.py
 
 import base64
 import json
+import os
+import signal
 import struct
 import subprocess
 import sys
@@ -738,7 +740,7 @@ class FakeDocker:
         return None if self.server_state is None else {"State": dict(self.server_state)}
 
     def stop(self, cid, grace_s=30):
-        self.calls.append(("stop", cid))
+        self.calls.append(("stop", cid, grace_s))
         self.server_state = {"Running": False, "Status": "exited"}
 
     def start(self, cid):
@@ -761,10 +763,21 @@ class FakeDocker:
         self.calls.append(("run", name, body))
         return 0, getattr(self, "run_log", "")
 
+    def info(self):
+        return {}
 
-def _docker_backend(docker, **env) -> dockerapi.DockerBackend:
+    def by_label(self, value):
+        return []
+
+
+def _stops(docker) -> list[tuple]:
+    """(container, grace in seconds) of every stop call."""
+    return [c[1:] for c in docker.calls if c[0] == "stop"]
+
+
+def _docker_backend(docker, results_root: Path = Path("/results"), **env) -> dockerapi.DockerBackend:
     base = {"RHVP_COMPARE_NETWORK": "n", "RHVP_COMPARE_HOST_RESULTS": "/tmp/r", "RHVP_COMPARE_RUNNER_NAME": "me"}
-    return dockerapi.DockerBackend(docker=docker, env={**base, **env})
+    return dockerapi.DockerBackend(docker=docker, env={**base, **env}, results_root=results_root)
 
 
 @pytest.mark.parametrize("text, expected", [("", None), ("32g", 32 * 2**30), ("512m", 512 * 2**20),
@@ -801,8 +814,9 @@ def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypat
     monkeypatch.setattr(dockerapi.time, "sleep", lambda s: None)
     docker = FakeDocker(server_state={"Running": True}, start_fails=1)
     backend = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.stop_grace_s = 17  # not docker's default of 30, so the stop is seen to pass the backend's own grace
     backend.prepare(_plan())
-    assert ("stop", "live") in docker.calls
+    assert _stops(docker) == [("live", 17)] and backend.server_found_down is None
     kinds = [c[0] for c in docker.calls]
     # The server stops only after every pull and the volume helper: a stop during a long pull leaves it running.
     assert kinds.index("stop") > max(i for i, k in enumerate(kinds) if k in ("pull", "run"))
@@ -814,11 +828,88 @@ def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypat
     backend.prepare(_plan())
     with pytest.raises(runner.RoundError, match="docker start live"):
         backend.restore_server()
-    idle = _docker_backend(FakeDocker(server_state={"Running": False}), RHVP_COMPARE_SERVER_CONTAINER="live")
+    idle = _docker_backend(FakeDocker(server_state={"Running": False, "Status": "exited"}),
+                           RHVP_COMPARE_SERVER_CONTAINER="live")
     idle.prepare(_plan())
     assert idle.restore_server() is None  # it was not running: left alone
+    assert idle.server_found_down is None  # and it was not running when the run began either: nothing to record
+    missing = FakeDocker()
     with pytest.raises(runner.RoundError, match="names no container"):
-        _docker_backend(FakeDocker(), RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())
+        _docker_backend(missing, RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())
+    assert not [c for c in missing.calls if c[0] == "pull"]  # a wrong name fails before any pull
+
+
+class HookDocker(FakeDocker):
+    """A FakeDocker that runs a callback once: during the first pull (`at="pull"`), or during the second read of the
+    server's state, the one just before its stop (`at="re-read"`). It stands in for a signal or a state change that
+    lands then."""
+
+    def __init__(self, hook, at: str = "pull", **kwargs):
+        super().__init__(**kwargs)
+        self.hook, self.at, self.inspects = hook, at, 0
+
+    def _fire(self):
+        hook, self.hook = self.hook, None
+        if hook:
+            hook()
+
+    def pull(self, ref):
+        super().pull(ref)
+        if self.at == "pull":
+            self._fire()
+
+    def inspect(self, cid):
+        self.inspects += 1
+        if self.at == "re-read" and self.inspects == 2:
+            self._fire()
+        return super().inspect(cid)
+
+
+def test_a_stop_during_the_pulls_leaves_the_server_running():
+    holder = {}
+    docker = HookDocker(lambda: holder["backend"].on_stop(), server_state={"Running": True})
+    backend = holder["backend"] = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    assert _stops(docker) == [] and docker.server_state["Running"]
+    assert backend.restore_server() is None  # nothing was stopped, so nothing to bring back
+    assert backend.server_found_down is None  # it is still running: nothing to record
+
+
+@pytest.mark.parametrize("now, found", [({"Running": False, "Status": "exited"}, "exited"), (None, "gone")])
+def test_the_server_state_is_read_again_just_before_the_stop(now, found):
+    docker = HookDocker(lambda: setattr(docker, "server_state", now), server_state={"Running": True})
+    backend = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    assert _stops(docker) == []  # it had stopped by itself (or been removed) during the pulls: left alone
+    assert backend.restore_server() is None
+    assert backend.server_found_down == found  # and the runner records it (run.server_found_down)
+
+
+@pytest.mark.parametrize("at", ["pull", "re-read"])
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_before_the_server_stop_leaves_it_running(tmp_path, sig, at):
+    """The whole path, with a real signal sent during the image pulls or during the server's second state read:
+    Runner._on_term hands the stop to the backend at once (on_stop), so prepare() does not stop the server, and the
+    run's end has nothing to start again. SIGINT is Ctrl-C on scripts/compare-local.sh."""
+    held = {}
+
+    def send():
+        # Only once the runner's handler is in place; otherwise the signal would end the test process itself.
+        assert signal.getsignal(sig) == held["runner"]._on_term
+        os.kill(os.getpid(), sig)
+
+    docker = HookDocker(send, at=at, server_state={"Running": True, "Status": "running"})
+    backend = _docker_backend(docker, results_root=tmp_path, RHVP_COMPARE_SERVER_CONTAINER="live")
+    the_runner = held["runner"] = runner.Runner(_plan(), backend, tmp_path, sleep=lambda s: None)
+    results = the_runner.run()
+    assert docker.hook is None  # the signal was sent
+    assert _stops(docker) == [] and not [c for c in docker.calls if c[0] == "start"]
+    assert docker.server_state["Running"]
+    run = results["run"]
+    assert (run["status"], run["error_code"], run["server_restored"]) == ("partial", runner.STOPPED, None)
+    assert results["rounds"] == [] and run["server_found_down"] is None
+    assert run["errors"] == ["stopped by SIGTERM"]  # the runner's words for any stop; no cleanup error
+    assert signal.getsignal(sig) != the_runner._on_term  # the earlier handler is back
 
 
 def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):

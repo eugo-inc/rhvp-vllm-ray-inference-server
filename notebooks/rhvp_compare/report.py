@@ -187,6 +187,9 @@ def markdown(results: Mapping) -> str:
     if run.get("server_restored") is False:
         lines += ["", "**The live server was not brought back.** " + "; ".join(
             e for e in run.get("errors") or [] if "live server" in e)]
+    if run.get("server_found_down"):
+        lines += ["", f"**The live server had stopped by itself** before the run came to take it away (its state "
+                      f"then: {run['server_found_down']}). The run left it as it was and did not start it again."]
     return "\n".join(lines) + "\n"
 
 

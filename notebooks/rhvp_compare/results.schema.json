@@ -81,6 +81,13 @@
           ],
           "description": "Whether the live server the backend took away for the run is back: on OpenShift the pattern's server Deployment scaled back (and read back), under docker the container named in RHVP_COMPARE_SERVER_CONTAINER started again. null when nothing was taken away (or not yet asked back); false makes the runner exit 4."
         },
+        "server_found_down": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set when the live server was running when the run began but had stopped by itself before the backend came to take it away: its state then (under docker the container's status, such as exited, or gone when the container had been removed). The backend left it as it was, so nothing brings it back after the run and server_restored stays null; run.notes, results.md and the log say so too. null otherwise; files written before this field existed do not have it."
+        },
         "synthetic": {
           "type": "boolean",
           "description": "true only in made-up example files (the notebook's REPLAY file); such a file is not a measurement."
