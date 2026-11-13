@@ -68,8 +68,9 @@ def eta_seconds(results: Mapping) -> int | None:
 
 
 def levels_unusable(results: Mapping) -> list[dict]:
-    """The load levels of finished rounds (scored and A/A) left out of the comparison: requests failed there, or none
-    finished."""
+    """The load levels of finished rounds (scored and A/A) where requests failed or none finished. A concurrency
+    level is then left out of the comparison; a scale-out surge (concurrency None) only loses its latency medians,
+    and its failed requests count as requests that missed the goals (guidellm.surge_metrics)."""
     out = []
     for r in results.get("rounds") or []:
         if r.get("status") != "ok" or r.get("kind") == "warmup":
@@ -81,6 +82,28 @@ def levels_unusable(results: Mapping) -> list[dict]:
                             "concurrency": level.get("concurrency"), "errored": requests.get("errored"),
                             "successful": requests.get("successful")})
     return out
+
+
+def surge_rate_fit(results: Mapping) -> str | None:
+    """Mode scaleout, when the surge rate did not separate the sides: "all_met" when every scored surge of both
+    sides met the latency goals for every request it judged and none failed, "all_failed" when requests failed in
+    every scored surge of both sides; else None (also when a side has no finished scored surge). README, "Picking
+    the surge rate", says what to change."""
+    if (results.get("plan") or {}).get("mode") != "scaleout":
+        return None
+    surges: dict[str, list] = {"A": [], "B": []}
+    for r in results.get("rounds") or []:
+        if r.get("kind") == "scored" and r.get("status") == "ok" and r.get("side") in surges:
+            surges[r["side"]] += [lv for lv in r.get("levels") or [] if lv.get("concurrency") is None]
+    if not surges["A"] or not surges["B"]:
+        return None
+    every = surges["A"] + surges["B"]
+    failed = [bool((lv.get("requests") or {}).get("errored")) for lv in every]
+    if not any(failed) and all(lv.get("slo_attainment") == 1 for lv in every):
+        return "all_met"
+    if all(failed):
+        return "all_failed"
+    return None
 
 
 def _primary(results: Mapping) -> list[dict]:

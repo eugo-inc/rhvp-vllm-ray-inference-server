@@ -775,6 +775,33 @@ start with them; `cold`, the default, starts every replica with empty caches. `r
 side's setting, and when the two sides differ they say so next to the primary metrics: the start-up figures then
 compare the two cache settings together with the two images. The setting works in mode `pairs` too.
 
+#### Picking the surge rate
+
+The surge tells the two images apart only at a rate that one replica cannot serve within the goals and two replicas
+can. That rate depends on the sides (their server settings, such as a cap on the requests in flight), the model, the
+GPU and the goals, so no default fits every run: `scaleOut.requestRate: 4` is a placeholder. To pick it:
+
+1. Run mode `pairs` once with the same sides, model, `load` token counts and `server.gpuMemoryUtilization`, with
+   `load.concurrencies` that go past the point where the latencies leave the goals (for example
+   `[1, 4, 8, 16, 32, 64]`).
+2. In its `results.json`, each scored round's `levels` give, per concurrency level, the requests finished per
+   second (`requests_per_s`) and the first-token and between-token times (`ttft_ms`, `itl_ms`, each with `median`
+   and `p90`). For each side, take the highest `requests_per_s` at which both 90th percentiles are still within
+   `scaleOut.ttftMs` and `scaleOut.tpotMs`: about what one replica serves within the goals.
+3. Set `scaleOut.requestRate` a little above the larger of the two sides' figures (such as 1.2 to 1.5 times it) and
+   below twice the smaller.
+
+On one GPU that both replicas share (`scaleOut.sharedGpu: true`), the second replica adds no GPU compute. It helps
+only where something else limits one replica, such as a cap on the requests in flight, and even then two replicas
+may serve no more than one: such a run still times the second replica's start, but its share within the goals may not
+tell the sides apart. `scaleOut.surgeSeconds` must also be well above the forced step plus the second replica's start
+under load; a second replica that answers only after the surge gets none of its requests (`results.md` counts those
+rounds).
+
+After a run, `results.md` and the notebook say when the rate did not tell the sides apart: every scored surge of both
+sides met the goals for all of its requests (raise the rate), or requests failed in every scored surge of both sides
+(lower it).
+
 `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
 mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`, for
 `scaleOut.sharedGpu: false`; by default both replicas get `GPUS`), `CPUSET` (the CPUs the runner and every container it starts may use) and

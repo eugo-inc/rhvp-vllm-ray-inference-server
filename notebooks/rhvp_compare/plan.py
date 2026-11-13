@@ -81,8 +81,10 @@ DEFAULTS: dict = {
                  "ciLevel": 0.95, "primary": None},
     "energy": {"source": "auto", "settleSeconds": 45,
                "thanosUrl": "https://thanos-querier.openshift-monitoring.svc:9091", "minSamples": 2},
-    # Read in mode scaleout only. The rate and the goals are placeholders: pick a rate above what one replica
-    # serves within the goals on your GPU, and goals that fit your model.
+    # Read in mode scaleout only. The rate and the goals are placeholders, not measured for any GPU: the rate must
+    # be above what one replica of the sides serves within the goals and below twice that (README, "Picking the
+    # surge rate"; summary.surge_rate_fit names a run whose rate did not tell the sides apart), and the goals must
+    # fit the model.
     "scaleOut": {"requestRate": 4, "surgeSeconds": 300, "stepAfterSeconds": 30, "ttftMs": 1000, "tpotMs": 100,
                  "sharedGpu": True},
 }

@@ -78,7 +78,10 @@ RETRIED_ROUND = "{index} (side {side})"
 RETRIED_REPLICAS = "{index} (side {side}, replica {replicas})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 LEVEL_AT = "round {index} side {side} at {concurrency} streams"
-LEVEL_SURGE = "round {index} side {side}, the surge"
+RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "
+              "a failed request counts as one that missed the goals in the share within the goals and in goodput, "
+              "and a surge in which no request finished counts as 0 for both.")
+LEVEL_SURGE = "round {index} side {side} ({errored} failed, {successful} finished)"
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = "Pairs lost to one side failing, per metric: {lost}. Those metrics are INCONCLUSIVE."
 RUN_OTHERS = "Other runs in the results volume: {runs}."
@@ -162,6 +165,14 @@ SCALE_EVENTS = ("Scale-ups the servers logged themselves (the pattern's rhvp-sca
                 "rounds, side B in {b} of {nb}.")
 SCALE_PHASE_HEADERS = ("Second replica's phase, from its log", "A median", "B median", "Rounds (A, B)")
 SCALE_NONE = "No scored round of this run reached the forced step."
+#: summary.surge_rate_fit: the surge rate did not separate the sides.
+SCALE_RATE_ALL_MET = ("Every scored surge met the latency goals for all of its requests, on both sides: one replica "
+                      "held this rate, the second replica had no queue to take, and the share within the goals "
+                      "cannot tell the sides apart. A higher scaleOut.requestRate suits these sides (README, "
+                      "\"Picking the surge rate\").")
+SCALE_RATE_ALL_FAILED = ("Requests failed in every scored surge, on both sides. Failed requests count as misses, and "
+                         "the share within the goals then mostly counts them. A lower scaleOut.requestRate may suit "
+                         "these sides (README, \"Picking the surge rate\").")
 
 # ---- section 5: provenance ----
 

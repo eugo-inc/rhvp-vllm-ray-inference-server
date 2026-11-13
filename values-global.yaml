@@ -160,8 +160,9 @@ global:
     #     gpuMemoryUtilization: 0.4
     #     maxModelLen: 8192
     #   scaleOut:
-    #     # Requests per second: pick a rate one replica cannot serve within
-    #     # the goals, so the second replica has work to take.
+    #     # Requests per second: above what one replica serves within the
+    #     # goals, and below twice that. 4 is a placeholder; README, "Picking
+    #     # the surge rate", says how to find the rate for your sides.
     #     requestRate: 4
     #     surgeSeconds: 300
     #     stepAfterSeconds: 30

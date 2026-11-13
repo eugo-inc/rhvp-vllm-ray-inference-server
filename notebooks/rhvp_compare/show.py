@@ -178,10 +178,13 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     retried = [_retried(r) for r in results.get("rounds") or [] if r.get("start_retries")]
     if retried:
         parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
-    unusable = [(words.LEVEL_SURGE if u["concurrency"] is None else words.LEVEL_AT).format(**u)
-                for u in summary.levels_unusable(results)]
+    troubled = summary.levels_unusable(results)
+    unusable = [words.LEVEL_AT.format(**u) for u in troubled if u["concurrency"] is not None]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
+    surges = [words.LEVEL_SURGE.format(**u) for u in troubled if u["concurrency"] is None]
+    if surges:
+        parts.append(line(words.RUN_SURGES.format(surges=", ".join(surges))))
     if run.get("error_code"):
         parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
     lost = [f"{row['label']} (A {row['pairs_lost']['A']}, B {row['pairs_lost']['B']})"
@@ -386,6 +389,9 @@ def scale_out(run: str | None = None) -> None:
             for m in declared], raw_last=True))
         if _cache_note(plan):
             parts.append(_cache_note(plan))
+        fit = summary.surge_rate_fit(results)
+        if fit:
+            parts.append(draw.notice(words.SCALE_RATE_ALL_MET if fit == "all_met" else words.SCALE_RATE_ALL_FAILED))
         if any((rows.get(m) or {}).get("role") == "secondary" for m in ids):
             parts.append(line(words.SECONDARY_NOTE))
         stepped = {side: [r for r in _scored(results, side) if (r.get("scale") or {}).get("new_replica")]

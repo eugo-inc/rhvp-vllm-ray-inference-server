@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from . import stats, summary
+from . import stats, summary, words
 
 
 def _num(value, unit: str = "") -> str:
@@ -138,6 +138,10 @@ def markdown(results: Mapping) -> str:
             lines.append(f"| {labels.get(row['id'], row['id'])} | {row['pairs']} | {typical} | {largest} |")
     if scale:
         lines += _scale_lines(results)
+        fit = summary.surge_rate_fit(results)
+        if fit:
+            lines += ["", "**" + (words.SCALE_RATE_ALL_MET if fit == "all_met" else words.SCALE_RATE_ALL_FAILED)
+                      + "**"]
     failed = [r for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         lines += ["", "Rounds that did not finish:"]
@@ -150,12 +154,19 @@ def markdown(results: Mapping) -> str:
                   "asked for):"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {_starts(r)}, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
-    unusable = summary.levels_unusable(results)
+    troubled = summary.levels_unusable(results)
+    unusable = [u for u in troubled if u["concurrency"] is not None]
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]
-        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}), "
-                  f"{'the surge' if u['concurrency'] is None else str(u['concurrency']) + ' streams'}: "
+        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}), {u['concurrency']} streams: "
                   f"{u['errored']} requests failed, {u['successful']} succeeded" for u in unusable]
+    surges = [u for u in troubled if u["concurrency"] is None]
+    if surges:
+        lines += ["", "Surges in which requests failed or none finished. Only their latency medians are left out of "
+                      "the comparison: a failed request counts as one that missed the goals in the share within the "
+                      "goals and in goodput, and a surge in which no request finished counts as 0 for both:"]
+        lines += [f"- round {u['index']} (side {u['side']}, {u['kind']}): {u['errored']} requests failed, "
+                  f"{u['successful']} succeeded" for u in surges]
     lost = [row for row in rows if (row.get("pairs_lost") or {}).get("A") or (row.get("pairs_lost") or {}).get("B")]
     if lost:
         lines += ["", "Metrics that lost pairs because one side failed (so INCONCLUSIVE):"]

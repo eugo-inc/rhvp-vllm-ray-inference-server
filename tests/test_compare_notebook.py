@@ -23,7 +23,7 @@ SYNTHETIC = NOTEBOOKS / "compare-recordings" / "synthetic.json"
 sys.path.insert(0, str(NOTEBOOKS))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from rhvp_compare import cells, example, report, show, words  # noqa: E402
+from rhvp_compare import cells, example, report, show, summary, words  # noqa: E402
 from test_notebook_rules import CAUSE, HARDWARE, VENDOR, _strings, _visible  # noqa: E402
 
 SCHEMA = json.loads((NOTEBOOKS / "rhvp_compare" / "results.schema.json").read_text())
@@ -188,13 +188,60 @@ def test_a_surge_left_out_and_a_late_replica_are_named(monkeypatch):
     late = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "B")
     late["scale"]["new_replica"]["joined_during_surge"] = False
     failed = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "A")
-    failed["levels"][0].update(usable=False, note="every request failed")
+    failed["levels"][0].update(usable=False, note="some requests failed",
+                               requests={"successful": 40, "errored": 3, "incomplete": 0})
     text = _shown(monkeypatch, results, show.scale_out)
     assert words.SCALE_LATE.format(rounds=late["index"]) in text
-    assert words.LEVEL_SURGE.format(index=failed["index"], side="A") in text and "None streams" not in text
+    assert words.LEVEL_SURGE.format(index=failed["index"], side="A", errored=3, successful=40) in text
+    assert "None streams" not in text
     markdown = report.markdown(results)
-    assert f"round {failed['index']} (side A, scored), the surge:" in markdown
     assert "The second replica" in markdown and "| B | 8 |" in markdown
+
+
+def test_a_surge_with_failed_requests_is_not_said_to_be_left_out(monkeypatch):
+    # Its share within the goals and goodput still count (failed requests as misses); only its latency medians go.
+    results = example.synthesize_scale_out()
+    failed = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "A")
+    failed["levels"][0].update(usable=False, requests={"successful": 40, "errored": 3, "incomplete": 0})
+    text = _shown(monkeypatch, results, show.verdicts)
+    assert "Load levels left out" not in text
+    assert words.RUN_SURGES.split(":")[0] in text and "Only their latency medians are left out" in text
+    markdown = report.markdown(results)
+    assert "Load levels left out of the comparison" not in markdown
+    assert f"- round {failed['index']} (side A, scored): 3 requests failed, 40 succeeded" in markdown
+    assert "Only their latency medians are left out of the comparison" in markdown
+    assert "counts as one that missed the goals in the share within the goals and in goodput" in markdown
+
+
+def _surges(results):
+    return [lv for r in results["rounds"] if r["kind"] == "scored" for lv in r["levels"]]
+
+
+@pytest.mark.parametrize("case", ["all_met", "all_failed", "mixed"])
+def test_a_surge_rate_that_did_not_separate_the_sides_is_named(monkeypatch, case):
+    results = example.synthesize_scale_out()
+    for i, level in enumerate(_surges(results)):
+        if case == "all_met":
+            level.update(slo_attainment=1.0, requests={"successful": 300, "errored": 0, "incomplete": 0})
+        elif case == "all_failed" or (case == "mixed" and i % 2):
+            level.update(usable=False, requests={"successful": 250, "errored": 50, "incomplete": 0})
+    note = {"all_met": words.SCALE_RATE_ALL_MET, "all_failed": words.SCALE_RATE_ALL_FAILED}.get(case)
+    assert summary.surge_rate_fit(results) == (None if case == "mixed" else case)
+    text = _shown(monkeypatch, results, show.scale_out)
+    markdown = report.markdown(results)
+    for shown in (words.SCALE_RATE_ALL_MET, words.SCALE_RATE_ALL_FAILED):
+        head = shown.split(" (README")[0]
+        assert (head in text) == (shown == note) and (head in markdown) == (shown == note)
+
+
+def test_the_surge_rate_note_needs_a_finished_surge_on_each_side():
+    results = example.synthesize_scale_out()
+    for r in results["rounds"]:
+        if r["kind"] == "scored":
+            r["levels"][0].update(slo_attainment=1.0, requests={"successful": 300, "errored": 0, "incomplete": 0})
+            if r["side"] == "B":
+                r["status"] = "failed"
+    assert summary.surge_rate_fit(results) is None
 
 
 def test_the_scale_out_cell_with_no_forced_step_and_no_gpu(monkeypatch):
