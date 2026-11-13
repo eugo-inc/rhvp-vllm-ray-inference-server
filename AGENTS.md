@@ -206,9 +206,9 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
   `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
-  `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can replace `analyze.py`
-  and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a file of another
-  version with a notice.
+  `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can
+  replace `analyze.py` and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a
+  file of another version with a notice.
 - Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, an estimate of about 4 to
   6 hours (16 rounds: 66 starts, about 8 to 12 hours). Unmeasured on any cluster. The Job's
   `activeDeadlineSeconds` (48 h) and the per-launch side deadline (`kube.side_deadline`) and stop budget do not

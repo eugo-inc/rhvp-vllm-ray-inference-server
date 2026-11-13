@@ -296,6 +296,17 @@ def test_a_twins_zero_gives_every_case_of_its_floor_group_no_verdict_with_a_note
                             "(nonpositive_value)"]
 
 
+def test_a_zero_paired_only_with_the_other_side_is_named_in_a_note():
+    """Side B has no twin here, so its 0 in round 1 sits only in the pair of B and A: no verdict, and a note."""
+    base = _noisy(10.0, 5.0, keys=("A", "A~same", "B"))
+    rows, positions = _rows({**base, "B": [0.0] + base["B"][1:]})
+    got = analyze.analyse(rows, positions, {"A~same": "A"}, SECONDARY)
+    assert (got["comparisons"][0]["outcome"], got["comparisons"][0]["reason"]) == ("no_verdict", "nonpositive_value")
+    assert got["nonpositive_twins"] == []
+    assert got["notes"] == ["side B had a figure of 0 on t in round(s) 1, paired with side A: t gets NO VERDICT "
+                            "(nonpositive_value)"]
+
+
 def test_a_sides_own_zero_beside_its_twin_counts_even_without_the_other_side():
     """Side A's 0 in round 3, where side B has no figure (its launch failed for another reason): no pair of B and
     A carries it, but A's comparison with its twin does, so A has no floor and the case has no verdict."""

@@ -191,6 +191,12 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
         lower, higher = stats.signs(ratios)
         test = stats.sign_test(lower, higher) if len(positive) > 1 else None
         ratio = stats.median(ratios) if ratios else None
+        for side, other, values in ((subject, baseline, s), (baseline, subject, b)):  # a 0 not named beside its twin
+            beside_twin = (nonpositive.get((side, cid)) or {}).get("side_rounds") or []
+            zero = [r for r in paired if values[r] <= 0 and r not in beside_twin]
+            if zero:
+                notes.append(f"side {side} had a figure of 0 on {cid} in round(s) {', '.join(map(str, zero))}, paired "
+                             f"with side {other}: {cid} gets NO VERDICT (nonpositive_value)")
         first = sum(1 for r in positive if pos.get((r, subject), 0) < pos.get((r, baseline), 0))
         fs, fs_case = group_floor(subject, case)
         fb, fb_case = group_floor(baseline, case)

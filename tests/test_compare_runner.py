@@ -842,8 +842,8 @@ def test_a_twins_zero_gives_its_floor_group_no_verdict_and_is_shown_in_the_noteb
     assert all((t["side"], t["side_rounds"], t["twin_rounds"]) == ("B", [], [2]) for t in zeros.values())
     assert not {(t["side"], t["case"]) for t in analysis["same_vs_same"]} & {("B", case) for case in zeros}
     cases = results["plan"]["cases"]
-    groups = {t["case"]: {c["id"] for c in cases if c["group"] == next(x for x in cases if x["id"] == t["case"])["group"]}
-              for t in zeros.values()}
+    group_of = {c["id"]: c["group"] for c in cases}
+    groups = {t["case"]: {c["id"] for c in cases if c["group"] == group_of[t["case"]]} for t in zeros.values()}
     assert all(set(zeros[case]["cases"]) == group for case, group in groups.items())
     rows = rows_of(results)
     for case in set().union(*groups.values()):

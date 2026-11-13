@@ -519,10 +519,9 @@ The rule is fixed before the first launch and written into the results (`plan.an
   failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
   a figure of 0, such as no output tokens, on side A or B or on a twin (`nonpositive_value`: a 0 gives no ratio; in
   a side's comparison with its twin it leaves the side with no noise floor, so every case of that floor group gets
-  no verdict, and the results and the notebook name the side and the round); one paired round
-  (`single_measurement`); fewer
-  rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side only, or a floor of exactly 0
-  (`no_floor`, `one_sided_floor`, `zero_floor`).
+  no verdict; the results name the side and the round, and the notebook does for a 0 beside a twin); one paired
+  round (`single_measurement`); fewer rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side
+  only, or a floor of exactly 0 (`no_floor`, `one_sided_floor`, `zero_floor`).
 
 Every outcome is in `analysis.comparisons[].outcome` (`better`, `worse`, `tie`, `unresolved`, `no_verdict`), with
 `reason` and the display word in `verdict`.
