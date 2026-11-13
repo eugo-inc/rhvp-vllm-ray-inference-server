@@ -167,10 +167,10 @@ SCALE_EVENTS = ("Scale-ups the servers logged themselves (the pattern's rhvp-sca
 SCALE_PHASE_HEADERS = ("Second replica's phase, from its log", "A median", "B median", "Rounds (A, B)")
 SCALE_NONE = "No scored round of this run reached the forced step."
 #: summary.surge_rate_fit: the surge rate did not separate the sides.
-SCALE_RATE_ALL_MET = ("Every scored surge met the latency goals for all of its requests, on both sides: one replica "
-                      "held this rate, the second replica had no queue to take, and the share within the goals "
-                      "cannot tell the sides apart. A higher scaleOut.requestRate suits these sides (README, "
-                      "\"Picking the surge rate\").")
+SCALE_RATE_ALL_MET = ("Every scored surge met the latency goals for all of its requests, on both sides: the rate "
+                      "never pushed the replicas past the goals, and the share within the goals cannot tell the "
+                      "sides apart. A higher scaleOut.requestRate suits these sides (README, \"Picking the surge "
+                      "rate\").")
 SCALE_RATE_ALL_FAILED = ("Requests failed in every scored surge, on both sides. Failed requests count as misses, and "
                          "the share within the goals then mostly counts them. A lower scaleOut.requestRate may suit "
                          "these sides (README, \"Picking the surge rate\").")
