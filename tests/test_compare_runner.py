@@ -516,9 +516,17 @@ def test_the_termination_message_never_passes_4_kib():
 
 
 def test_a_hung_load_is_tried_once_more(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(hang_once=True), rounds={"pairs": 2, "warmup": False})
+    results, _, the_runner = run(tmp_path, FakeBackend(hang_once=True), rounds={"pairs": 2, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
     first = results["rounds"][0]
     assert first["status"] == "ok" and "run once more" in first["notes"][0]
+    assert [r["load_retries"] for r in results["rounds"]] == [1, 0, 0, 0]
+    text = (the_runner.dir / "results.md").read_text()
+    assert "Rounds whose load ran again after GuideLLM timed out (GuideLLM ran once more against the same server" in text
+    assert "- round 1 (side A, scored): ran again, then finished" in text
+    head = "".join(show._head(results, [], []))
+    assert "Rounds whose load ran again after GuideLLM timed out: 1 (side A)." in head
+    assert "against the same server" in head
 
 
 def test_a_complete_run_is_not_run_again(tmp_path):
@@ -1039,31 +1047,41 @@ def test_a_new_replica_that_never_answers_fails_the_round(tmp_path):
     assert [l["replica"] for l in failed["launches"]] == [1, 2]
 
 
-def test_a_surge_whose_guidellm_timed_out_is_run_once_more_and_the_round_counts(tmp_path):
+def test_a_surge_whose_guidellm_timed_out_runs_the_round_once_more_and_the_round_counts(tmp_path):
     # Round 3 (side A, pair 1): GuideLLM hangs at the end of the first surge. As in mode pairs, one stall of the load
-    # tool is tried once more; the round keeps its first replica, starts a new second one at a new forced step, and
-    # every scale.* and surge.* figure comes from the second surge.
+    # tool is tried once more, but from a new first replica: the old one has served that surge, and its prefix cache
+    # would hold the same requests. The round starts both replicas again, and every figure comes from the second try.
     clock = FakeClock()
     backend = ScaleBackend(clock, stalls={3: 1})
     results, the_runner = scale_run(tmp_path, backend, clock)
     jsonschema.validate(results, SCHEMA)
     r3 = results["rounds"][2]
-    assert (r3["index"], r3["status"], r3["error_code"]) == (3, "ok", None)
+    assert (r3["index"], r3["status"], r3["error_code"], r3["load_retries"]) == (3, "ok", None, 1)
+    assert all(r["load_retries"] == 0 for r in results["rounds"] if r["index"] != 3)
     assert backend.surges[3] == 2 and backend.loads[0].stopped  # the stalled GuideLLM was stopped
-    assert backend.started.count((3, "A", 1)) == 1 and backend.started.count((3, "A", 2)) == 2
-    assert backend.stopped.count((3, 1)) == 1 and backend.stopped.count((3, 2)) == 2
+    assert [s for s in backend.started if s[0] == 3] == [(3, "A", 1), (3, "A", 2), (3, "A", 1), (3, "A", 2)]
+    assert [s for s in backend.stopped if s[0] == 3][:2] == [(3, 2), (3, 1)]  # the first try, before the second
+    assert backend.stopped.count((3, 1)) == 2 and backend.stopped.count((3, 2)) == 2
     assert all(r.stopped for r in backend.routers)
-    assert {"scale.first_answer_s", "surge.slo_attainment"} <= set(r3["metrics"])
-    assert 5 <= r3["scale"]["step_at_s"] < 5.5 and r3["scale"]["new_replica_share"] == 0.25
-    assert [l["replica"] for l in r3["launches"]] == [1, 2]
-    assert any("run once more against the same first replica" in note for note in r3["notes"])
-    assert "stalled" in (the_runner.dir / r3["artifacts"]["guidellm_surge_1"]).read_text()
+    assert {"startup.ready_s", "scale.first_answer_s", "surge.slo_attainment"} <= set(r3["metrics"])
+    assert r3["startup"]["ready_s"] >= 0 and 5 <= r3["scale"]["step_at_s"] < 5.5
+    assert r3["scale"]["new_replica_share"] == 0.25
+    assert any("run once more from a new first replica, with the same requests" in note for note in r3["notes"])
+    assert "stalled" in (the_runner.dir / r3["artifacts"]["guidellm_try_1"]).read_text()
     assert "finished" in (the_runner.dir / "rounds/03-A-scored/guidellm.log").read_text()
-    assert "server_log_2_surge_1" in r3["artifacts"]
+    for key in ("server_log_try_1", "server_log_2_try_1", "server_log", "server_log_2", "load_report"):
+        assert (the_runner.dir / r3["artifacts"][key]).is_file(), key
+    assert r3["artifacts"]["server_log_try_1"] == "rounds/03-A-scored/server.try-1.log"
     rows = {row["id"]: row for row in results["analysis"]["metrics"]}
     assert rows["surge.slo_attainment"]["verdict"] == "FASTER" and rows["surge.slo_attainment"]["n_pairs"] == 7
     assert all(row["pairs_lost"] == {"A": 0, "B": 0, "both": 0, "other": 0} for row in rows.values())
     assert results["run"]["status"] == "complete" and results["run"]["error_code"] is None
+    text = (the_runner.dir / "results.md").read_text()
+    assert "(the whole round ran once more from a new first replica, with the same requests" in text
+    assert "- round 3 (side A, scored): ran again, then finished" in text
+    head = "".join(show._head(results, [], []))
+    assert "Rounds whose load ran again after GuideLLM timed out: 3 (side A)." in head
+    assert "from a new first replica" in head
 
 
 def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
@@ -1074,7 +1092,8 @@ def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
     failed = results["rounds"][0]
     assert (failed["status"], failed["error_code"]) == ("failed", "LOAD_FAILED")
     assert backend.surges[1] == 2 and backend.started.count((1, "A", 2)) == 2
-    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 2), (1, 2)]
+    assert backend.started.count((1, "A", 1)) == 2 and failed["load_retries"] == 1
+    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 1), (1, 2), (1, 2)]
 
 
 def test_a_scale_round_starts_its_new_replica_once_more_after_vllms_memory_check(tmp_path):

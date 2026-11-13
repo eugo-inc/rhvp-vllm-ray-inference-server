@@ -215,9 +215,11 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. A
   side whose server exits at vLLM's start-up memory check (`Error in memory profiling` in its log) is started once
   more in the same round (`runner.START_RETRIES`, the round's `start_retries`, and the launch record's own
-  `start_retries`); in mode `scaleout` the second replica gets the same one retry, timed from its first ask. When
-  the run ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the
-  scale back, and records `run.server_restored`; a server that did not come back is exit 4.
+  `start_retries`); in mode `scaleout` the second replica gets the same one retry, timed from its first ask. A
+  GuideLLM time-out is tried once more (the round's `load_retries`): in mode pairs against the same server, in mode
+  `scaleout` as the whole round from a new first replica, with the same requests (the first try's files are kept as
+  `*.try-1.*`). When the run ends it scales the server back to `compare.serverReplicas` (1), tries again for about a
+  minute, reads the scale back, and records `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
   sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
 - SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current round short and asks the server back at once,

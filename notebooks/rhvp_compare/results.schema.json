@@ -1034,7 +1034,8 @@
         "metrics",
         "artifacts",
         "launches",
-        "start_retries"
+        "start_retries",
+        "load_retries"
       ],
       "properties": {
         "index": {
@@ -1181,17 +1182,21 @@
               "type": "string",
               "description": "Mode scaleout: the same for the second replica, when it was started again."
             },
-            "guidellm_surge_1": {
+            "guidellm_try_1": {
               "type": "string",
-              "description": "Mode scaleout: GuideLLM's log of a surge that timed out and was run once more (runner.SURGE_RETRIES)."
+              "description": "Mode scaleout: GuideLLM's log of the round's first try, whose surge timed out, so the round ran once more (runner.SURGE_RETRIES, load_retries). Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
             },
-            "router_surge_1": {
+            "router_try_1": {
               "type": "string",
-              "description": "Mode scaleout: the router's log of that first surge."
+              "description": "Mode scaleout: the router's log of that first try."
             },
-            "server_log_2_surge_1": {
+            "server_log_try_1": {
               "type": "string",
-              "description": "Mode scaleout: the log of the second replica of that first surge, taken down before the surge ran again."
+              "description": "Mode scaleout: the first replica's log of that first try, taken down before the round ran again."
+            },
+            "server_log_2_try_1": {
+              "type": "string",
+              "description": "Mode scaleout: the second replica's log of that first try, taken down before the round ran again."
             }
           }
         },
@@ -1205,6 +1210,12 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). Each replica is started again at most once (its launch record's start_retries); a second such failure of the same replica fails the round (SIDE_FAILED). This is the sum over the round's replicas. The first replica's start-up figures are timed from its last start; a replica that a scale-out round adds is timed from when it was first asked for, so its first try's time counts."
+        },
+        "load_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How many times the round's load ran again after GuideLLM timed out (at most once). Mode pairs runs GuideLLM once more against the same server, with the same requests. Mode scaleout runs the whole round once more: a new first replica, started and timed, then the surge with the same requests and a new second replica (the first try's files are the *_try_1 artifacts). Every figure of the round comes from the last try."
         },
         "scale": {
           "type": [

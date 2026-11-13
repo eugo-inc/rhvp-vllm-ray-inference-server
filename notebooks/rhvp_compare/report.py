@@ -154,6 +154,16 @@ def markdown(results: Mapping) -> str:
                   "asked for):"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {_starts(r)}, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
+    reloaded = [r for r in results.get("rounds") or [] if r.get("load_retries")]
+    if reloaded:
+        how = ("the whole round ran once more from a new first replica, with the same requests, and every figure of "
+               "the round comes from that second try; the first try's files are the round's *.try-1.* files"
+               if plan.get("mode") == "scaleout" else
+               "GuideLLM ran once more against the same server, with the same requests, and the round's figures "
+               "come from that second run")
+        lines += ["", f"Rounds whose load ran again after GuideLLM timed out ({how}):"]
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): ran again, then "
+                  f"{'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in reloaded]
     troubled = summary.levels_unusable(results)
     unusable = [u for u in troubled if u["concurrency"] is not None]
     if unusable:

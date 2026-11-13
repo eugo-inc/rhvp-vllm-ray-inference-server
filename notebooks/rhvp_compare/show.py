@@ -178,6 +178,11 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     retried = [_retried(r) for r in results.get("rounds") or [] if r.get("start_retries")]
     if retried:
         parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
+    reloaded = [words.RETRIED_ROUND.format(index=r["index"], side=r["side"]) for r in results.get("rounds") or []
+                if r.get("load_retries")]
+    if reloaded:
+        how = words.LOAD_RETRIED_SCALE if plan.get("mode") == "scaleout" else words.LOAD_RETRIED_PAIRS
+        parts.append(line(words.RUN_LOAD_RETRIED.format(rounds=", ".join(reloaded), how=how)))
     troubled = summary.levels_unusable(results)
     unusable = [words.LEVEL_AT.format(**u) for u in troubled if u["concurrency"] is not None]
     if unusable:

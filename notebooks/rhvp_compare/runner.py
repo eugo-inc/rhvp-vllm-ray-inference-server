@@ -27,9 +27,11 @@ second replica of the same side, times it from its start to its first answer, an
 round keeps how many requests each replica got (`scale.router`), so the new replica's share of the surge is on
 record. A second replica that never answers fails the round (SIDE_NEVER_READY); one that answers only after the surge
 has ended is still timed, with a share of 0. When GuideLLM times out (the stall mode pairs also tries once more,
-SURGE_RETRIES), the second replica, the router and GuideLLM are taken down and the surge runs once more against the
-same first replica, with its own forced step and a new second replica; the round's scale.* and surge.* figures then
-all come from that second surge. A second time-out is LOAD_FAILED, as in mode pairs.
+SURGE_RETRIES), the whole round runs once more: GuideLLM, the router and both replicas are taken down, and a new first
+replica is started and timed, then the surge runs with the same requests (the same load seed) and a new second
+replica. A surge sent again to the first replica would find the first surge's prompts in its prefix cache, which no
+other round has. Every figure of the round then comes from that second try; the first try's files are kept as
+*.try-1.*, and the round's `load_retries` says it ran again. A second time-out is LOAD_FAILED, as in mode pairs.
 
 Every server start is recorded in the round's `launches` (launch.py): what the runner ran, and the environment the
 server process saw when the backend can read it (`launch_facts`).
@@ -75,9 +77,10 @@ ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED
 #: check (logs.memory_profiling_failed); recorded in that replica's launch record and summed in the round's
 #: start_retries. A second such failure of the same replica is SIDE_FAILED.
 START_RETRIES = 1
-#: How many more times a scale round runs its surge after GuideLLM timed out (LoadError.timed_out): the same one
+#: How many more times a scale round runs after its surge's GuideLLM timed out (LoadError.timed_out): the same one
 #: retry mode pairs gives a GuideLLM time-out, so one stall of the load tool is not a failure of the side. The retry
-#: needs a new forced step, so the second replica is started again too; a second time-out is LOAD_FAILED.
+#: starts the round again from a new first replica (see the module's docstring), and the round's load_retries counts
+#: it; a second time-out is LOAD_FAILED.
 SURGE_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
@@ -389,7 +392,7 @@ class Runner:
                         "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
                         "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
-                        "launches": [], "start_retries": 0}
+                        "launches": [], "start_retries": 0, "load_retries": 0}
         held: dict = {"handle": None, "replicas": [], "load": None, "router": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
@@ -506,12 +509,12 @@ class Runner:
 
     def _scale_round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                      held: dict) -> None:
-        """The first replica as in any round, then the surge (`_surge`). A surge whose GuideLLM timed out is run once
-        more against the same first replica (SURGE_RETRIES), as mode pairs runs GuideLLM once more against the same
-        server."""
-        _, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
+        """The first replica as in any round, then the surge (`_surge`). A surge whose GuideLLM timed out runs the
+        round once more (SURGE_RETRIES) from a new first replica, so the second try meets the same conditions as
+        every other round: a first replica that has served no surge, and the same requests."""
         tries = 0
         while True:
+            _, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
             try:
                 self._surge(round_, side, spec, record, out_dir, rel, held, target)
                 return
@@ -519,37 +522,48 @@ class Runner:
                 if not error.timed_out or tries >= SURGE_RETRIES:
                     raise
                 tries += 1
-                self._surge_again(record, out_dir, rel, held, error, tries)
+                self._discard_try(record, out_dir, rel, held, error, tries)
 
-    def _surge_again(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int) -> None:
-        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, keep their logs and the second
-        replica's as *.surge-N.*, take the second replica down, and clear what the surge had recorded, so the next
-        surge starts from the first replica alone."""
+    def _discard_try(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int) -> None:
+        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, take both replicas down, keep every
+        file of that try as *.try-N.* (artifact keys *_try_N), and clear what the try had recorded, so the round
+        starts again from the GPU check."""
         self._stop_scale_helpers(held, record)
         held["load"] = held["router"] = None
-        for name in ("guidellm.log", "router.log"):
+
+        def keep(name: str, key: str) -> None:
+            stem, dot, ext = name.rpartition(".")
+            kept = f"{stem}.try-{tries}{dot}{ext}"
             if (out_dir / name).exists():
-                stem, dot, ext = name.rpartition(".")
-                (out_dir / name).replace(out_dir / f"{stem}.surge-{tries}{dot}{ext}")
-                record["artifacts"][f"{stem}_surge_{tries}"] = f"{rel}/{stem}.surge-{tries}{dot}{ext}"
-        for replica in list(held["replicas"][1:]):
+                (out_dir / name).replace(out_dir / kept)
+                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
+
+        record["artifacts"].pop("load_report", None)
+        for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's server.attempt-1.log
+            if "_try_" not in key:
+                del record["artifacts"][key]
+                keep(path.rpartition("/")[2], key)
+        keep("guidellm.log", "guidellm")
+        keep("router.log", "router")
+        for replica in list(reversed(held["replicas"])):  # the added replica first, the first replica last
             n = replica["replica"]
+            stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
             try:
-                name = f"server-{n}.surge-{tries}.log"
-                (out_dir / name).write_text(self.backend.logs(replica["handle"]), encoding="utf-8")
-                record["artifacts"][f"server_log_{n}_surge_{tries}"] = f"{rel}/{name}"
+                (out_dir / f"{stem}.try-{tries}.log").write_text(self.backend.logs(replica["handle"]),
+                                                                 encoding="utf-8")
+                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{stem}.try-{tries}.log"
             except Exception as read_error:
                 record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(read_error).__name__}")
             self.backend.stop(replica["handle"])
             held["replicas"].remove(replica)
+        held["handle"] = None
         record.pop("scale", None)
-        record["levels"] = []
-        record["artifacts"].pop("load_report", None)
-        for key in [k for k in record["metrics"] if k.startswith(("scale.", "surge."))]:
-            del record["metrics"][key]
+        record.pop("_reported_version", None)
+        record["startup"], record["levels"], record["metrics"] = None, [], {}
+        record["load_retries"] = tries
         record.setdefault("notes", []).append(
-            f"{error}; the surge was run once more against the same first replica, with its own forced step and a "
-            f"new second replica (that surge's logs are the *.surge-{tries}.* files)")
+            f"{error}; the round was run once more from a new first replica, with the same requests (that try's "
+            f"files are the *.try-{tries}.* files)")
 
     def _surge(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict, target: str) -> None:
@@ -728,6 +742,7 @@ class Runner:
                 # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
                 # round.
                 record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
+                record["load_retries"] = 1
                 if (out_dir / "guidellm.log").exists():
                     (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")
                 report_path = self.backend.run_load(self.plan, round_, target, out_dir)

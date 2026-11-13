@@ -534,7 +534,7 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | `GPU_NOT_FREE` | another pod still held the GPU after 15 minutes |
 | `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
-| `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
+| `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read (after one time-out GuideLLM runs once more against the same server, with the same requests; the round's `load_retries`, `results.md` and the notebook say so) |
 | `STOPPED` | the runner was stopped during the round |
 | `RUNNER_ERROR` | anything else, such as an error from the Kubernetes API |
 
@@ -768,10 +768,12 @@ Each round:
 6. reads GuideLLM's share of the requests that met the latency goals (`scaleOut.ttftMs` for the first token,
    `scaleOut.tpotMs` between tokens).
 
-When GuideLLM times out, the round does what mode pairs does with a GuideLLM time-out: it tries once more. The second
-replica, the router and GuideLLM are taken down, and the surge runs again against the same first replica, with its
-own forced step and a new second replica; every figure of the round then comes from that second surge, and the first
-surge's logs stay in the round's folder as `*.surge-1.*`. A second time-out fails the round with `LOAD_FAILED`.
+When GuideLLM times out, the round tries once more, as mode pairs does with a GuideLLM time-out, but from the start:
+GuideLLM, the router and both replicas are taken down, a new first replica is started and timed, and the surge runs
+with the same requests and a new second replica. Sent again to the first replica, the surge would find its own
+requests in that replica's prefix cache, which no other round has. Every figure of the round then comes from that
+second try; the first try's files stay in the round's folder as `*.try-1.*`, the round's `load_retries` is 1, and
+`results.md` and the notebook list the round. A second time-out fails the round with `LOAD_FAILED`.
 
 The two primary metrics are the second replica's time to first answer and that share of requests within the goals.
 With Holm's correction over two metrics, at least 7 pairs are needed for any FASTER or SLOWER verdict. For the share
