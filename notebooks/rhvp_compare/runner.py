@@ -26,8 +26,10 @@ scale_out.step_after_s after the router saw the surge's first request (the force
 second replica of the same side, times it from its start to its first answer, and adds it to the router. The
 round keeps how many requests each replica got (`scale.router`), so the new replica's share of the surge is on
 record. A second replica that never answers fails the round (SIDE_NEVER_READY); one that answers only after the surge
-has ended is still timed, with a share of 0. The surge is not run a second time when GuideLLM times out: a second
-surge would have no forced step.
+has ended is still timed, with a share of 0. When GuideLLM times out (the stall mode pairs also tries once more,
+SURGE_RETRIES), the second replica, the router and GuideLLM are taken down and the surge runs once more against the
+same first replica, with its own forced step and a new second replica; the round's scale.* and surge.* figures then
+all come from that second surge. A second time-out is LOAD_FAILED, as in mode pairs.
 
 Every server start is recorded in the round's `launches` (launch.py): what the runner ran, and the environment the
 server process saw when the backend can read it (`launch_facts`).
@@ -73,6 +75,10 @@ ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED
 #: check (logs.memory_profiling_failed); recorded in that replica's launch record and summed in the round's
 #: start_retries. A second such failure of the same replica is SIDE_FAILED.
 START_RETRIES = 1
+#: How many more times a scale round runs its surge after GuideLLM timed out (LoadError.timed_out): the same one
+#: retry mode pairs gives a GuideLLM time-out, so one stall of the load tool is not a failure of the side. The retry
+#: needs a new forced step, so the second replica is started again too; a second time-out is LOAD_FAILED.
+SURGE_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
@@ -494,10 +500,56 @@ class Runner:
 
     def _scale_round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                      held: dict) -> None:
-        """The first replica as in any round; the surge through the router; the second replica at the forced step;
-        the surge's figures, and how the router shared it out."""
-        scale = self.plan["scale_out"]
+        """The first replica as in any round, then the surge (`_surge`). A surge whose GuideLLM timed out is run once
+        more against the same first replica (SURGE_RETRIES), as mode pairs runs GuideLLM once more against the same
+        server."""
         _, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
+        tries = 0
+        while True:
+            try:
+                self._surge(round_, side, spec, record, out_dir, rel, held, target)
+                return
+            except guidellm.LoadError as error:
+                if not error.timed_out or tries >= SURGE_RETRIES:
+                    raise
+                tries += 1
+                self._surge_again(record, out_dir, rel, held, error, tries)
+
+    def _surge_again(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int) -> None:
+        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, keep their logs and the second
+        replica's as *.surge-N.*, take the second replica down, and clear what the surge had recorded, so the next
+        surge starts from the first replica alone."""
+        self._stop_scale_helpers(held, record)
+        held["load"] = held["router"] = None
+        for name in ("guidellm.log", "router.log"):
+            if (out_dir / name).exists():
+                stem, dot, ext = name.rpartition(".")
+                (out_dir / name).replace(out_dir / f"{stem}.surge-{tries}{dot}{ext}")
+                record["artifacts"][f"{stem}_surge_{tries}"] = f"{rel}/{stem}.surge-{tries}{dot}{ext}"
+        for replica in list(held["replicas"][1:]):
+            n = replica["replica"]
+            try:
+                name = f"server-{n}.surge-{tries}.log"
+                (out_dir / name).write_text(self.backend.logs(replica["handle"]), encoding="utf-8")
+                record["artifacts"][f"server_log_{n}_surge_{tries}"] = f"{rel}/{name}"
+            except Exception as read_error:
+                record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(read_error).__name__}")
+            self.backend.stop(replica["handle"])
+            held["replicas"].remove(replica)
+        record.pop("scale", None)
+        record["levels"] = []
+        record["artifacts"].pop("load_report", None)
+        for key in [k for k in record["metrics"] if k.startswith(("scale.", "surge."))]:
+            del record["metrics"][key]
+        record.setdefault("notes", []).append(
+            f"{error}; the surge was run once more against the same first replica, with its own forced step and a "
+            f"new second replica (that surge's logs are the *.surge-{tries}.* files)")
+
+    def _surge(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+               held: dict, target: str) -> None:
+        """The surge through the router; the second replica at the forced step; the surge's figures, and how the
+        router shared it out."""
+        scale = self.plan["scale_out"]
         router = held["router"] = self.backend.router(self.plan, [target], out_dir)
         running = held["load"] = self.backend.start_load(self.plan, round_, router.url, out_dir)
         load_deadline = self.clock() + self.plan["load"]["timeout_s"]
@@ -508,8 +560,8 @@ class Runner:
                 if running.poll() is not None:
                     running.finish()  # LoadError when it failed
                     raise guidellm.LoadError("GuideLLM ended before it sent a request")
-                if self.clock() > load_deadline:
-                    raise guidellm.LoadError("GuideLLM sent no request before its time limit")
+                if self.clock() > load_deadline:  # GuideLLM hung before its first request: a time-out
+                    raise guidellm.LoadError("GuideLLM sent no request before its time limit", timed_out=True)
                 self.sleep(0.25)
         step_at = surge_at + scale["step_after_s"]
         while (left := step_at - self.wall()) > 0:
@@ -554,7 +606,7 @@ class Runner:
             "joined_at_s": round(joined_at - surge_at, 3), "joined_during_surge": not surge_over,
             "clock": "runner, from just before the second replica was asked for", "breakdown": []}
         record["metrics"].update({"scale.ready_s": ready_s, "scale.first_answer_s": first_s})
-        report_path = running.finish()  # no second try: a second surge would have no forced step
+        report_path = running.finish()  # a time-out: _scale_round runs the surge once more
         record["artifacts"]["load_report"] = f"{rel}/{report_path.name}"
         raw = json.loads(report_path.read_text(encoding="utf-8"))
         version = guidellm.version(raw)

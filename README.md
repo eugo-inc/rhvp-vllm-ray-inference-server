@@ -749,6 +749,11 @@ Each round:
 6. reads GuideLLM's share of the requests that met the latency goals (`scaleOut.ttftMs` for the first token,
    `scaleOut.tpotMs` between tokens).
 
+When GuideLLM times out, the round does what mode pairs does with a GuideLLM time-out: it tries once more. The second
+replica, the router and GuideLLM are taken down, and the surge runs again against the same first replica, with its
+own forced step and a new second replica; every figure of the round then comes from that second surge, and the first
+surge's logs stay in the round's folder as `*.surge-1.*`. A second time-out fails the round with `LOAD_FAILED`.
+
 The two primary metrics are the second replica's time to first answer and that share of requests within the goals.
 With Holm's correction over two metrics, at least 7 pairs are needed for any FASTER or SLOWER verdict. For the share
 within the goals, FASTER means side B met the goals for more of the requests. The other metrics are secondary,

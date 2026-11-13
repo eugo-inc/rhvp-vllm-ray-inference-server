@@ -838,13 +838,20 @@ class FakeClock:
 class FakeRunning:
     """GuideLLM started in the background: ends when the runner asks for its report."""
 
-    def __init__(self, path: Path, data: dict, ended=lambda: False) -> None:
+    def __init__(self, path: Path, data: dict, ended=lambda: False, stalls: bool = False) -> None:
         self.path, self.data, self.ended, self.code, self.stopped = path, data, ended, None, False
+        self.stalls = stalls  # GuideLLM hangs at the end of the surge: finish() times out
+        path.parent.mkdir(parents=True, exist_ok=True)
+        (path.parent / "guidellm.log").write_text(f"surge {'stalled' if stalls else 'finished'}\n")
 
     def poll(self):
         return 0 if self.ended() else self.code
 
     def finish(self):
+        if self.stalls:
+            self.stop()
+            raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped; see guidellm.log",
+                                     timed_out=True)
         self.path.write_text(json.dumps(self.data))
         self.code = 0
         return self.path
@@ -884,12 +891,13 @@ class ScaleBackend(FakeBackend):
     round index -> a surge in which no request finished; `late`: the surge has ended before replica 2 answers;
     `never_ready`: replica 2 never lists the model, and the runner's clock jumps back once the surge starts, so its
     time limit has passed at once. `dies`: (round index, replica) -> how many of that replica's starts exit at vLLM's
-    start-up memory check."""
+    start-up memory check. `stalls`: round index -> how many of its surges' GuideLLM runs time out at the end."""
 
     def __init__(self, clock: FakeClock, empty: tuple = (), late: bool = False, never_ready: int | None = None,
-                 dies: dict | None = None):
+                 dies: dict | None = None, stalls: dict | None = None):
         super().__init__(dies=dies)
         self.clock, self.empty, self.late, self.never_ready = clock, empty, late, never_ready
+        self.stalls, self.surges = stalls or {}, {}
         self.routers, self.loads, self.replica2_started = [], [], False
         self.rewind = False
 
@@ -915,8 +923,10 @@ class ScaleBackend(FakeBackend):
         good *= 1.0 + 0.001 * round_["index"]
         data = (surge_report(10, None, None, successful=0) if round_["index"] in self.empty
                 else surge_report(10, good, 10 * good))
+        surge = self.surges[round_["index"]] = self.surges.get(round_["index"], 0) + 1
         self.loads.append(FakeRunning(out_dir / "guidellm.json", data,
-                                      ended=lambda: self.late and self.replica2_started))
+                                      ended=lambda: self.late and self.replica2_started,
+                                      stalls=surge <= self.stalls.get(round_["index"], 0)))
         return self.loads[-1]
 
     def launch_facts(self, handle):
@@ -1027,6 +1037,44 @@ def test_a_new_replica_that_never_answers_fails_the_round(tmp_path):
     assert backend.loads[0].stopped and backend.routers[0].stopped  # the surge and the router were stopped
     assert sorted(backend.stopped)[:2] == [(1, 1), (1, 2)]  # both replicas taken down
     assert [l["replica"] for l in failed["launches"]] == [1, 2]
+
+
+def test_a_surge_whose_guidellm_timed_out_is_run_once_more_and_the_round_counts(tmp_path):
+    # Round 3 (side A, pair 1): GuideLLM hangs at the end of the first surge. As in mode pairs, one stall of the load
+    # tool is tried once more; the round keeps its first replica, starts a new second one at a new forced step, and
+    # every scale.* and surge.* figure comes from the second surge.
+    clock = FakeClock()
+    backend = ScaleBackend(clock, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["index"], r3["status"], r3["error_code"]) == (3, "ok", None)
+    assert backend.surges[3] == 2 and backend.loads[0].stopped  # the stalled GuideLLM was stopped
+    assert backend.started.count((3, "A", 1)) == 1 and backend.started.count((3, "A", 2)) == 2
+    assert backend.stopped.count((3, 1)) == 1 and backend.stopped.count((3, 2)) == 2
+    assert all(r.stopped for r in backend.routers)
+    assert {"scale.first_answer_s", "surge.slo_attainment"} <= set(r3["metrics"])
+    assert 5 <= r3["scale"]["step_at_s"] < 5.5 and r3["scale"]["new_replica_share"] == 0.25
+    assert [l["replica"] for l in r3["launches"]] == [1, 2]
+    assert any("run once more against the same first replica" in note for note in r3["notes"])
+    assert "stalled" in (the_runner.dir / r3["artifacts"]["guidellm_surge_1"]).read_text()
+    assert "finished" in (the_runner.dir / "rounds/03-A-scored/guidellm.log").read_text()
+    assert "server_log_2_surge_1" in r3["artifacts"]
+    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
+    assert rows["surge.slo_attainment"]["verdict"] == "FASTER" and rows["surge.slo_attainment"]["n_pairs"] == 7
+    assert all(row["pairs_lost"] == {"A": 0, "B": 0, "both": 0, "other": 0} for row in rows.values())
+    assert results["run"]["status"] == "complete" and results["run"]["error_code"] is None
+
+
+def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, stalls={1: 2})
+    results, _ = scale_run(tmp_path, backend, clock, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    failed = results["rounds"][0]
+    assert (failed["status"], failed["error_code"]) == ("failed", "LOAD_FAILED")
+    assert backend.surges[1] == 2 and backend.started.count((1, "A", 2)) == 2
+    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 2), (1, 2)]
 
 
 def test_a_scale_round_starts_its_new_replica_once_more_after_vllms_memory_check(tmp_path):

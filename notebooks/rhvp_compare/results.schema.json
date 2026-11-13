@@ -1180,6 +1180,18 @@
             "server_log_2_attempt_1": {
               "type": "string",
               "description": "Mode scaleout: the same for the second replica, when it was started again."
+            },
+            "guidellm_surge_1": {
+              "type": "string",
+              "description": "Mode scaleout: GuideLLM's log of a surge that timed out and was run once more (runner.SURGE_RETRIES)."
+            },
+            "router_surge_1": {
+              "type": "string",
+              "description": "Mode scaleout: the router's log of that first surge."
+            },
+            "server_log_2_surge_1": {
+              "type": "string",
+              "description": "Mode scaleout: the log of the second replica of that first surge, taken down before the surge ran again."
             }
           }
         },
