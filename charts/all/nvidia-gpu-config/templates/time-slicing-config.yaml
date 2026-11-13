@@ -1,0 +1,25 @@
+{{- if .Values.timeSlicing.enabled }}
+{{- $replicas := .Values.timeSlicing.replicas }}
+{{- if not (and (or (kindIs "float64" $replicas) (kindIs "int64" $replicas) (kindIs "int" $replicas)) (eq (float64 $replicas) (floor (float64 $replicas))) (ge (float64 $replicas) 2.0)) }}
+{{- fail (printf "timeSlicing.replicas must be a whole number of at least 2; got %v" $replicas) }}
+{{- end }}
+# GPU time-slicing for the device plugin, used by the ClusterPolicy
+# (cluster-policy.yaml, devicePlugin.config) for every GPU node: key "any" is its
+# default. The resource keeps its name, nvidia.com/gpu (renameByDefault false);
+# the GPU Operator adds "-SHARED" to the node's nvidia.com/gpu.product label.
+# The format is NVIDIA's (GPU Operator, "Time-Slicing GPUs").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: time-slicing-config
+data:
+  any: |-
+    version: v1
+    sharing:
+      timeSlicing:
+        renameByDefault: false
+        failRequestsGreaterThanOne: true
+        resources:
+          - name: nvidia.com/gpu
+            replicas: {{ $replicas | int }}
+{{- end }}

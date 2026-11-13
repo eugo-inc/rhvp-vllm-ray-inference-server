@@ -106,6 +106,14 @@ def test_values_check_names_every_mode():
     ({"compileCache": {"mode": "disk"}}, "compileCache.mode must be none, node or shared"),
     ({"modelStorage": {"accessMode": "ReadOnlyMany"}}, "modelStorage.accessMode must be ReadWriteOnce or ReadWriteMany"),
     ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"maxPods": 0}}, "scaleOut.maxPods must be a whole number"),
+    ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"waitingRequestsPerPod": 0}},
+     "scaleOut.waitingRequestsPerPod must be a number above 0; got 0"),
+    ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"pollingIntervalSeconds": 0.5}},
+     "scaleOut.pollingIntervalSeconds must be a whole number of at least 1; got 0.5"),
+    ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"cooldownSeconds": 7200}},
+     "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
+    ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"thanosUrl": "thanos-querier:9092"}},
+     "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
 ])
 def test_values_check_refuses(over, message):
     problems = pattern_settings.check(chart_values(**over))
@@ -163,6 +171,9 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("autoscaling-over-gpus",
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),
     ("autoscaling-shared-gpu-memory", pattern_settings.SHARED_GPU_MEMORY.format(memory="0.85", share="0.5", high="2")),
+    ("keda-threshold", "scaleOut.waitingRequestsPerPod must be a number above 0; got 0"),
+    ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
+    ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
     ("replicas-moved", pattern_settings.MOVED),
     ("compare-mode-unknown", "global.compare.mode must be pairs or scaleout; got surge"),
 ])

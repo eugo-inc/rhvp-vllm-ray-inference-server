@@ -1,0 +1,24 @@
+# Installs KEDA. Red Hat's Custom Metrics Autoscaler Operator installs, changes or
+# removes the KEDA controller only through this resource: it must be named keda
+# and live in the operator's namespace, openshift-keda (this app's namespace,
+# overrides/values-scaleout-keda.yaml). There should be one per cluster. Since
+# operator 2.17.2 the operator creates it itself on install; Argo CD then applies
+# these settings to that same resource, so they are kept in Git either way.
+apiVersion: keda.sh/v1alpha1
+kind: KedaController
+metadata:
+  name: keda
+  labels:
+    app.kubernetes.io/name: keda-config
+    app.kubernetes.io/part-of: vllm-ray-inference-server
+  annotations:
+    # The CRD exists only once the operator is installed.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  watchNamespace: {{ .Values.watchNamespace | quote }}
+  operator:
+    logLevel: {{ .Values.operator.logLevel | quote }}
+    logEncoder: {{ .Values.operator.logEncoder | quote }}
+  metricsServer:
+    logLevel: {{ .Values.metricsServer.logLevel | quote }}
+  serviceAccount: {}

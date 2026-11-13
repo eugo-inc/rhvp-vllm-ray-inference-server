@@ -3,11 +3,13 @@
 #
 # 1. Merges the values files the way the cluster does (values-global.yaml, then
 #    variants/<variant>/values-<variant>.yaml, then every clusterGroup.sharedValueFiles
-#    entry that exists for the case) for three cases: AWS with global.gpuMachineSet from
-#    values-global.yaml, AWS with gpuMachineSet none, and GCP. Each merged tree is checked
-#    against the clustergroup chart's values.schema.json. Maps merge; lists and plain
-#    values in a later file replace earlier ones. Every file under overrides/ must be
-#    used by at least one case, so a misspelt override name fails here.
+#    entry that exists for the case) for four cases: AWS with global.gpuMachineSet from
+#    values-global.yaml, AWS with gpuMachineSet none, GCP, and AWS with global.scaleOut.mode
+#    keda. Each merged tree is checked against the clustergroup chart's values.schema.json.
+#    Maps merge; lists and plain values in a later file replace earlier ones. Every file
+#    under overrides/ must be used by at least one case, so a misspelt override name fails
+#    here, and every value a sharedValueFiles entry names must be set (a missing nested one,
+#    such as global.scaleOut.mode, would fail the clustergroup chart's own render).
 # 2. Checks values-secret.yaml.template against rhvp.cluster_utils'
 #    values-secrets.v2.schema.json, and against the secrets loader's own rule: a field
 #    with onMissingValue "error" (the default) needs a non-empty value, path or ini_file;
@@ -108,7 +110,8 @@ def render_path(template, values):
     def sub(match):
         value = lookup(values, match.group(1))
         if value is None:
-            return ""
+            sys.exit(f"validate-values.sh: sharedValueFiles entry {template!r} needs {match.group(1)}, "
+                     "which is not set")
         return str(value)
 
     out = TPL.sub(sub, template)
@@ -153,7 +156,17 @@ cases = [
     ("AWS", {}),
     ("AWS", {"gpuMachineSet": "none"}),
     ("GCP", {}),
+    ("AWS", {"scaleOut": {"mode": "keda"}}),
 ]
+
+
+def flat(prefix, value):
+    """`key=value` labels for a case's extra global values, nested keys joined with dots."""
+    if isinstance(value, dict):
+        return [item for key, sub in value.items() for item in flat(f"{prefix}.{key}", sub)]
+    return [f"{prefix}={value}"]
+
+
 for platform, extra_global in cases:
     injected = {"global": {"clusterPlatform": platform, "clusterVersion": "4.20",
                            "localClusterName": "local-cluster", **extra_global}}
@@ -173,7 +186,8 @@ for platform, extra_global in cases:
         if f.startswith("overrides/"):
             used_overrides.add(f)
     merged = merge(merged, injected)
-    label = f"clustergroup values, {platform}" + "".join(f", {k}={v}" for k, v in extra_global.items())
+    label = f"clustergroup values, {platform}" + "".join(
+        f", {item}" for k, v in extra_global.items() for item in flat(k, v))
     check(cg_schema, merged, f"{label} [{' + '.join(present)}]")
     # ---- 4. scale-out settings, as the server chart sees them for this case
     settings_label = "scale-out settings" + label.removeprefix("clustergroup values")

@@ -2,9 +2,9 @@
 """The scale-out settings and their rules, for scripts/validate-values.sh and the tests.
 
 The same rules fail a chart render: charts/all/ray-serve-llm/templates/_settings.tpl for the server chart's values
-and global.scaleOut, charts/all/notebook/templates/_helpers.tpl (notebook.compareConfig) for global.compare.mode.
-Keep the three in step; tests/test_scaleout_contract.py checks that a render and this module give the same message
-for the same mistake.
+and global.scaleOut (templates/scaledobject.yaml for the keda trigger's own settings), and
+charts/all/notebook/templates/_helpers.tpl (notebook.compareConfig) for global.compare.mode. Keep them in step;
+tests/test_scaleout_contract.py checks that a render and this module give the same message for the same mistake.
 
 `check(values)` takes the server chart's values as Helm sees them: charts/all/ray-serve-llm/values.yaml with
 values-global.yaml, the variant file and the override files merged over it. It returns one message per broken rule,
@@ -13,6 +13,7 @@ or an empty list. Standard library only.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 #: global.scaleOut.mode values that are built.
@@ -156,6 +157,26 @@ def check_server(values: Mapping) -> list[str]:
         elif not (_whole(high_pods) and high_pods >= low_pods):
             out.append(f"scaleOut.maxPods must be a whole number of at least scaleOut.minPods ({_show(low_pods)}); "
                        f"got {_show(high_pods)}")
+        else:
+            out.extend(_check_trigger(pods)[:1])
+    return out
+
+
+def _check_trigger(pods: Mapping) -> list[str]:
+    """The keda trigger's own settings, with the messages of charts/all/ray-serve-llm/templates/scaledobject.yaml."""
+    out = []
+    threshold = pods.get("waitingRequestsPerPod")
+    if not (_number(threshold) and threshold > 0):
+        out.append(f"scaleOut.waitingRequestsPerPod must be a number above 0; got {_show(threshold)}")
+    interval = pods.get("pollingIntervalSeconds")
+    if not (_whole(interval) and interval >= 1):
+        out.append(f"scaleOut.pollingIntervalSeconds must be a whole number of at least 1; got {_show(interval)}")
+    cooldown = pods.get("cooldownSeconds")
+    if not (_whole(cooldown) and 0 <= cooldown <= 3600):
+        out.append(f"scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got {_show(cooldown)}")
+    url = pods.get("thanosUrl")
+    if not (isinstance(url, str) and re.match(r"https?://[^/]+", url)):
+        out.append(f"scaleOut.thanosUrl must be an http:// or https:// address; got {_show(url)}")
     return out
 
 

@@ -105,6 +105,10 @@ spec:
           value: {{ .Values.compare.serverDeployment | quote }}
         - name: RHVP_COMPARE_SERVER_REPLICAS
           value: {{ .Values.compare.serverReplicas | quote }}
+        {{- with include "notebook.compareScaledObject" . }}
+        - name: RHVP_COMPARE_SERVER_SCALED_OBJECT
+          value: {{ . | quote }}
+        {{- end }}
         - name: RHVP_COMPARE_STATUS_NAMESPACE
           valueFrom:
             fieldRef:

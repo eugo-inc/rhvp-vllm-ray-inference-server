@@ -304,6 +304,37 @@ def test_compare_notebook_mounts_the_results_read_only(compare):
     assert job["spec"]["template"]["spec"]["initContainers"][0]["image"] == "quay.io/example/notebook:1.0"
 
 
+def test_compare_pauses_the_server_autoscaler_in_keda_mode(compare, render):
+    # global.scaleOut.mode keda: the runner may read and annotate the server's ScaledObject (to pause it for the run),
+    # and learns its name from RHVP_COMPARE_SERVER_SCALED_OBJECT. Neither renders in the default mode.
+    keda = docs(render / "charts/notebook-compare-keda.yaml")
+    default_rules = one(compare["notebook-compare"], "Role", "image-compare-sides")["rules"]
+    assert one(keda, "Role", "image-compare-sides")["rules"] == default_rules + [
+        {"apiGroups": ["keda.sh"], "resources": ["scaledobjects"], "resourceNames": ["ray-serve-llm"],
+         "verbs": ["get", "patch"]}]
+    [job] = [d for d in keda if d["kind"] == "Job"]
+    [default_job] = [d for d in compare["notebook-compare"] if d["kind"] == "Job"]
+    assert env_map(job["spec"]["template"]["spec"]["containers"][0])["RHVP_COMPARE_SERVER_SCALED_OBJECT"] == (
+        "ray-serve-llm")
+    assert "RHVP_COMPARE_SERVER_SCALED_OBJECT" not in env_map(default_job["spec"]["template"]["spec"]["containers"][0])
+    # The mode is not part of the config, so switching it keeps the run id; the pod template, and so the Job, differ.
+    assert one(keda, "ConfigMap")["data"] == one(compare["notebook-compare"], "ConfigMap")["data"]
+    assert job["metadata"]["name"] != default_job["metadata"]["name"]
+    values = yaml.safe_load((REPO / "charts/all/notebook/values.yaml").read_text())
+    assert values["global"]["scaleOut"] == {"mode": "none"}
+    assert values["compare"]["serverScaledObject"] == "ray-serve-llm"
+
+
+def test_compare_config_passes_global_compare_through(render):
+    # mode scaleout and any nested block of global.compare reach compare.json as given: the runner, not the chart,
+    # decides what they mean (and refuses what it has not built).
+    items = docs(render / "charts/notebook-compare-scaleout.yaml")
+    config = json.loads(one(items, "ConfigMap")["data"]["compare.json"])
+    want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k != "enabled"}
+    want.update(mode="scaleout", passThrough={"nested": {"rate": 2.5, "names": ["a", "b"]}})
+    assert {k: v for k, v in config.items() if k != "model"} == json.loads(json.dumps(want))
+
+
 def test_gpu_operator_namespace_is_scraped_by_cluster_monitoring(cg):
     [ns] = [d for d in cg["default"] if d["kind"] == "Namespace" and d["metadata"]["name"] == "nvidia-gpu-operator"]
     assert ns["metadata"]["labels"]["openshift.io/cluster-monitoring"] == "true"
@@ -321,12 +352,34 @@ def test_gpu_operator_config(render):
     assert nfd["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
 
 
+def test_gpu_time_slicing_is_opt_in(render):
+    default = docs(render / "charts/nvidia-gpu-config.yaml")
+    assert kinds(default) == {"ClusterPolicy"}
+    assert one(default, "ClusterPolicy")["spec"]["devicePlugin"]["config"] == {"default": "", "name": ""}
+    values = yaml.safe_load((REPO / "charts/all/nvidia-gpu-config/values.yaml").read_text())
+    assert values["timeSlicing"] == {"enabled": False, "replicas": 2}
+    sliced = docs(render / "charts/nvidia-gpu-config-timeslicing.yaml")
+    assert one(sliced, "ClusterPolicy")["spec"]["devicePlugin"] == {
+        "config": {"default": "any", "name": "time-slicing-config"}, "enabled": True}
+    config = one(sliced, "ConfigMap", "time-slicing-config")
+    assert "namespace" not in config["metadata"]  # lands in the app's namespace, nvidia-gpu-operator
+    assert yaml.safe_load(config["data"]["any"]) == {"version": "v1", "sharing": {"timeSlicing": {
+        "renameByDefault": False, "failRequestsGreaterThanOne": True,
+        "resources": [{"name": "nvidia.com/gpu", "replicas": 2}]}}}
+    # Apart from the device plugin's config, the ClusterPolicy is unchanged.
+    a, b = one(default, "ClusterPolicy"), one(sliced, "ClusterPolicy")
+    a["spec"].pop("devicePlugin"), b["spec"].pop("devicePlugin")
+    assert a == b
+    assert "timeSlicing.replicas must be a whole number of at least 2; got 1" in (
+        render / "refused/timeslicing-replicas.txt").read_text()
+
+
 # ---- clustergroup (app of apps) ----------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def cg(render) -> dict[str, list[dict]]:
-    return {case: docs(render / f"clustergroup/{case}.yaml") for case in ("default", "none", "gcp")}
+    return {case: docs(render / f"clustergroup/{case}.yaml") for case in ("default", "none", "gcp", "keda")}
 
 
 def imperative_jobs(items: list[dict]) -> list[str]:
@@ -372,10 +425,17 @@ def test_shared_value_files_switch(cg, render):
         "values-global.yaml", "variants/prod/values-prod.yaml", "overrides/values-gpu-machineset-create-AWS.yaml"]
     for case in ("none", "gcp"):
         assert "overrides/" not in (render / f"clustergroup/{case}.valuefiles").read_text()
+    assert (render / "clustergroup/keda.valuefiles").read_text().split() == [
+        "values-global.yaml", "variants/prod/values-prod.yaml", "overrides/values-gpu-machineset-create-AWS.yaml",
+        "overrides/values-scaleout-keda.yaml"]
     prod = yaml.safe_load((REPO / "variants/prod/values-prod.yaml").read_text())
     assert prod["clusterGroup"]["sharedValueFiles"] == [
-        "/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml"]
+        "/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml",
+        "/overrides/values-scaleout-{{ $.Values.global.scaleOut.mode }}.yaml"]
     assert GLOBAL["global"]["gpuMachineSet"] == "create"
+    # Only these two exist: global.scaleOut.mode none (and kuberay, which the server chart refuses) adds no file.
+    assert sorted(p.name for p in (REPO / "overrides").iterdir()) == [
+        "values-gpu-machineset-create-AWS.yaml", "values-scaleout-keda.yaml"]
 
 
 def test_imperative_jobs(cg):
@@ -416,6 +476,144 @@ def test_operators(cg):
     pattern = GLOBAL["global"]["pattern"]
     assert pattern == "vllm-ray-inference-server"
     assert not any(ns == pattern or ns.startswith(f"{pattern}-") for ns in namespaces), sorted(namespaces)
+
+
+# ---- scale-out across pods (global.scaleOut.mode keda) -----------------------------------------
+
+KEDA_KINDS = {"ScaledObject", "TriggerAuthentication", "ServiceMonitor"}
+SERVER_VALUES = yaml.safe_load((REPO / "charts/all/ray-serve-llm/values.yaml").read_text())
+PAUSE_RULE = {"group": "keda.sh", "kind": "ScaledObject", "name": "ray-serve-llm",
+              "jqPathExpressions": ['.metadata.annotations["autoscaling.keda.sh/paused-replicas"]']}
+
+
+@pytest.fixture(scope="module")
+def keda(render) -> dict[str, list[dict]]:
+    return {chart.name: docs(render / f"charts/{chart.name}-keda.yaml") for chart in (REPO / "charts/all").iterdir()}
+
+
+def test_scale_out_is_off_by_default(server, cg):
+    assert GLOBAL["global"]["scaleOut"]["mode"] == "none"
+    assert not kinds(server) & KEDA_KINDS
+    assert not [d for d in server if d["kind"] in ("ServiceAccount", "Role") and d["metadata"]["name"] in (
+        "thanos", "thanos-metrics-reader", "keda-operator-token-creator")]
+    apps = {d["metadata"]["name"] for d in cg["default"] if d["kind"] == "Application"}
+    assert "keda-config" not in apps
+    assert not [d for d in cg["default"] if "keda" in json.dumps(d.get("metadata", {}))]
+
+
+def test_keda_mode_changes_only_the_server_and_the_comparison(keda, render):
+    # Every other local chart renders the same with global.scaleOut.mode keda and its values files; the notebook's
+    # cookie secret is random on every render.
+    def text(path):
+        return re.sub(r'session_secret: ".*"', "session_secret: X", path.read_text())
+
+    for chart in ("nfd-config", "nvidia-gpu-config", "notebook", "keda-config"):
+        assert text(render / f"charts/{chart}-keda.yaml") == text(render / f"charts/{chart}.yaml"), chart
+    assert KEDA_KINDS <= kinds(keda["ray-serve-llm"])
+
+
+def test_keda_scaled_object(keda):
+    so = one(keda["ray-serve-llm"], "ScaledObject", "ray-serve-llm")
+    scale = SERVER_VALUES["scaleOut"]
+    assert so["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
+    spec = so["spec"]
+    assert spec["scaleTargetRef"] == {"apiVersion": "apps/v1", "kind": "Deployment", "name": "ray-serve-llm"}
+    assert (spec["minReplicaCount"], spec["maxReplicaCount"]) == (scale["minPods"], scale["maxPods"])
+    assert spec["pollingInterval"] == scale["pollingIntervalSeconds"]
+    # KEDA's cooldownPeriod only governs a scale to 0; between 1 and N the HPA's scale-down window does.
+    assert "cooldownPeriod" not in spec
+    assert spec["advanced"]["horizontalPodAutoscalerConfig"]["behavior"]["scaleDown"] == {
+        "stabilizationWindowSeconds": scale["cooldownSeconds"]}
+    [trigger] = spec["triggers"]
+    assert trigger["type"] == "prometheus" and "metricType" not in trigger  # AverageValue: the sum over pod count
+    assert trigger["authenticationRef"] == {"name": "keda-trigger-auth-prometheus"}
+    meta = trigger["metadata"]
+    assert meta == {
+        "serverAddress": scale["thanosUrl"], "namespace": "vllm-inference", "authModes": "bearer",
+        "query": 'sum(ray_vllm_num_requests_waiting{namespace="vllm-inference",service="ray-serve-llm"})',
+        "threshold": str(scale["waitingRequestsPerPod"])}
+    assert scale["thanosUrl"] == "https://thanos-querier.openshift-monitoring.svc.cluster.local:9092"
+
+
+def test_keda_reads_thanos_with_a_bound_token(keda):
+    items = keda["ray-serve-llm"]
+    one(items, "ServiceAccount", "thanos")
+    reader = one(items, "Role", "thanos-metrics-reader")
+    assert reader["rules"] == [
+        {"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]},
+        {"apiGroups": ["metrics.k8s.io"], "resources": ["pods", "nodes"], "verbs": ["get", "list", "watch"]}]
+    assert one(items, "RoleBinding", "thanos-metrics-reader")["subjects"] == [
+        {"kind": "ServiceAccount", "name": "thanos", "namespace": "vllm-inference"}]
+    token = one(items, "Role", "keda-operator-token-creator")
+    assert token["rules"] == [{"apiGroups": [""], "resources": ["serviceaccounts/token"], "resourceNames": ["thanos"],
+                               "verbs": ["create"]}]
+    # The operator's ServiceAccount, in the namespace overrides/values-scaleout-keda.yaml installs it into.
+    assert one(items, "RoleBinding", "keda-operator-token-creator")["subjects"] == [
+        {"kind": "ServiceAccount", "name": "keda-operator", "namespace": "openshift-keda"}]
+    auth = one(items, "TriggerAuthentication", "keda-trigger-auth-prometheus")
+    assert auth["spec"] == {"boundServiceAccountToken": [{"parameter": "bearerToken", "serviceAccountName": "thanos"}]}
+    assert auth["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
+
+
+def test_keda_service_monitor_scrapes_the_metrics_port(keda):
+    items = keda["ray-serve-llm"]
+    monitor = one(items, "ServiceMonitor", "ray-serve-llm")
+    svc = one(items, "Service", "ray-serve-llm")
+    assert monitor["spec"]["selector"] == {"matchLabels": {"app.kubernetes.io/name": "ray-serve-llm"}}
+    assert svc["metadata"]["labels"]["app.kubernetes.io/name"] == "ray-serve-llm"
+    assert monitor["spec"]["endpoints"] == [{"port": "metrics", "path": "/metrics", "interval": "15s"}]
+    # The Service and the server container carry the port the ServiceMonitor names (server.metricsPort).
+    port = SERVER_VALUES["server"]["metricsPort"]
+    [svc_port] = [p for p in svc["spec"]["ports"] if p["name"] == "metrics"]
+    assert svc_port["port"] == port and svc_port["targetPort"] in ("metrics", port)
+    ports = container(one(items, "Deployment", "ray-serve-llm"), "server")["ports"]
+    assert {"name": "metrics", "containerPort": port} in [{k: p[k] for k in ("name", "containerPort")} for p in ports]
+
+
+def test_keda_checks_its_own_settings(render):
+    for case, message in (
+        ("keda-threshold", "scaleOut.waitingRequestsPerPod must be a number above 0; got 0"),
+        ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
+        ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
+    ):
+        assert message in (render / f"refused/{case}.txt").read_text(), case
+
+
+def test_keda_install(cg, keda):
+    items = cg["keda"]
+    [ns] = [d for d in items if d["kind"] == "Namespace" and d["metadata"]["name"] == "openshift-keda"]
+    assert ns["metadata"]["labels"]["openshift.io/cluster-monitoring"] == "true"
+    # Red Hat installs the operator for all namespaces: an OperatorGroup without target namespaces.
+    [group] = [d for d in items if d["kind"] == "OperatorGroup" and d["metadata"]["namespace"] == "openshift-keda"]
+    assert not (group.get("spec") or {}).get("targetNamespaces")
+    sub = one(items, "Subscription", "openshift-custom-metrics-autoscaler-operator")
+    assert sub["metadata"]["namespace"] == "openshift-keda"
+    assert (sub["spec"]["source"], sub["spec"]["channel"]) == ("redhat-operators", "stable")
+    apps = {d["metadata"]["name"]: d for d in items if d["kind"] == "Application"}
+    assert set(apps) == {"vault", "openshift-external-secrets", "nfd-config", "nvidia-gpu-config",
+                         "ray-serve-llm", "notebook", "keda-config"}
+    assert apps["keda-config"]["spec"]["source"]["path"] == "charts/all/keda-config"
+    assert apps["keda-config"]["spec"]["destination"]["namespace"] == "openshift-keda"
+    assert apps["keda-config"]["spec"]["source"]["helm"]["valueFiles"][-1] == "/overrides/values-scaleout-keda.yaml"
+    controller = one(keda["keda-config"], "KedaController", "keda")  # the only name the operator acts on
+    assert "namespace" not in controller["metadata"]  # lands in the app's namespace, openshift-keda
+    assert controller["spec"]["watchNamespace"] == ""
+    assert controller["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == (
+        "SkipDryRunOnMissingResource=true")
+
+
+def test_keda_ignore_rules_restate_the_default(cg):
+    # A list in a later values file replaces the earlier one: the keda override restates the server app's rules and
+    # adds the autoscaler's pause, which the comparison's runner sets and removes during a run.
+    def server_app(case):
+        return one([d for d in cg[case] if d["kind"] == "Application"], "Application", "ray-serve-llm")["spec"]
+
+    default, keda_app = server_app("default"), server_app("keda")
+    assert keda_app["ignoreDifferences"] == default["ignoreDifferences"] + [PAUSE_RULE]
+    assert keda_app["syncPolicy"] == default["syncPolicy"]
+    assert "RespectIgnoreDifferences=true" in keda_app["syncPolicy"]["syncOptions"]
+    for case in ("default", "none", "gcp"):
+        assert PAUSE_RULE not in server_app(case)["ignoreDifferences"]
 
 
 # ---- rebuild-on-commit decisions (no cluster: pure function) -------------------------------

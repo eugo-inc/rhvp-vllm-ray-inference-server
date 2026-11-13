@@ -13,12 +13,15 @@
 #   charts/<chart>-variant.yaml  ray-serve-llm and notebook with image.override set,
 #                                plus route.enabled=true / notebook.internal=true
 #   charts/notebook-compare*.yaml the notebook chart with global.compare.enabled=true
-#                                (also with energy.source=none and image.override, and with
-#                                bigger side pods: a new Job with the same config)
+#                                (also with energy.source=none and image.override, with
+#                                bigger side pods: a new Job with the same config, and with
+#                                mode scaleout and a nested block, passed through as given)
+#   charts/nvidia-gpu-config-timeslicing.yaml  with the opt-in GPU time-slicing on
 #   charts/ray-serve-llm-scaling.yaml  in-pod autoscaling from 1 to 2 replicas sharing the GPU
 #   charts/ray-serve-llm-cache-<mode>.yaml  compileCache.mode node and shared
-#   charts/*-keda.yaml           ray-serve-llm, and notebook with the comparison on, with
-#                                global.scaleOut.mode=keda and that case's values files
+#   charts/<chart>-keda.yaml     every chart with global.scaleOut.mode=keda and that case's
+#                                values files, and notebook-compare-keda.yaml with the
+#                                comparison on too
 #   refused/<case>.txt           helm's error for each setting the charts must refuse (the
 #                                script fails if one renders, or fails without its message)
 #   clustergroup/<case>.yaml     the clustergroup chart (the app of apps) for:
@@ -132,13 +135,28 @@ TPL
 value_files AWS
 operator_sets AWS
 echo "values files (AWS): ${FILES[*]}"
+# The namespace of a chart's app: in the variant file, or in an override file for an app that
+# only an opt-in adds (keda-config, overrides/values-scaleout-keda.yaml).
+app_namespace() {
+  local chart="$1" f ns
+  for f in "${VARIANT_FILE}" overrides/*.yaml; do
+    ns="$(yq -r ".clusterGroup.applications // {} | .[] | select(.path == \"charts/all/${chart}\") | .namespace" "${f}")"
+    if [[ -n "${ns}" && "${ns}" != "null" ]]; then
+      echo "${ns}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+CHARTS=()
 for dir in charts/all/*/; do
   chart="$(basename "${dir}")"
-  ns="$(yq -r ".clusterGroup.applications[] | select(.path == \"charts/all/${chart}\") | .namespace" "${VARIANT_FILE}")"
-  if [[ -z "${ns}" || "${ns}" == "null" ]]; then
-    echo "render-charts.sh: charts/all/${chart} has no application in ${VARIANT_FILE}" >&2
+  if ! ns="$(app_namespace "${chart}")"; then
+    echo "render-charts.sh: charts/all/${chart} has no application in ${VARIANT_FILE} or overrides/" >&2
     exit 1
   fi
+  CHARTS+=("${chart}:${ns}")
   helm lint --strict "${dir}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}"
   helm template "${chart}" "${dir}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" \
     > "${RENDER_DIR}/charts/${chart}.yaml"
@@ -166,7 +184,13 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
 helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
   --set global.compare.enabled=true --set image.pullPolicy=Always \
   > "${RENDER_DIR}/charts/notebook-compare-pull.yaml"
-echo "rendered charts/*-variant.yaml and charts/notebook-compare*.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true --set global.compare.mode=scaleout \
+  --set-json 'global.compare.passThrough={"nested":{"rate":2.5,"names":["a","b"]}}' \
+  > "${RENDER_DIR}/charts/notebook-compare-scaleout.yaml"
+helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" "${SETS[@]}" \
+  --set timeSlicing.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-timeslicing.yaml"
+echo "rendered charts/*-variant.yaml, charts/notebook-compare*.yaml and charts/nvidia-gpu-config-timeslicing.yaml"
 
 # Scale-out settings (charts/all/ray-serve-llm/templates/_settings.tpl). --set reads 0.5 as a
 # string, so the GPU share goes in as JSON. Two replicas on half a GPU each must each claim at
@@ -210,13 +234,26 @@ refuse autoscaling-shared-gpu-memory ray-serve-llm vllm-inference \
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
 refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be pairs or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge
+refuse keda-threshold ray-serve-llm vllm-inference "scaleOut.waitingRequestsPerPod must be a number above 0" \
+  --set global.scaleOut.mode=keda --set scaleOut.waitingRequestsPerPod=0
+refuse keda-thanos-url ray-serve-llm vllm-inference "scaleOut.thanosUrl must be an http:// or https:// address" \
+  --set global.scaleOut.mode=keda --set scaleOut.thanosUrl=thanos-querier:9092
+refuse keda-cooldown ray-serve-llm vllm-inference "scaleOut.cooldownSeconds must be a whole number from 0 to 3600" \
+  --set global.scaleOut.mode=keda --set scaleOut.cooldownSeconds=7200
+refuse timeslicing-replicas nvidia-gpu-config nvidia-gpu-operator "timeSlicing.replicas must be a whole number of at least 2" \
+  --set timeSlicing.enabled=true --set timeSlicing.replicas=1
 echo "rendered charts/ray-serve-llm-scaling.yaml, charts/ray-serve-llm-cache-*.yaml; refused/*.txt as expected"
 
 # global.scaleOut.mode=keda, with the values files the operator includes in that case.
 value_files AWS --set global.scaleOut.mode=keda
 operator_sets AWS
-helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
-  --set global.scaleOut.mode=keda > "${RENDER_DIR}/charts/ray-serve-llm-keda.yaml"
+for entry in "${CHARTS[@]}"; do
+  chart="${entry%%:*}" ns="${entry#*:}"
+  helm lint --strict "charts/all/${chart}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" \
+    --set global.scaleOut.mode=keda
+  helm template "${chart}" "charts/all/${chart}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" \
+    --set global.scaleOut.mode=keda > "${RENDER_DIR}/charts/${chart}-keda.yaml"
+done
 helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
   --set global.scaleOut.mode=keda --set global.compare.enabled=true > "${RENDER_DIR}/charts/notebook-compare-keda.yaml"
 echo "rendered charts/*-keda.yaml with: ${FILES[*]}"

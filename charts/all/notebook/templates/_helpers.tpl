@@ -57,6 +57,15 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- ((.Values.global.compare | default dict).load | default dict).image | default "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081" -}}
 {{- end }}
 
+{{/* The server's ScaledObject that the runner pauses for a run: compare.serverScaledObject while
+     global.scaleOut.mode is keda and the runner manages the server (compare.serverDeployment); empty
+     otherwise. */}}
+{{- define "notebook.compareScaledObject" -}}
+{{- if and (eq (toString (.Values.global.scaleOut | default dict).mode) "keda") .Values.compare.serverDeployment -}}
+{{- .Values.compare.serverScaledObject -}}
+{{- end -}}
+{{- end }}
+
 {{/* The energy source the config asks for (auto when not set). */}}
 {{- define "notebook.compareEnergy" -}}
 {{- ((.Values.global.compare | default dict).energy | default dict).source | default "auto" -}}

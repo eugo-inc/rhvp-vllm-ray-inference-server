@@ -1,0 +1,72 @@
+# Included through clusterGroup.sharedValueFiles in variants/prod/values-prod.yaml
+# only when global.scaleOut.mode is "keda" (values-global.yaml).
+#
+# What it does: installs Red Hat's Custom Metrics Autoscaler (KEDA) the way Red
+# Hat documents it, so that the server chart's ScaledObject
+# (charts/all/ray-serve-llm/templates/scaledobject.yaml) can add and remove whole
+# server pods:
+#   - the operator openshift-custom-metrics-autoscaler-operator from
+#     redhat-operators, channel stable, in namespace openshift-keda, for all
+#     namespaces;
+#   - the app keda-config (charts/all/keda-config), whose KedaController "keda"
+#     makes the operator install KEDA itself.
+#
+# The ScaledObject reads Ray's metrics from the cluster's monitoring for
+# user-defined projects, which must be enabled on the cluster (Red Hat's
+# prerequisite for this autoscaler); this file does not change that setting.
+#
+# Each server pod asks for server.gpuCount GPUs and mounts the model volume
+# ray-serve-llm-models. Pods on other nodes need a ReadWriteMany volume
+# (modelStorage.accessMode in charts/all/ray-serve-llm/values.yaml); on one node
+# they need a GPU each, or the opt-in time-slicing in
+# charts/all/nvidia-gpu-config/values.yaml.
+#
+# clusterGroup.applications.ray-serve-llm.ignoreDifferences is a list, and a list
+# in a later values file replaces the earlier one. This file therefore restates
+# the app's rules from variants/prod/values-prod.yaml and adds one; keep the two
+# in step (tests/test_charts.py checks it).
+clusterGroup:
+  namespaces:
+    # Red Hat installs the operator for all namespaces: an OperatorGroup with no
+    # target namespaces.
+    openshift-keda:
+      operatorGroup: true
+      targetNamespaces: []
+      labels:
+        openshift.io/cluster-monitoring: "true"
+
+  subscriptions:
+    keda:
+      name: openshift-custom-metrics-autoscaler-operator
+      namespace: openshift-keda
+      channel: stable
+
+  applications:
+    keda-config:
+      name: keda-config
+      namespace: openshift-keda
+      path: charts/all/keda-config
+    ray-serve-llm:
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          name: ray-serve-llm
+          jqPathExpressions:
+            - '.spec.template.spec.containers[] | select(.name == "server") | .image'
+        - group: apps
+          kind: Deployment
+          name: ray-serve-llm
+          jsonPointers:
+            - /spec/replicas
+        - group: build.openshift.io
+          kind: BuildConfig
+          jqPathExpressions:
+            - '.spec.paused'
+        # The image comparison's runner pauses the autoscaler for a run with this
+        # annotation (paused-replicas "0") and removes it when the run ends; a sync
+        # during a run must not take the pause away.
+        - group: keda.sh
+          kind: ScaledObject
+          name: ray-serve-llm
+          jqPathExpressions:
+            - '.metadata.annotations["autoscaling.keda.sh/paused-replicas"]'

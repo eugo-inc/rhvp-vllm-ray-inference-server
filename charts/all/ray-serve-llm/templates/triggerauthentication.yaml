@@ -1,0 +1,101 @@
+{{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+# How the ScaledObject (scaledobject.yaml) reads the cluster monitoring's Thanos
+# Querier, as Red Hat documents it for the Custom Metrics Autoscaler: a
+# ServiceAccount thanos that may read pods and pod metrics in this namespace, a
+# TriggerAuthentication that hands its bound token to the trigger as a bearer
+# token, and a Role that lets the autoscaler's operator (ServiceAccount
+# keda-operator in openshift-keda, where overrides/values-scaleout-keda.yaml
+# installs it) request that token. Bound tokens need the operator at 2.17 or
+# newer. Upstream KEDA from 2.21 also refuses a bound token unless the operator
+# maps this ServiceAccount to a token audience (KEDA's 2.21 migration notes);
+# upstream 2.19, the line of Red Hat's current operator, needs no mapping.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thanos
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: thanos-metrics-reader
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+  - apiGroups:
+      - metrics.k8s.io
+    resources:
+      - pods
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: thanos-metrics-reader
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: thanos-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: thanos
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keda-operator-token-creator
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - serviceaccounts/token
+    resourceNames:
+      - thanos
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keda-operator-token-creator
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keda-operator-token-creator
+subjects:
+  - kind: ServiceAccount
+    name: keda-operator
+    namespace: openshift-keda
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-trigger-auth-prometheus
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+  annotations:
+    # The CRD exists only once the operator is installed.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  boundServiceAccountToken:
+    - parameter: bearerToken
+      serviceAccountName: thanos
+{{- end }}

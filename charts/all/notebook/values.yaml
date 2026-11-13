@@ -12,6 +12,9 @@ global:
   # global.compare comes from values-global.yaml; this stub keeps it off.
   compare:
     enabled: false
+  # global.scaleOut comes from values-global.yaml; this stub keeps it off.
+  scaleOut:
+    mode: none
 
 # CPU architecture (kubernetes.io/arch) of the node that builds and runs the image.
 arch: amd64
@@ -74,6 +77,12 @@ compare:
   # the GPU yourself).
   serverDeployment: ray-serve-llm
   serverReplicas: 1
+  # The server's autoscaler, a ScaledObject in notebook.serverNamespace, used only
+  # while global.scaleOut.mode is keda. The runner pauses it for the run (its
+  # annotation autoscaling.keda.sh/paused-replicas: "0"), so that it does not
+  # bring the server back onto the GPU, and removes the pause when the run ends.
+  # Empty, or an empty serverDeployment, leaves the autoscaler alone.
+  serverScaledObject: ray-serve-llm
   # The runner Job's pod (the GuideLLM image, with rhvp_compare copied in from
   # the notebook image). GuideLLM runs in it.
   runnerResources:
