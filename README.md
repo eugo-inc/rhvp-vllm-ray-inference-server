@@ -800,11 +800,15 @@ replicas on the same GPU (leave `REPLICA_GPUS` empty), `false` needs a different
 Before the first round the runner reads, with `nvidia-smi`, the GPUs each replica's device request reaches, so a GPU
 id the machine lacks fails there, and so do two requests that reach the same GPU with `sharedGpu: false` (such as
 `0` and that GPU's UUID); every launch record keeps the request (`gpus`) and those GPUs' UUIDs (`gpu_uuids`), and
-`results.md` and the notebook show both for each replica. A side with `compileCache: warm` (docker only, and only
-with the warm-up round) keeps its compile caches from its warm-up round in a docker volume, so its scored rounds
-start with them; `cold`, the default, starts every replica with empty caches. `results.md` and the notebook show each
-side's setting, and when the two sides differ they say so next to the primary metrics: the start-up figures then
-compare the two cache settings together with the two images. The setting works in mode `pairs` too.
+`results.md` and the notebook show both for each replica. Two MIG devices (`REPLICA_GPUS` such as `0:0,0:1`, or two
+`MIG-...` UUIDs) are not compared that way: in a container given a MIG device, `nvidia-smi` lists the parent GPU, so
+two MIG devices of one GPU show the same UUID, and the run relies on the two ids being different; their launch
+records show the parent GPU's UUID. A MIG device and a whole GPU are still compared. A side with
+`compileCache: warm` (docker only, and only with the warm-up round) keeps its compile caches from its warm-up round
+in a docker volume, so its scored rounds start with them; `cold`, the default, starts every replica with empty
+caches. `results.md` and the notebook show each side's setting, and when the two sides differ they say so next to the
+primary metrics: the start-up figures then compare the two cache settings together with the two images. The setting
+works in mode `pairs` too.
 
 #### Picking the surge rate
 
@@ -866,6 +870,8 @@ mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.
 - The benchmark's mode ran end to end with docker against GuideLLM's mock servers only. A surge in which some
   requests missed the goals has not run end to end (unit tests only), and the OpenShift scale round is not built.
+- No run has used MIG devices. That `nvidia-smi` lists the parent GPU's UUID in a container given a MIG device is
+  from NVIDIA's documented output, not from a run here.
 
 ## Changing the model
 

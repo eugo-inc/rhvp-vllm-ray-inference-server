@@ -1188,6 +1188,42 @@ def test_two_requests_that_reach_one_gpu_fail_in_prepare_when_each_replica_needs
         shared.check_plan(_scale_plan_for(True))  # sharedGpu true still compares the strings, before any probe
 
 
+@pytest.mark.parametrize("request_, mig", [
+    ("0:0", True), ("12:3", True), ("MIG-4f2a9c1e-0000-5000-8000-000000000001", True),
+    ("MIG-GPU-4f2a9c1e-0000-5000-8000-000000000000/1/0", True), ("0:0,0:1", True),
+    ("0", False), ("GPU-4f2a9c1e-0000-5000-8000-000000000000", False), ("all", False), ("0:0,1", False), ("", False),
+    ("0:", False),
+])
+def test_mig_requests_are_told_from_whole_gpus(request_, mig):
+    assert dockerapi.is_mig_request(request_) is mig
+
+
+@pytest.mark.parametrize("replica_gpus", ["0:0,0:1", "MIG-aaaa,MIG-bbbb"])
+def test_two_mig_devices_of_one_gpu_run_when_each_replica_needs_its_own(replica_gpus):
+    # nvidia-smi in a container given a MIG device lists the parent GPU's UUID, so both probes show GPU-0000: two MIG
+    # requests are not compared, and the run goes on. Their launch records name the parent GPU.
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"})
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS=replica_gpus)
+    plan = _scale_plan_for(False)
+    backend.check_plan(plan)
+    backend.prepare(plan)
+    side_a = plan["sides"][0]
+    second = backend.start(plan, plan["rounds"][2], side_a, plans.side_spec(plan, side_a), replica=2)
+    facts = backend.launch_facts(second)
+    assert facts["gpus"] == replica_gpus.split(",")[1] and facts["gpu_uuids"] == ["GPU-0000"]
+
+
+def test_a_mig_device_and_its_whole_gpu_fail_in_prepare_when_each_replica_needs_its_own():
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"})
+    docker.server_state = {"Running": True}
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,0:1", RHVP_COMPARE_SERVER_CONTAINER="live")
+    plan = _scale_plan_for(False)
+    backend.check_plan(plan)
+    with pytest.raises(runner.RoundError, match="REPLICA_GPUS 0 and 0:1 both reach GPU GPU-0000"):
+        backend.prepare(plan)
+    assert ("stop", "live") not in docker.calls
+
+
 def test_a_replica_gpu_this_machine_lacks_fails_in_prepare_before_the_server_stops():
     class NoSecondGpu(ReplicaDocker):
         def run(self, name, body, timeout_s=300.0, log_to=None):

@@ -289,14 +289,16 @@ Three parts, each off by default. With every default, the local charts render ex
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
   anything changes, a plan whose `sharedGpu` does not match (`DockerBackend.check_plan`); `prepare()` reads each
   replica's GPUs with nvidia-smi into the launch records (`gpus`, `gpu_uuids`, both shown in `results.md` and the
-  notebook), and refuses two requests that reach one GPU while `sharedGpu` is false. `scaleOut.requestRate`'s
-  default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a pairs run of the same
-  sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored surge of both sides
-  met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at most 5% within the
-  goals (`SURGE_MET_SHARE_LOW`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
-  (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that one ScaledObject),
-  and removes the pause when it brings the server back; the by-hand restore command it prints includes the
-  `oc annotate` step, and so does the README's recovery for a runner killed outright (Argo CD ignores the
+  notebook), and refuses two requests that reach one GPU while `sharedGpu` is false. Two MIG requests (`0:0`,
+  `MIG-...`; `dockerapi.is_mig_request`) are not compared: nvidia-smi in a container given a MIG device lists its
+  parent GPU, so two MIG devices of one GPU share a UUID; a MIG device and a whole GPU still are.
+  `scaleOut.requestRate`'s default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a
+  pairs run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
+  surge of both sides met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at
+  most 5% within the goals (`SURGE_MET_SHARE_LOW`). In keda mode, the OpenShift runner pauses the ScaledObject before it
+  scales the server to 0 (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that
+  one ScaledObject), and removes the pause when it brings the server back; the by-hand restore command it prints
+  includes the `oc annotate` step, and so does the README's recovery for a runner killed outright (Argo CD ignores the
   annotation, so nothing else removes it). `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace
   period.
 
@@ -354,6 +356,8 @@ Not checked yet:
   server environment (`env_source: "none"`).
 - An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
   and take the one serving replica out of the Service.
+- The comparison's scale-out mode on MIG devices: that nvidia-smi lists the parent GPU's UUID in a container given a
+  MIG device is from NVIDIA's documented output, not from a run.
 
 ## How to deploy
 

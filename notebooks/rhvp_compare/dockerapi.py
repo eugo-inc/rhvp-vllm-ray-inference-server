@@ -48,7 +48,10 @@ set by RHVP_COMPARE_REPLICA_GPUS (else RHVP_COMPARE_GPUS), and it must agree wit
 its own for each. prepare() then reads, with nvidia-smi, the GPUs each replica's device request reaches (a request for
 a GPU this machine lacks fails there, before the first round, and so do two requests that reach the same GPU when
 sharedGpu is false, such as an index and that GPU's UUID), and every launch record keeps the request (`gpus`) and
-those GPUs' UUIDs (`gpu_uuids`), which results.md and the notebook show.
+those GPUs' UUIDs (`gpu_uuids`), which results.md and the notebook show. Two MIG device requests (`0:0`, `MIG-...`)
+are not compared: nvidia-smi in a container given a MIG device lists that device's parent GPU, so two MIG devices of
+one GPU show the same UUID, and their launch records name the parent GPU's UUID. A MIG device and a whole GPU are
+still compared.
 
 Launch records (`launch_facts`): the environment of the side's largest process (by resident memory, which is the
 server even when an entrypoint script or an init process is PID 1), read with docker exec once the server has
@@ -59,6 +62,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import struct
 import time
@@ -251,6 +255,16 @@ def environ(text: str) -> dict[str, str]:
     return out
 
 
+#: A MIG device id as docker's --gpus device= takes it: <GPU index>:<MIG device index>, or a MIG UUID (MIG-...).
+MIG_DEVICE = re.compile(r"\d+:\d+|MIG-\S+", re.IGNORECASE)
+
+
+def is_mig_request(gpus: str) -> bool:
+    """True when every device id of a GPU request (comma-separated) names a MIG device."""
+    ids = [g.strip() for g in gpus.split(",") if g.strip()]
+    return bool(ids) and all(MIG_DEVICE.fullmatch(g) for g in ids)
+
+
 def _gpu_request(gpus: str) -> list[dict]:
     if gpus.strip().lower() == "all":
         return [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]
@@ -399,11 +413,16 @@ class DockerBackend:
                 raise runner.RoundError(f"{what} could not be read with nvidia-smi (exit {code}). Check GPUS and "
                                         "REPLICA_GPUS against this machine's GPUs")
             self._gpu_uuids[request] = [row[1].strip() for row in rows if len(row) > 1 and row[1].strip()]
-        same = set(self._gpu_uuids[self._gpus(1)]) & set(self._gpu_uuids[self._gpus(2)])
-        if not plan["scale_out"]["shared_gpu"] and same:  # two strings for one GPU, such as an index and its UUID
+        first, second = self._gpus(1), self._gpus(2)
+        if plan["scale_out"]["shared_gpu"] or (is_mig_request(first) and is_mig_request(second)):
+            # nvidia-smi in a container given a MIG device lists that device's parent GPU, so two MIG devices of one
+            # GPU show the same UUID: two MIG requests are not compared (check_plan has refused two equal strings).
+            return
+        same = set(self._gpu_uuids[first]) & set(self._gpu_uuids[second])
+        if same:  # two strings for one GPU, such as an index and its UUID, or a MIG device and its whole parent GPU
             raise runner.RoundError(
-                f"scaleOut.sharedGpu is false (each replica on its own GPU), but REPLICA_GPUS {self._gpus(1)} and "
-                f"{self._gpus(2)} both reach GPU {', '.join(sorted(same))}: give each replica a different GPU, or set "
+                f"scaleOut.sharedGpu is false (each replica on its own GPU), but REPLICA_GPUS {first} and {second} "
+                f"both reach GPU {', '.join(sorted(same))}: give each replica a different GPU, or set "
                 "scaleOut.sharedGpu: true")
 
     def on_stop(self) -> None:

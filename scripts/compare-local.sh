@@ -41,9 +41,9 @@
 #   NETWORK         docker network (default rhvp-compare)
 #   MODELS_VOLUME   docker volume for /models (default rhvp-compare-models)
 #   GPUS            "all" (default) or a device id such as 0; give one id on a machine with several GPUs
-#   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1), for
-#                   scaleOut.sharedGpu: false; default empty, every replica gets GPUS (one GPU shared, as
-#                   scaleOut.sharedGpu: true expects)
+#   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1, or two MIG
+#                   devices such as 0:0,0:1), for scaleOut.sharedGpu: false; default empty, every replica gets
+#                   GPUS (one GPU shared, as scaleOut.sharedGpu: true expects)
 #   CPUSET          CPUs the runner and every container it starts may use, as docker writes them (for example
 #                   0-3; default all)
 #   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)
