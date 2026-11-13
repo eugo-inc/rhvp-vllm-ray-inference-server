@@ -13,6 +13,13 @@
 {{- if or (kindIs "float64" .) (kindIs "int64" .) (kindIs "int" .) }}true{{ end }}
 {{- end }}
 
+{{/* True when the compile caches live on a volume that outlives the pod (compileCache.mode node or
+     shared): deployment.yaml then mounts PVC ray-serve-llm-compile-cache (compile-cache-pvc.yaml) at
+     /cache and sets the CUDA driver's cache variables. */}}
+{{- define "ray-serve-llm.compileCacheKept" -}}
+{{- if has (toString (.Values.compileCache | default dict).mode) (list "node" "shared") }}true{{ end }}
+{{- end }}
+
 {{- define "ray-serve-llm.checkSettings" -}}
 {{- $scale := .Values.global.scaleOut | default dict -}}
 {{- $mode := "none" -}}
@@ -48,6 +55,15 @@
 {{- end -}}
 {{- if gt (mulf $max $gpr) (addf $srv.gpuCount 0.000001) -}}
 {{- fail (printf "server.autoscaling.maxReplicas (%v) times server.gpuPerReplica (%v) is more than server.gpuCount (%v)" $max $gpr $srv.gpuCount) -}}
+{{- end -}}
+{{- /* Replicas that share a GPU: vLLM refuses to start when the GPU's free memory is below
+       gpu_memory_utilization times its total memory, so each must claim at most its share
+       (serve_app.py refuses the same at start). */ -}}
+{{- $gmu := ($srv.engineKwargs | default dict).gpu_memory_utilization -}}
+{{- if and (lt (float64 $gpr) 1.0) (gt (float64 $max) 1.0) (include "ray-serve-llm.isNumber" $gmu) -}}
+{{- if gt (float64 $gmu) (addf $gpr 0.000000001) -}}
+{{- fail (printf "server.engineKwargs.gpu_memory_utilization (%v) must not exceed server.gpuPerReplica (%v) when up to %v replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's memory when it starts, so a later replica would not fit" $gmu $gpr $max) -}}
+{{- end -}}
 {{- end -}}
 {{- if not (and (include "ray-serve-llm.isWhole" $srv.metricsPort) (ge (float64 $srv.metricsPort) 1.0) (le (float64 $srv.metricsPort) 65535.0) (ne (float64 $srv.metricsPort) (float64 $srv.httpPort))) -}}
 {{- fail (printf "server.metricsPort must be a port number (1 to 65535) other than server.httpPort; got %v (%s)" $srv.metricsPort (kindOf $srv.metricsPort)) -}}

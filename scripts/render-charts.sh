@@ -169,10 +169,12 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
 echo "rendered charts/*-variant.yaml and charts/notebook-compare*.yaml"
 
 # Scale-out settings (charts/all/ray-serve-llm/templates/_settings.tpl). --set reads 0.5 as a
-# string, so the GPU share goes in as JSON.
+# string, so the GPU share goes in as JSON. Two replicas on half a GPU each must each claim at
+# most half of its memory, so the memory share is lowered too.
 helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
-  --set-json server.gpuPerReplica=0.5 > "${RENDER_DIR}/charts/ray-serve-llm-scaling.yaml"
+  --set-json server.gpuPerReplica=0.5 --set-json server.engineKwargs.gpu_memory_utilization=0.4 \
+  > "${RENDER_DIR}/charts/ray-serve-llm-scaling.yaml"
 for cache in node shared; do
   helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
     --set compileCache.mode="${cache}" > "${RENDER_DIR}/charts/ray-serve-llm-cache-${cache}.yaml"
@@ -201,6 +203,10 @@ refuse autoscaling-no-target ray-serve-llm vllm-inference "targetOngoingRequests
   --set server.autoscaling.maxReplicas=2
 refuse autoscaling-over-gpus ray-serve-llm vllm-inference "is more than server.gpuCount" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4
+refuse autoscaling-shared-gpu-memory ray-serve-llm vllm-inference \
+  "server.engineKwargs.gpu_memory_utilization (0.85) must not exceed server.gpuPerReplica (0.5)" \
+  --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
+  --set-json server.gpuPerReplica=0.5
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
 refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be pairs or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge

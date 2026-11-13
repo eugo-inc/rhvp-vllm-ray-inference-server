@@ -82,9 +82,12 @@ def test_contract_file_loads_unchanged(tmp_path):
         "accelerator_type": None,
         "min_replicas": 1,
         "max_replicas": 1,
+        "target_ongoing_requests": None,
+        "gpu_per_replica": 1,
         "object_store_memory_gb": 2,
         "http_host": "0.0.0.0",
         "http_port": 8000,
+        "metrics_port": 8080,
     }
 
 
@@ -301,6 +304,280 @@ def test_object_store_bytes(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Autoscaling inside the pod: replicas, target, GPU share, metrics port
+# --------------------------------------------------------------------------
+
+SCALING = {"max_replicas": 2, "target_ongoing_requests": 4, "gpu_per_replica": 0.5,
+           "engine_kwargs": {"gpu_memory_utilization": 0.4}}
+
+
+def test_scaling_keys_reach_ray_serve(tmp_path):
+    cfg = load_config(write(tmp_path, contract_with(**SCALING)), {})
+    assert (cfg["min_replicas"], cfg["max_replicas"], cfg["target_ongoing_requests"]) == (1, 2, 4)
+    kwargs = build_llm_config_kwargs(cfg)
+    assert kwargs["deployment_config"] == {
+        "autoscaling_config": {"min_replicas": 1, "max_replicas": 2, "target_ongoing_requests": 4}}
+    # One bundle per vLLM worker with half a GPU: Ray Serve LLM then also sets VLLM_RAY_PER_WORKER_GPUS.
+    assert kwargs["placement_group_config"] == {"bundle_per_worker": {"GPU": 0.5}}
+    assert kwargs["engine_kwargs"]["gpu_memory_utilization"] == 0.4
+
+
+def test_defaults_add_no_new_llm_config_keys(tmp_path):
+    kwargs = build_llm_config_kwargs(load_config(write(tmp_path, CONTRACT_YAML), {}))
+    assert "placement_group_config" not in kwargs
+    assert kwargs["deployment_config"] == {"autoscaling_config": {"min_replicas": 1, "max_replicas": 1}}
+
+
+def test_target_alone_is_passed_with_one_replica(tmp_path):
+    cfg = load_config(write(tmp_path, contract_with(target_ongoing_requests=2.5)), {})
+    assert build_llm_config_kwargs(cfg)["deployment_config"]["autoscaling_config"]["target_ongoing_requests"] == 2.5
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        # Ray Serve LLM's own default target is 10^9 ongoing requests: the count would never grow.
+        ({"max_replicas": 2}, "target_ongoing_requests must be set when max_replicas is above 1"),
+        ({"min_replicas": 2, "max_replicas": 2}, "target_ongoing_requests must be set"),
+        ({"target_ongoing_requests": 0}, "target_ongoing_requests must be null or a number above 0"),
+        ({"target_ongoing_requests": -1}, "target_ongoing_requests"),
+        ({"target_ongoing_requests": True}, "target_ongoing_requests"),
+        ({"target_ongoing_requests": "4"}, "target_ongoing_requests"),
+        ({"gpu_per_replica": 0}, "gpu_per_replica must be null or a number above 0"),
+        ({"gpu_per_replica": "0.5"}, "gpu_per_replica must be null or a number"),
+        ({"gpu_per_replica": True}, "gpu_per_replica"),
+        ({"gpu_per_replica": 1.5}, "must be at most 1 for a replica with one worker"),
+        ({"gpu_per_replica": 1, "engine_kwargs": {"tensor_parallel_size": 2}},
+         r"must equal tensor_parallel_size times pipeline_parallel_size \(2\)"),
+        ({"gpu_per_replica": 0.5, "engine_kwargs": {"pipeline_parallel_size": 2}}, r"\(2\)"),
+        ({"engine_kwargs": {"pipeline_parallel_size": 0}}, "pipeline_parallel_size must be an integer"),
+        ({"max_replicas": 2, "target_ongoing_requests": 4, "gpu_per_replica": 0.5},
+         r"gpu_memory_utilization \(0.85\) must not exceed gpu_per_replica \(0.5\)"),
+        ({"max_replicas": 3, "target_ongoing_requests": 4, "gpu_per_replica": 0.3,
+          "engine_kwargs": {"gpu_memory_utilization": 0.31}}, "must not exceed gpu_per_replica"),
+        ({"metrics_port": 8000}, "metrics_port must be an integer in 1..65535 other than http_port"),
+        ({"metrics_port": 0}, "metrics_port"),
+        ({"metrics_port": "8080"}, "metrics_port"),
+    ],
+)
+def test_invalid_scaling_values_are_rejected(tmp_path, changes, message):
+    with pytest.raises(ConfigError, match=message):
+        load_config(write(tmp_path, contract_with(**changes)), {})
+
+
+def test_share_with_one_replica_keeps_the_memory_setting(tmp_path):
+    # One replica alone on the GPU: its 0.85 fits, whatever share Ray books for it.
+    cfg = load_config(write(tmp_path, contract_with(gpu_per_replica=0.5)), {})
+    assert cfg["gpu_per_replica"] == 0.5
+    assert build_llm_config_kwargs(cfg)["placement_group_config"] == {"bundle_per_worker": {"GPU": 0.5}}
+
+
+def test_memory_env_override_is_checked_against_the_share(tmp_path):
+    path = write(tmp_path, contract_with(max_replicas=2, target_ongoing_requests=4, gpu_per_replica=0.5))
+    with pytest.raises(ConfigError, match="must not exceed gpu_per_replica"):
+        load_config(path, {})
+    assert load_config(path, {"RHVP_GPU_MEMORY_UTILIZATION": "0.45"})["engine_kwargs"]["gpu_memory_utilization"] == 0.45
+
+
+@pytest.mark.parametrize(
+    "engine, share, expected",
+    [
+        ({}, None, 1),
+        ({"tensor_parallel_size": 2}, None, 2),
+        ({"tensor_parallel_size": 2}, 2, 2),
+        ({"tensor_parallel_size": 2, "pipeline_parallel_size": 2}, None, 4),
+        ({"tensor_parallel_size": 1}, 0.25, 0.25),
+    ],
+)
+def test_gpu_per_replica_defaults_to_one_gpu_per_worker(tmp_path, engine, share, expected):
+    changes = {"engine_kwargs": engine}
+    if share is not None:
+        changes["gpu_per_replica"] = share
+    cfg = load_config(write(tmp_path, contract_with(**changes)), {})
+    assert cfg["gpu_per_replica"] == expected
+    whole = expected >= 1
+    assert ("placement_group_config" in build_llm_config_kwargs(cfg)) is not whole
+
+
+@pytest.mark.parametrize(
+    "changes, ray_gpus, short",
+    [
+        ({}, 1, False),
+        ({}, 0, True),
+        (SCALING, 1, False),
+        ({"max_replicas": 4, "target_ongoing_requests": 8}, 4, False),
+        ({"max_replicas": 4, "target_ongoing_requests": 8}, 2, True),
+        ({"engine_kwargs": {"tensor_parallel_size": 2}, "max_replicas": 2, "target_ongoing_requests": 8}, 2, True),
+    ],
+)
+def test_gpu_shortfall(tmp_path, changes, ray_gpus, short):
+    cfg = load_config(write(tmp_path, contract_with(**changes)), {})
+    message = serve_app.gpu_shortfall(cfg, ray_gpus)
+    assert (message is not None) is short
+    if short:
+        assert f"more than the {ray_gpus:g} GPUs Ray sees" in message
+
+
+def test_ray_init_arguments(tmp_path):
+    cfg = load_config(write(tmp_path, CONTRACT_YAML), {})
+    assert serve_app.ray_init_kwargs(cfg) == {
+        "address": "local", "object_store_memory": 2 * 1024**3, "_metrics_export_port": 8080}
+    cfg = load_config(write(tmp_path, contract_with(metrics_port=9090)), {})
+    assert serve_app.ray_init_kwargs(cfg)["_metrics_export_port"] == 9090
+
+
+def test_poll_interval(tmp_path):
+    assert serve_app.poll_interval_s(load_config(write(tmp_path, CONTRACT_YAML), {})) == 10.0
+    assert serve_app.poll_interval_s(load_config(write(tmp_path, contract_with(**SCALING)), {})) == 1.0
+    fixed = contract_with(min_replicas=2, max_replicas=2, target_ongoing_requests=4, gpu_per_replica=0.5,
+                          engine_kwargs={"gpu_memory_utilization": 0.4})
+    assert serve_app.poll_interval_s(load_config(write(tmp_path, fixed), {})) == 10.0
+
+
+def test_chart_defaults_are_the_servers():
+    """The chart writes a key into llm.yaml only when it differs from the server's default
+    (templates/configmap.yaml); the two defaults must be the same values."""
+    values = yaml.safe_load((REPO / "charts/all/ray-serve-llm/values.yaml").read_text())["server"]
+    defaults = serve_app.DEFAULTS
+    assert values["autoscaling"]["minReplicas"] == defaults["min_replicas"]
+    assert values["autoscaling"]["maxReplicas"] == defaults["max_replicas"]
+    assert values["autoscaling"]["targetOngoingRequests"] is defaults["target_ongoing_requests"] is None
+    # gpu_per_replica null means one GPU per worker; the chart's default has one worker.
+    assert values["engineKwargs"]["tensor_parallel_size"] == 1 and values["gpuPerReplica"] == 1
+    assert values["metricsPort"] == defaults["metrics_port"] == 8080
+    template = (REPO / "charts/all/ray-serve-llm/templates/configmap.yaml").read_text()
+    assert "(ne (float64 $share) 1.0)" in template and "(ne (float64 $metrics) 8080.0)" in template
+    assert "rhvp_scale.py" in re.search(r"^COPY .*serve_app\.py.*$", CONTAINERFILE, re.M).group(0)
+
+
+# --------------------------------------------------------------------------
+# Replica counts and the rhvp-scale lines
+# --------------------------------------------------------------------------
+
+LLM = "LLMServer:qwen2_5-0_5b-instruct"
+INGRESS = "OpenAiIngress"
+
+
+def _serve(apps):
+    """A serve.status() result: {app: {deployment: {replica state: count}}}."""
+    return SimpleNamespace(
+        proxies={"n1": object()},
+        applications={
+            app: SimpleNamespace(
+                status="RUNNING",
+                deployments={name: SimpleNamespace(replica_states=dict(states)) for name, states in deps.items()},
+            )
+            for app, deps in apps.items()
+        },
+    )
+
+
+def _details(app, targets):
+    return {"applications": {app: {"deployments": {name: {"target_num_replicas": n} for name, n in targets.items()}}}}
+
+
+def test_replica_counts_use_the_controllers_target():
+    status = _serve({"llm": {LLM: {"RUNNING": 1, "STARTING": 1}, INGRESS: {_Enum("RUNNING"): 1}}})
+    assert serve_app.replica_counts(status, _details("llm", {LLM: 2, INGRESS: 1}), "llm") == {
+        LLM: {"target": 2, "running": 1}, INGRESS: {"target": 1, "running": 1}}
+    # Without the details (private API unavailable): starting plus running replicas.
+    assert serve_app.replica_counts(status, None, "llm")[LLM] == {"target": 2, "running": 1}
+    stopping = _serve({"llm": {LLM: {"RUNNING": 1, "STOPPING": 1}}})
+    assert serve_app.replica_counts(stopping, {"applications": {}}, "llm")[LLM] == {"target": 1, "running": 1}
+    assert serve_app.replica_counts(status, None, "other") == {}
+    assert serve_app.replica_counts(SimpleNamespace(proxies={}, applications={}), None, "llm") == {}
+
+
+def test_scale_lines_order_and_shape():
+    import rhvp_scale
+
+    before = {LLM: {"target": 1, "running": 1}, INGRESS: {"target": 1, "running": 1}}
+    after = {LLM: {"target": 2, "running": 2}, INGRESS: {"target": 1, "running": 1}}
+    lines = serve_app.scale_lines("llm", before, after, ts=1794551388.5)
+    assert [json.loads(line) for line in lines] == [
+        {"event": "rhvp-scale", "ts": 1794551388.5, "app": "llm", "deployment": LLM, "from": 1, "to": 2,
+         "reason": "target"},
+        {"event": "rhvp-scale", "ts": 1794551388.5, "app": "llm", "deployment": LLM, "from": 1, "to": 2,
+         "reason": "running"},
+    ]
+    assert all(line.startswith(rhvp_scale.MARKER) for line in lines)
+    assert serve_app.scale_lines("llm", after, after) == []
+    # A deployment that appears or goes counts 0 on the other side.
+    gone = serve_app.scale_lines("llm", {"B": {"target": 1, "running": 1}}, {"A": {"target": 1, "running": 0}}, ts=1.0)
+    assert [(json.loads(l)["deployment"], json.loads(l)["reason"], json.loads(l)["to"]) for l in gone] == [
+        ("A", "target", 1), ("B", "target", 0), ("B", "running", 0)]
+
+
+def test_scale_watch_starts_quietly_and_logs_each_change():
+    emitted = []
+    watch = serve_app.ScaleWatch("llm", emit=emitted.append)
+    one = _serve({"llm": {LLM: {"RUNNING": 1}}})
+    assert watch.update(one, _details("llm", {LLM: 1}), ts=10.0) == []
+    assert watch.update(one, _details("llm", {LLM: 1}), ts=11.0) == []
+    deciding = watch.update(_serve({"llm": {LLM: {"RUNNING": 1, "STARTING": 1}}}), _details("llm", {LLM: 2}), ts=12.0)
+    started = watch.update(_serve({"llm": {LLM: {"RUNNING": 2}}}), _details("llm", {LLM: 2}), ts=40.0)
+    assert [(json.loads(l)["reason"], json.loads(l)["ts"]) for l in deciding + started] == [
+        ("target", 12.0), ("running", 40.0)]
+    assert emitted == deciding + started
+    # The app missing from one check tells nothing; the counts stay.
+    assert watch.update(_serve({}), None, ts=41.0) == []
+    assert watch.counts == {LLM: {"target": 2, "running": 2}}
+
+
+def test_scale_watch_never_raises(caplog):
+    watch = serve_app.ScaleWatch("llm", emit=lambda line: None)
+    broken = SimpleNamespace(applications={"llm": SimpleNamespace(deployments={LLM: SimpleNamespace(
+        replica_states={"RUNNING": "many"})})})
+    with caplog.at_level(logging.WARNING, logger="rhvp.serve"):
+        assert watch.update(broken, None) == []
+        assert watch.update(broken, None) == []
+    assert caplog.text.count("replica count check failed") == 1
+    assert watch.update(_serve({"llm": {LLM: {"RUNNING": 1}}}), None) == [] and not watch.failing
+
+
+def test_serve_and_watch_keeps_the_ready_file_through_a_scale_up(tmp_path, caplog):
+    """The loop main() runs after serve.run: the ready file stays while Ray Serve adds a replica (the app stays
+    RUNNING), and the rhvp-scale lines give the decision first, then the second running replica."""
+    import rhvp_scale
+
+    ready = str(tmp_path / "rhvp-ready")
+    stop = threading.Event()
+    script = [
+        ({LLM: {"RUNNING": 1}}, {LLM: 1}),
+        ({LLM: {"RUNNING": 1}}, {LLM: 1}),
+        ({LLM: {"RUNNING": 1, "STARTING": 1}}, {LLM: 2}),
+        ({LLM: {"RUNNING": 1, "STARTING": 1}}, {LLM: 2}),
+        ({LLM: {"RUNNING": 2}}, {LLM: 2}),
+    ]
+    seen = []
+
+    def get_status():
+        states, _ = script[len(seen)]
+        seen.append(Path(ready).exists())
+        return _serve({"llm": states})
+
+    def get_details():
+        targets = script[len(seen) - 1][1]
+        if len(seen) == len(script):
+            stop.set()
+        return _details("llm", targets)
+
+    with caplog.at_level(logging.INFO, logger="rhvp.serve"):
+        watch = serve_app.serve_and_watch("llm", ready, stop, 0, get_status=get_status, get_details=get_details)
+    # The first check runs before the ready file is written; every later one finds it.
+    assert seen == [False, True, True, True, True]
+    assert Path(ready).exists()
+    # The comparison's parser (notebooks/rhvp_compare/logs.py) reads these lines back; its side of the shape is
+    # tested in test_scaleout_contract.py.
+    events = [json.loads(line[line.index(rhvp_scale.MARKER):]) for line in caplog.text.splitlines()
+              if rhvp_scale.MARKER in line]
+    assert [(e["deployment"], e["from"], e["to"], e["reason"]) for e in events] == [
+        (LLM, 1, 2, "target"), (LLM, 1, 2, "running")]
+    assert events[0]["ts"] <= events[1]["ts"]
+    assert watch.counts == {LLM: {"target": 2, "running": 2}}
+
+
+# --------------------------------------------------------------------------
 # Environment, ready file, status helpers
 # --------------------------------------------------------------------------
 
@@ -433,6 +710,7 @@ def test_rhvp_status_exit_codes_and_output(monkeypatch, capsys):
 
     states = iter(["NO_CONTROLLER", "DEPLOYING", "RUNNING"])
     monkeypatch.setattr(rhvp_status, "check_once", lambda app, address: next(states))
+    monkeypatch.setattr(rhvp_status, "replica_lines", lambda app: [])
     monkeypatch.setattr(rhvp_status, "POLL_INTERVAL_S", 0)
     assert rhvp_status.main(["--app", "llm", "--wait", "60"]) == 0
     assert capsys.readouterr().out.strip() == "RUNNING"
@@ -440,6 +718,28 @@ def test_rhvp_status_exit_codes_and_output(monkeypatch, capsys):
     monkeypatch.setattr(rhvp_status, "check_once", lambda app, address: "DEPLOYING")
     assert rhvp_status.main(["--app", "llm"]) == 1
     assert capsys.readouterr().out.strip() == "DEPLOYING"
+
+
+def test_rhvp_status_prints_replica_counts_after_the_state(monkeypatch, capsys):
+    monkeypatch.setattr(rhvp_status, "check_once", lambda app, address: "RUNNING")
+    monkeypatch.setattr(rhvp_status, "replica_lines", lambda app: rhvp_status.count_lines(
+        {LLM: {"target": 2, "running": 1}, INGRESS: {"target": 1, "running": 1}}))
+    assert rhvp_status.main(["--app", "llm"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "RUNNING", f"{LLM}: running 1, target 2", f"{INGRESS}: running 1, target 1"]
+
+    def broken(app):
+        raise RuntimeError("controller busy")
+
+    monkeypatch.setattr(rhvp_status, "replica_lines", broken)
+    assert rhvp_status.main(["--app", "llm"]) == 0
+    out = capsys.readouterr()
+    assert out.out.splitlines() == ["RUNNING"] and "replica counts not read" in out.err
+    # No Ray cluster: nothing to count.
+    monkeypatch.setattr(rhvp_status, "check_once", lambda app, address: "NO_CONTROLLER")
+    monkeypatch.setattr(rhvp_status, "replica_lines", lambda app: pytest.fail("must not be called"))
+    assert rhvp_status.main(["--app", "llm"]) == 1
+    assert capsys.readouterr().out.splitlines() == ["NO_CONTROLLER"]
 
 
 def test_rhvp_status_reads_app_name_from_config(tmp_path, monkeypatch):

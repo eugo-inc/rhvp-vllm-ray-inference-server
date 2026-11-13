@@ -31,6 +31,12 @@ NO_TARGET = ("server.autoscaling.targetOngoingRequests must be set when maxRepli
              "default target is 10^9 ongoing requests per replica, so the replica count would never grow")
 MOVED = ("server.minReplicas and server.maxReplicas moved to server.autoscaling.minReplicas and "
          "server.autoscaling.maxReplicas")
+#: Why replicas that share a GPU must each claim at most their share of its memory (inference-server/serve_app.py
+#: refuses the same at start): vLLM refuses to start when the GPU's free memory is below gpu_memory_utilization
+#: times its total memory.
+SHARED_GPU_MEMORY = ("server.engineKwargs.gpu_memory_utilization ({memory}) must not exceed server.gpuPerReplica "
+                     "({share}) when up to {high} replicas share a GPU: each vLLM replica claims that fraction of the "
+                     "whole GPU's memory when it starts, so a later replica would not fit")
 
 
 def _number(value) -> bool:
@@ -91,8 +97,9 @@ def check_global(values: Mapping) -> list[str]:
 
 
 def check_server(values: Mapping) -> list[str]:
-    """The server chart's own settings: server.autoscaling, server.gpuPerReplica, server.metricsPort,
-    compileCache, modelStorage.accessMode and, in keda mode, scaleOut."""
+    """The server chart's own settings: server.autoscaling, server.gpuPerReplica (and, when replicas share a GPU,
+    server.engineKwargs.gpu_memory_utilization), server.metricsPort, compileCache, modelStorage.accessMode and, in
+    keda mode, scaleOut."""
     out = []
     server = values.get("server") or {}
     if "minReplicas" in server or "maxReplicas" in server:
@@ -123,6 +130,10 @@ def check_server(values: Mapping) -> list[str]:
     if _number(gpus) and high * share > gpus + 1e-6:
         out.append(f"server.autoscaling.maxReplicas ({_show(high)}) times server.gpuPerReplica ({_show(share)}) is "
                    f"more than server.gpuCount ({_show(gpus)})")
+        return out
+    memory = (server.get("engineKwargs") or {}).get("gpu_memory_utilization")
+    if share < 1 and high > 1 and _number(memory) and memory > share + 1e-9:
+        out.append(SHARED_GPU_MEMORY.format(memory=_show(memory), share=_show(share), high=_show(high)))
         return out
     port = server.get("metricsPort")
     if not (_whole(port) and 1 <= port <= 65535 and port != server.get("httpPort")):

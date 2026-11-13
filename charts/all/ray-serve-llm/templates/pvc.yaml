@@ -6,7 +6,7 @@ metadata:
     {{- include "ray-serve-llm.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.modelStorage.accessMode }}
   {{- with .Values.modelStorage.storageClassName }}
   storageClassName: {{ . | quote }}
   {{- end }}

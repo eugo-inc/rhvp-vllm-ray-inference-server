@@ -1,0 +1,24 @@
+{{- if include "ray-serve-llm.compileCacheKept" . }}
+# compileCache.mode node or shared: the server's compile caches (/cache: the CUDA
+# driver's, Triton's, vLLM's torch.compile and FlashInfer's) on a volume that
+# outlives the pod, so a later server pod does not compile the same kernels again.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ray-serve-llm-compile-cache
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- if eq (toString .Values.compileCache.mode) "shared" }}
+    - ReadWriteMany
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  {{- with .Values.compileCache.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.compileCache.size }}
+{{- end }}

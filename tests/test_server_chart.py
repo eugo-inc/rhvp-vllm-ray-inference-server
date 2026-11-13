@@ -5,16 +5,31 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 import pytest
 import yaml
 
 from chart_helpers import GLOBAL, READY_FILE, REPO, container, docs, env_map, kinds, one, quantity
 
+sys.path.insert(0, str(REPO / "inference-server"))
+
+import serve_app  # noqa: E402
+
+COMPILE_CACHE_PVC = "ray-serve-llm-compile-cache"
+
 
 @pytest.fixture(scope="module")
 def server_variant(render) -> list[dict]:
     return docs(render / "charts/ray-serve-llm-variant.yaml")
+
+
+def render_of(render, name: str) -> list[dict]:
+    return docs(render / f"charts/ray-serve-llm-{name}.yaml")
+
+
+def llm_yaml(items: list[dict]) -> str:
+    return one(items, "ConfigMap", "ray-serve-llm-config")["data"]["llm.yaml"]
 
 
 def test_server_deployment_rollout(server):
@@ -180,3 +195,102 @@ def test_server_route_when_enabled(server_variant):
     assert route["spec"]["tls"]["termination"] == "edge"
     assert route["spec"]["to"]["name"] == "ray-serve-llm"
     assert route["spec"]["port"] == {"targetPort": "http"}
+
+
+# ---- scale-out settings: each renders only away from its default ------------------------------------------
+
+
+def test_default_render_has_no_scale_out_parts(server):
+    deploy = one(server, "Deployment", "ray-serve-llm")
+    c = container(deploy, "server")
+    assert [p["name"] for p in c["ports"]] == ["http"]
+    assert [p["name"] for p in one(server, "Service", "ray-serve-llm")["spec"]["ports"]] == ["http"]
+    env = env_map(c)
+    assert "CUDA_CACHE_PATH" not in env and "CUDA_CACHE_MAXSIZE" not in env
+    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
+    assert vols["cache"] == {"name": "cache", "emptyDir": {"sizeLimit": "20Gi"}}
+    assert not [d for d in server if d["kind"] == "PersistentVolumeClaim" and d["metadata"]["name"] == COMPILE_CACHE_PVC]
+    llm = yaml.safe_load(llm_yaml(server))
+    assert not {"target_ongoing_requests", "gpu_per_replica", "metrics_port"} & set(llm)
+
+
+def test_scaling_render_reaches_ray_serve(server, render):
+    scaling = render_of(render, "scaling")
+    llm = yaml.safe_load(llm_yaml(scaling))
+    assert (llm["min_replicas"], llm["max_replicas"], llm["target_ongoing_requests"], llm["gpu_per_replica"]) == (
+        1, 2, 4, 0.5)
+    checksum = "checksum/config"
+    pod = one(scaling, "Deployment", "ray-serve-llm")["spec"]["template"]
+    default_pod = one(server, "Deployment", "ray-serve-llm")["spec"]["template"]
+    assert pod["metadata"]["annotations"][checksum] != default_pod["metadata"]["annotations"][checksum]
+    # The pod still asks for one GPU; the two replicas share it through Ray.
+    assert container({"spec": {"template": pod}}, "server")["resources"]["limits"]["nvidia.com/gpu"] == 1
+
+
+def test_rendered_llm_yaml_loads_in_the_server(server, server_variant, render, tmp_path):
+    for name, items in [("default", server), ("variant", server_variant), ("keda", render_of(render, "keda")),
+                        ("cache-node", render_of(render, "cache-node")),
+                        ("cache-shared", render_of(render, "cache-shared"))]:
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(llm_yaml(items))
+        cfg = serve_app.load_config(str(path), {})
+        assert cfg["metrics_port"] == 8080 and cfg["gpu_per_replica"] == 1, name
+    # Two replicas on half a GPU each must each claim at most half of its memory (serve_app, the chart and the
+    # values check refuse more), so the scaling render sets a memory share that fits.
+    path = tmp_path / "scaling.yaml"
+    path.write_text(llm_yaml(render_of(render, "scaling")))
+    cfg = serve_app.load_config(str(path), {})
+    assert cfg["engine_kwargs"]["gpu_memory_utilization"] == 0.4
+    kwargs = serve_app.build_llm_config_kwargs(cfg)
+    assert kwargs["deployment_config"]["autoscaling_config"] == {
+        "min_replicas": 1, "max_replicas": 2, "target_ongoing_requests": 4}
+    assert kwargs["placement_group_config"] == {"bundle_per_worker": {"GPU": 0.5}}
+    assert serve_app.poll_interval_s(cfg) == serve_app.SCALE_POLL_INTERVAL_S
+
+
+@pytest.mark.parametrize("mode, access", [("node", "ReadWriteOnce"), ("shared", "ReadWriteMany")])
+def test_compile_cache_modes_keep_the_caches(server, render, mode, access):
+    items = render_of(render, f"cache-{mode}")
+    pvc = one(items, "PersistentVolumeClaim", COMPILE_CACHE_PVC)
+    assert pvc["spec"]["accessModes"] == [access]
+    assert pvc["spec"]["resources"]["requests"]["storage"] == "20Gi"
+    assert "storageClassName" not in pvc["spec"]
+    deploy = one(items, "Deployment", "ray-serve-llm")
+    c = container(deploy, "server")
+    env = env_map(c)
+    assert env["CUDA_CACHE_PATH"] == "/cache/cuda"
+    assert env["CUDA_CACHE_MAXSIZE"] == "4294967296"  # a string: env values are strings; 4 GiB, the driver's most
+    # Every compile cache is under /cache, which is now the kept volume.
+    for name in ("TRITON_CACHE_DIR", "VLLM_CACHE_ROOT", "FLASHINFER_WORKSPACE_BASE", "XDG_CACHE_HOME",
+                 "CUDA_CACHE_PATH"):
+        assert env[name].startswith("/cache/"), name
+    mounts = {m["mountPath"]: m["name"] for m in c["volumeMounts"]}
+    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
+    assert vols[mounts["/cache"]] == {"name": "cache", "persistentVolumeClaim": {"claimName": COMPILE_CACHE_PVC}}
+    pod = deploy["spec"]["template"]["spec"]
+    assert pod["securityContext"]["fsGroupChangePolicy"] == "OnRootMismatch"
+    # Restricted-v2 has no hostPath; nothing else in the pod changes.
+    assert not [v for v in pod["volumes"] if "hostPath" in v]
+    default_deploy = one(server, "Deployment", "ray-serve-llm")
+    assert env_map(container(default_deploy, "server")).items() <= env.items()
+    assert llm_yaml(items) == llm_yaml(server)
+
+
+def test_keda_mode_opens_the_metrics_port(server, render):
+    items = render_of(render, "keda")
+    c = container(one(items, "Deployment", "ray-serve-llm"), "server")
+    assert c["ports"] == [{"name": "http", "containerPort": 8000, "protocol": "TCP"},
+                          {"name": "metrics", "containerPort": 8080, "protocol": "TCP"}]
+    svc = one(items, "Service", "ray-serve-llm")
+    assert svc["spec"]["ports"][1] == {"name": "metrics", "port": 8080, "targetPort": "metrics", "protocol": "TCP"}
+    # The server exports on that port in every mode (serve_app.ray_init_kwargs); keda only opens it.
+    assert llm_yaml(items) == llm_yaml(server)
+    assert serve_app.DEFAULTS["metrics_port"] == 8080
+
+
+def test_model_storage_access_mode_is_the_setting(server):
+    values = yaml.safe_load((REPO / "charts/all/ray-serve-llm/values.yaml").read_text())
+    assert one(server, "PersistentVolumeClaim", "ray-serve-llm-models")["spec"]["accessModes"] == [
+        values["modelStorage"]["accessMode"]]
+    template = (REPO / "charts/all/ray-serve-llm/templates/pvc.yaml").read_text()
+    assert "- {{ .Values.modelStorage.accessMode }}" in template

@@ -98,6 +98,8 @@ def test_values_check_names_every_mode():
     ({"server": {"autoscaling": {"targetOngoingRequests": 0}}}, "targetOngoingRequests must be a number above 0"),
     ({"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}}},
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),
+    ({"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5}},
+     pattern_settings.SHARED_GPU_MEMORY.format(memory="0.85", share="0.5", high="2")),
     ({"server": {"gpuPerReplica": 0}}, "server.gpuPerReplica must be a number above 0"),
     ({"server": {"gpuPerReplica": "0.5"}}, "server.gpuPerReplica must be a number above 0; got 0.5 (string)"),
     ({"server": {"metricsPort": 8000}}, "server.metricsPort must be a port number"),
@@ -115,9 +117,11 @@ def test_kuberay_message_is_plain():
 
 
 @pytest.mark.parametrize("over", [
-    {"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5}},
+    {"server": {"autoscaling": {"maxReplicas": 2, "targetOngoingRequests": 4}, "gpuPerReplica": 0.5,
+                "engineKwargs": {"gpu_memory_utilization": 0.45}}},
     {"server": {"autoscaling": {"maxReplicas": 4, "targetOngoingRequests": 8}, "gpuCount": 4}},
-    {"server": {"autoscaling": {"maxReplicas": 3, "targetOngoingRequests": 2}, "gpuPerReplica": 1 / 3}},
+    {"server": {"autoscaling": {"maxReplicas": 3, "targetOngoingRequests": 2}, "gpuPerReplica": 1 / 3,
+                "engineKwargs": {"gpu_memory_utilization": 0.3}}},
     {"global": {"scaleOut": {"mode": "keda"}}, "modelStorage": {"accessMode": "ReadWriteMany"}},
     {"compileCache": {"mode": "shared"}},
     {"global": {"compare": {"mode": "scaleout"}}},
@@ -158,6 +162,7 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("autoscaling-no-target", pattern_settings.NO_TARGET),
     ("autoscaling-over-gpus",
      "server.autoscaling.maxReplicas (2) times server.gpuPerReplica (1) is more than server.gpuCount (1)"),
+    ("autoscaling-shared-gpu-memory", pattern_settings.SHARED_GPU_MEMORY.format(memory="0.85", share="0.5", high="2")),
     ("replicas-moved", pattern_settings.MOVED),
     ("compare-mode-unknown", "global.compare.mode must be pairs or scaleout; got surge"),
 ])
