@@ -167,8 +167,10 @@ http_port: 8000
 `serve_app.py` refuses a config it cannot run, with a message that names the key: among others a `max_replicas`
 above 1 without `target_ongoing_requests` (Ray Serve LLM's own target is 10^9), a `gpu_per_replica` that is not the
 worker count of a tensor-parallel replica (or above 1 for a replica with one worker), and, for replicas that share a
-GPU, a `gpu_memory_utilization` above 0.95 times `gpu_per_replica` (`SHARED_GPU_MARGIN`, the same 0.95 in the chart,
-`scripts/pattern_settings.py` and the comparison's `plan.SHARED_GPU_LIMIT`). The chart and
+GPU, a `gpu_memory_utilization` above `gpu_per_replica` minus 0.025 (`SHARED_GPU_RESERVE`, the same 0.025 in the
+chart, `scripts/pattern_settings.py` and the comparison's `plan.SHARED_GPU_RESERVE`; tested together in
+`tests/test_scaleout_contract.py`). The reserve is per replica, so the memory left free grows with the replicas on a
+GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. The chart and
 `scripts/pattern_settings.py` refuse the same settings before a sync.
 
 Server container environment:

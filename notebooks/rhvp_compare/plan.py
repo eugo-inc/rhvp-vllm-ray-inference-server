@@ -59,8 +59,9 @@ COMPILE_CACHES = ("cold", "warm")
 #: In scaleout mode, each replica's share of its GPU's memory when the config does not set
 #: server.gpuMemoryUtilization and both replicas share one GPU (scaleOut.sharedGpu): two of them fit.
 SHARED_GPU_MEMORY_UTILIZATION = 0.4
-#: The most two replicas on one GPU may ask for together.
-SHARED_GPU_LIMIT = 0.95
+#: What each replica on a shared GPU leaves of the GPU's memory outside its share, for its CUDA context: two
+#: replicas on one GPU may ask for at most 0.5 - 0.025 each (the server's SHARED_GPU_RESERVE, the same 0.025).
+SHARED_GPU_RESERVE = 0.025
 ENERGY_SOURCES = ("auto", "dcgm", "nvidia-smi", "none")
 ENERGY_LABEL = "GPU-only power"
 DEFAULT_PORT = 8000
@@ -276,11 +277,11 @@ def _scale_out(raw, sides: list[dict], server: Mapping) -> dict:
         raise PlanError("scaleOut.sharedGpu must be true or false")
     if shared and any(s["gpu"] for s in sides):
         share = server["gpu_memory_utilization"]
-        if 2 * share > SHARED_GPU_LIMIT:
+        if share > 0.5 - SHARED_GPU_RESERVE + 1e-9:
             raise PlanError(
                 f"server.gpuMemoryUtilization ({share:g}) is each replica's share of the GPU in mode scaleout, and "
                 f"with scaleOut.sharedGpu both replicas share one GPU: two of them need it at most "
-                f"{SHARED_GPU_LIMIT / 2:g}. When each replica has a GPU of its own, set scaleOut.sharedGpu: false "
+                f"{0.5 - SHARED_GPU_RESERVE:g}. When each replica has a GPU of its own, set scaleOut.sharedGpu: false "
                 "and give each replica its GPU with REPLICA_GPUS (scripts/compare-local.sh)")
     return {
         "replicas_start": 1,

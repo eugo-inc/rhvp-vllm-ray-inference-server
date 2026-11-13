@@ -32,16 +32,16 @@ NO_TARGET = ("server.autoscaling.targetOngoingRequests must be set when maxRepli
              "default target is 10^9 ongoing requests per replica, so the replica count would never grow")
 MOVED = ("server.minReplicas and server.maxReplicas moved to server.autoscaling.minReplicas and "
          "server.autoscaling.maxReplicas")
-#: Replicas that share a GPU each claim at most this part of their share of its memory: vLLM refuses to start when
-#: the GPU's free memory is below gpu_memory_utilization times its total memory, and a starting replica needs a
-#: little memory of its own before that check. inference-server/serve_app.py (SHARED_GPU_MARGIN) refuses the same
-#: at start, and the comparison caps two replicas on one GPU at the same 0.95 (notebooks/rhvp_compare/plan.py,
-#: SHARED_GPU_LIMIT).
-SHARED_GPU_MARGIN = 0.95
-SHARED_GPU_MEMORY = ("server.engineKwargs.gpu_memory_utilization ({memory}) must be at most 0.95 times "
-                     "server.gpuPerReplica ({share}) when up to {high} replicas share a GPU: each vLLM replica claims "
-                     "that fraction of the whole GPU's memory when it starts, and needs a little more before it can, "
-                     "so at the full share a later replica would not fit")
+#: Replicas that share a GPU each leave this part of the GPU's memory outside their share (gpu_memory_utilization at
+#: most gpuPerReplica - 0.025): vLLM refuses to start when the GPU's free memory is below gpu_memory_utilization
+#: times its total memory, and each running replica also holds memory outside that fraction (its CUDA context), so
+#: the room left must grow with the number of replicas on the GPU. inference-server/serve_app.py and the chart
+#: (_settings.tpl) refuse the same, and the comparison's plan.py (SHARED_GPU_RESERVE) for its two replicas.
+SHARED_GPU_RESERVE = 0.025
+SHARED_GPU_MEMORY = ("server.engineKwargs.gpu_memory_utilization ({memory}) must be at most server.gpuPerReplica "
+                     "({share}) minus 0.025 when up to {high} replicas share a GPU: each vLLM replica claims that "
+                     "fraction of the whole GPU's memory when it starts and also holds memory outside it (its CUDA "
+                     "context), so each leaves 0.025 of the GPU's memory for that, and a later replica still fits")
 #: The server's rules for gpu_per_replica against a replica's workers (tensor_parallel_size times
 #: pipeline_parallel_size); gpuPerReplica 1 is the chart's default and is not written, so the server then uses the
 #: worker count.
@@ -154,7 +154,7 @@ def check_server(values: Mapping) -> list[str]:
                    f"more than server.gpuCount ({_show(gpus)})")
         return out
     memory = (server.get("engineKwargs") or {}).get("gpu_memory_utilization")
-    if share < 1 and high > 1 and _number(memory) and memory > SHARED_GPU_MARGIN * share + 1e-9:
+    if share < 1 and high > 1 and _number(memory) and memory > share - SHARED_GPU_RESERVE + 1e-9:
         out.append(SHARED_GPU_MEMORY.format(memory=_show(memory), share=_show(share), high=_show(high)))
         return out
     port = server.get("metricsPort")

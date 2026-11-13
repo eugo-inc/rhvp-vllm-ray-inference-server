@@ -228,13 +228,17 @@ refuse autoscaling-no-target ray-serve-llm vllm-inference "targetOngoingRequests
 refuse autoscaling-over-gpus ray-serve-llm vllm-inference "is more than server.gpuCount" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4
 refuse autoscaling-shared-gpu-memory ray-serve-llm vllm-inference \
-  "server.engineKwargs.gpu_memory_utilization (0.85) must be at most 0.95 times server.gpuPerReplica (0.5)" \
+  "server.engineKwargs.gpu_memory_utilization (0.85) must be at most server.gpuPerReplica (0.5) minus 0.025" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
   --set-json server.gpuPerReplica=0.5
 refuse autoscaling-shared-gpu-full-share ray-serve-llm vllm-inference \
-  "server.engineKwargs.gpu_memory_utilization (0.5) must be at most 0.95 times server.gpuPerReplica (0.5)" \
+  "server.engineKwargs.gpu_memory_utilization (0.5) must be at most server.gpuPerReplica (0.5) minus 0.025" \
   --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
   --set-json server.gpuPerReplica=0.5 --set-json server.engineKwargs.gpu_memory_utilization=0.5
+refuse autoscaling-shared-gpu-quarters ray-serve-llm vllm-inference \
+  "server.engineKwargs.gpu_memory_utilization (0.2375) must be at most server.gpuPerReplica (0.25) minus 0.025 when up to 4 replicas" \
+  --set server.autoscaling.maxReplicas=4 --set server.autoscaling.targetOngoingRequests=2 \
+  --set-json server.gpuPerReplica=0.25 --set-json server.engineKwargs.gpu_memory_utilization=0.2375
 refuse gpu-per-replica-one-worker ray-serve-llm vllm-inference \
   "server.gpuPerReplica (2) must be at most 1 when a replica has one worker" \
   --set server.gpuPerReplica=2 --set server.gpuCount=2

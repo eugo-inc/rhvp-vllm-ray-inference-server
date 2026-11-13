@@ -92,9 +92,11 @@ READY_FILE_NAME = "rhvp-ready"
 STATUS_POLL_INTERVAL_S = 10.0
 # While Ray Serve may change the replica count: the resolution of the rhvp-scale lines' ts.
 SCALE_POLL_INTERVAL_S = 1.0
-# Replicas that share a GPU each claim at most this part of their share of its memory (gpu_memory_utilization at
-# most 0.95 * gpu_per_replica); the chart and scripts/pattern_settings.py refuse the same before a sync.
-SHARED_GPU_MARGIN = 0.95
+# Replicas that share a GPU each leave this part of the GPU's memory outside their share (gpu_memory_utilization at
+# most gpu_per_replica - 0.025), for what a replica holds outside gpu_memory_utilization, such as its CUDA context:
+# the room left then grows with the number of replicas. The chart and scripts/pattern_settings.py refuse the same
+# before a sync, and the comparison's plan.py (SHARED_GPU_RESERVE) for its two replicas.
+SHARED_GPU_RESERVE = 0.025
 # Replica states that count towards the target when Ray reports no target.
 LIVE_REPLICA_STATES = ("STARTING", "UPDATING", "RECOVERING", "RUNNING", "PENDING_MIGRATION")
 
@@ -331,15 +333,16 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     elif workers == 1 and share > 1:
         raise ConfigError(f"gpu_per_replica ({share}) must be at most 1 for a replica with one worker")
     gmu = engine_kwargs.get("gpu_memory_utilization")
-    if share < 1 and max_r > 1 and _is_number(gmu) and gmu > SHARED_GPU_MARGIN * share + 1e-9:
-        # vLLM refuses to start when the GPU's free memory is below gpu_memory_utilization times its total
-        # memory, and a starting replica needs a little memory of its own first, so replicas that share a GPU
-        # must each claim a little less than their share.
+    if share < 1 and max_r > 1 and _is_number(gmu) and gmu > share - SHARED_GPU_RESERVE + 1e-9:
+        # vLLM 0.29 refuses to start when the GPU's free memory is below gpu_memory_utilization times its total
+        # memory, and each running replica holds its CUDA context outside that fraction: with k replicas on one
+        # GPU the last one needs (1 - k * gpu_memory_utilization) of the GPU free for k contexts, so a fixed
+        # fraction of the share would leave too little once k grows. A fixed reserve per replica does not.
         raise ConfigError(
-            f"engine_kwargs.gpu_memory_utilization ({gmu}) must be at most {SHARED_GPU_MARGIN} times "
-            f"gpu_per_replica ({share}) when up to {max_r} replicas share a GPU: each vLLM replica claims that "
-            f"fraction of the whole GPU's memory when it starts, and needs a little more before it can, so at the "
-            f"full share a later replica would not fit"
+            f"engine_kwargs.gpu_memory_utilization ({gmu}) must be at most gpu_per_replica ({share}) minus "
+            f"{SHARED_GPU_RESERVE} when up to {max_r} replicas share a GPU: each vLLM replica claims that fraction "
+            f"of the whole GPU's memory when it starts and also holds memory outside it (its CUDA context), so each "
+            f"leaves {SHARED_GPU_RESERVE} of the GPU's memory for that, and a later replica still fits"
         )
     out["gpu_per_replica"] = share
 

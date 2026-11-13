@@ -126,12 +126,37 @@ def test_values_check_refuses(over, message):
     assert len(problems) == 1 and message in problems[0], problems
 
 
-def test_the_shared_gpu_margin_is_the_same_everywhere():
-    """The chart, the values check, the server and the comparison's plan all keep 5% of a shared GPU free."""
+def test_the_shared_gpu_reserve_is_the_same_everywhere():
+    """The chart, the values check, the server and the comparison's plan all leave 0.025 of a shared GPU's memory
+    per replica outside its share."""
     sys.path.insert(0, str(REPO / "inference-server"))  # serve_app imports rhvp_scale from its own folder
     serve_app = load_module("serve_app", REPO / "inference-server/serve_app.py")
-    assert pattern_settings.SHARED_GPU_MARGIN == serve_app.SHARED_GPU_MARGIN == plans.SHARED_GPU_LIMIT == 0.95
-    assert "(mulf $gpr 0.95)" in (REPO / "charts/all/ray-serve-llm/templates/_settings.tpl").read_text()
+    assert pattern_settings.SHARED_GPU_RESERVE == serve_app.SHARED_GPU_RESERVE == plans.SHARED_GPU_RESERVE == 0.025
+    template = (REPO / "charts/all/ray-serve-llm/templates/_settings.tpl").read_text()
+    assert "(subf $gpr 0.025)" in template and "minus 0.025 when up to" in template
+    assert "minus 0.025 when up to" in pattern_settings.SHARED_GPU_MEMORY
+
+
+@pytest.mark.parametrize("replicas, share, memory, refused", [
+    (2, 0.5, 0.475, False),
+    (2, 0.5, 0.476, True),
+    (4, 0.25, 0.225, False),
+    (4, 0.25, 0.2375, True),  # 0.95 of the share: the room left would not grow with the replica count
+    (10, 0.1, 0.075, False),
+    (10, 0.1, 0.095, True),
+])
+def test_the_shared_gpu_reserve_grows_with_the_replica_count(replicas, share, memory, refused):
+    over = {"server": {"autoscaling": {"maxReplicas": replicas, "targetOngoingRequests": 2}, "gpuPerReplica": share,
+                       "engineKwargs": {"gpu_memory_utilization": memory}}}
+    problems = pattern_settings.check(chart_values(**over))
+    assert (problems != []) == refused, problems
+    if refused:
+        assert problems[0].startswith(f"server.engineKwargs.gpu_memory_utilization ({memory:g}) must be at most "
+                                      f"server.gpuPerReplica ({share:g}) minus 0.025 when up to {replicas} replicas")
+    # The free memory the last of `replicas` replicas finds at vLLM's check, for each replica's own share, is then
+    # enough for one CUDA context per replica of up to 0.025 of the GPU: 1 - k * gmu >= k * 0.025.
+    fits = 1 - replicas * memory >= replicas * pattern_settings.SHARED_GPU_RESERVE - 1e-9
+    assert fits != refused
 
 
 def test_kuberay_message_is_plain():

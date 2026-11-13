@@ -365,12 +365,15 @@ def test_target_alone_is_passed_with_one_replica(tmp_path):
         ({"gpu_per_replica": 0.5, "engine_kwargs": {"pipeline_parallel_size": 2}}, r"\(2\)"),
         ({"engine_kwargs": {"pipeline_parallel_size": 0}}, "pipeline_parallel_size must be an integer"),
         ({"max_replicas": 2, "target_ongoing_requests": 4, "gpu_per_replica": 0.5},
-         r"gpu_memory_utilization \(0.85\) must be at most 0.95 times gpu_per_replica \(0.5\)"),
+         r"gpu_memory_utilization \(0.85\) must be at most gpu_per_replica \(0.5\) minus 0.025"),
         # At the full share a later replica does not fit: it needs a little memory before vLLM's check.
         ({"max_replicas": 2, "target_ongoing_requests": 4, "gpu_per_replica": 0.5,
-          "engine_kwargs": {"gpu_memory_utilization": 0.5}}, "must be at most 0.95 times gpu_per_replica"),
+          "engine_kwargs": {"gpu_memory_utilization": 0.5}}, "must be at most gpu_per_replica"),
         ({"max_replicas": 3, "target_ongoing_requests": 4, "gpu_per_replica": 0.3,
-          "engine_kwargs": {"gpu_memory_utilization": 0.31}}, "must be at most 0.95 times gpu_per_replica"),
+          "engine_kwargs": {"gpu_memory_utilization": 0.28}}, r"must be at most gpu_per_replica \(0.3\) minus 0.025"),
+        # A quarter each: 0.95 of the share (0.2375) leaves 0.05 of the GPU for four replicas' CUDA contexts.
+        ({"max_replicas": 4, "target_ongoing_requests": 2, "gpu_per_replica": 0.25,
+          "engine_kwargs": {"gpu_memory_utilization": 0.2375}}, r"when up to 4 replicas share a GPU"),
         ({"metrics_port": 8000}, "metrics_port must be an integer in 1..65535 other than http_port"),
         ({"metrics_port": 0}, "metrics_port"),
         ({"metrics_port": "8080"}, "metrics_port"),
@@ -390,7 +393,7 @@ def test_share_with_one_replica_keeps_the_memory_setting(tmp_path):
 
 def test_memory_env_override_is_checked_against_the_share(tmp_path):
     path = write(tmp_path, contract_with(max_replicas=2, target_ongoing_requests=4, gpu_per_replica=0.5))
-    with pytest.raises(ConfigError, match="must be at most 0.95 times gpu_per_replica"):
+    with pytest.raises(ConfigError, match="must be at most gpu_per_replica"):
         load_config(path, {})
     assert load_config(path, {"RHVP_GPU_MEMORY_UTILIZATION": "0.45"})["engine_kwargs"]["gpu_memory_utilization"] == 0.45
     assert load_config(path, {"RHVP_GPU_MEMORY_UTILIZATION": "0.475"})["engine_kwargs"]["gpu_memory_utilization"] == 0.475

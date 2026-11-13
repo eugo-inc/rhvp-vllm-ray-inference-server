@@ -647,9 +647,13 @@ The chart render and `scripts/validate-values.sh` refuse these settings, each wi
 - `maxReplicas` times `gpuPerReplica` above `gpuCount`.
 - `gpuPerReplica` above 1 for a replica with one worker, or, with `tensor_parallel_size` times
   `pipeline_parallel_size` above 1, a `gpuPerReplica` other than 1 or that product: each worker needs a whole GPU.
-- Replicas that share a GPU (`gpuPerReplica` below 1) with `engineKwargs.gpu_memory_utilization` above 0.95 times
-  `gpuPerReplica`. Each vLLM replica claims that fraction of the whole GPU's memory when it starts, and needs a little
-  more before it can, so at the full share a later replica would not fit.
+- Replicas that share a GPU (`gpuPerReplica` below 1) with `engineKwargs.gpu_memory_utilization` above
+  `gpuPerReplica` minus 0.025, such as above 0.475 for 0.5 or above 0.225 for 0.25. Each vLLM replica claims that
+  fraction of the whole GPU's memory when it starts and checks that it is free, and each running replica also holds
+  memory outside it, such as its CUDA context. So each replica leaves 0.025 of the GPU (about 576 MiB of an L4's
+  23,034 MiB) outside its share, and the memory left free grows with the number of replicas on the GPU. That
+  allowance is an estimate: no CUDA context was measured for it. If a later replica still stops at vLLM's start-up
+  memory check, lower `gpu_memory_utilization` further.
 
 With `tensor_parallel_size` above 1, each replica needs that many GPUs. The chart does not check this; the server
 checks it when it starts, and exits with code 2 when Ray sees too few GPUs.

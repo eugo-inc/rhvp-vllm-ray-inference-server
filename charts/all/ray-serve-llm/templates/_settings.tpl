@@ -71,13 +71,15 @@
 {{- fail (printf "server.autoscaling.maxReplicas (%v) times server.gpuPerReplica (%v) is more than server.gpuCount (%v)" $max $gpr $srv.gpuCount) -}}
 {{- end -}}
 {{- /* Replicas that share a GPU: vLLM refuses to start when the GPU's free memory is below
-       gpu_memory_utilization times its total memory, and a starting replica needs a little
-       memory of its own first, so each must claim at most 0.95 of its share (serve_app.py
-       refuses the same at start; the comparison's plan.py SHARED_GPU_LIMIT is the same 0.95). */ -}}
+       gpu_memory_utilization times its total memory, and each running replica also holds
+       memory outside that fraction (its CUDA context), so each leaves 0.025 of the GPU's
+       memory outside its share, and the room left grows with the replica count (serve_app.py
+       SHARED_GPU_RESERVE and scripts/pattern_settings.py refuse the same; the comparison's
+       plan.py SHARED_GPU_RESERVE is the same 0.025). */ -}}
 {{- $gmu := $ek.gpu_memory_utilization -}}
 {{- if and (lt (float64 $gpr) 1.0) (gt (float64 $max) 1.0) (include "ray-serve-llm.isNumber" $gmu) -}}
-{{- if gt (float64 $gmu) (addf (mulf $gpr 0.95) 0.000000001) -}}
-{{- fail (printf "server.engineKwargs.gpu_memory_utilization (%v) must be at most 0.95 times server.gpuPerReplica (%v) when up to %v replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's memory when it starts, and needs a little more before it can, so at the full share a later replica would not fit" $gmu $gpr $max) -}}
+{{- if gt (float64 $gmu) (addf (subf $gpr 0.025) 0.000000001) -}}
+{{- fail (printf "server.engineKwargs.gpu_memory_utilization (%v) must be at most server.gpuPerReplica (%v) minus 0.025 when up to %v replicas share a GPU: each vLLM replica claims that fraction of the whole GPU's memory when it starts and also holds memory outside it (its CUDA context), so each leaves 0.025 of the GPU's memory for that, and a later replica still fits" $gmu $gpr $max) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (and (include "ray-serve-llm.isWhole" $srv.metricsPort) (ge (float64 $srv.metricsPort) 1.0) (le (float64 $srv.metricsPort) 65535.0) (ne (float64 $srv.metricsPort) (float64 $srv.httpPort))) -}}

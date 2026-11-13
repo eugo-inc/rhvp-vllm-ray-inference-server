@@ -62,9 +62,10 @@ server:
   # equal to tensor_parallel_size * pipeline_parallel_size (checked). Below 1
   # (for example 0.5) replicas share one GPU, which adds no GPU compute; that
   # is for testing only, and has not yet started a replica on a real GPU.
-  # Replicas that share a GPU must each claim a little less than their share
-  # of its memory: engineKwargs.gpu_memory_utilization at most 0.95 times
-  # gpuPerReplica (checked), such as 0.4 for 0.5.
+  # Replicas that share a GPU must each leave 0.025 of the GPU's memory
+  # outside their share, for their CUDA context: engineKwargs.
+  # gpu_memory_utilization at most gpuPerReplica minus 0.025 (checked), such
+  # as 0.4 for 0.5.
   gpuPerReplica: 1
   # Ray's Prometheus metrics (vLLM's gauges among them, as ray_vllm_*). The
   # server always exports them on this port, on every address of the pod, so
