@@ -419,11 +419,11 @@ reads `Failed`. This also covers a changed value in the notebook chart's `compar
 has finished, or delete the running Job first.
 
 A run that ends partial (some rounds failed, requests failed at some load level, or it was stopped) exits 1, so its
-Job reads `Failed`, and we expect
-Argo CD to show the `notebook` app as Degraded until that Job is gone (not tried on a cluster). The results of the
-rounds that finished are kept. Do not just delete the Job: it is still in Git, so the next sync (after any later
-commit) would create it again, and a run that is not complete runs again from the start and takes the server down
-again. First set `enabled: false`, or change the config to start a new run, push, and only then delete the old Job.
+Job reads `Failed`, and we expect Argo CD to show the `notebook` app as Degraded until that Job is gone (not tried
+on a cluster). The results of the rounds that finished are kept. Do not just delete the Job: it is still in Git,
+so the next sync (after any later commit) would create it again, and a run that is not complete runs again from the
+start and takes the server down again. First set `enabled: false`, or change the config to start a new run, push,
+and only then delete the old Job.
 
 Setting `enabled: false` deletes nothing, because the apps sync without pruning. Delete old Jobs, the
 `image-compare-config-*` and `compare-*` ConfigMaps and the PVC `image-compare-results` yourself when you no longer
@@ -472,9 +472,9 @@ The rule is fixed in the config before the first round and written into the resu
 - **Outside the band**, B is FASTER or SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) when the
   p-value is at most alpha (0.05) and the test leans the same way as the median ratio, and INCONCLUSIVE otherwise.
 - **A side that fails.** When a pair lost a metric because one side failed on its own account (its round failed
-  with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests failed at that load level), the metric is
-  INCONCLUSIVE, whichever side failed: the pairs that are left would flatter the side that failed. Each metric
-  lists the pairs it lost and why (`pairs_lost`).
+  with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, requests failed at that load level, or it measured 0,
+  such as no output tokens, which gives no ratio), the metric is INCONCLUSIVE, whichever side failed: the pairs that
+  are left would flatter the side that failed. Each metric lists the pairs it lost and why (`pairs_lost`).
 - **One node.** When the scored rounds ran on more than one node, every verdict is INCONCLUSIVE.
 
 With n pairs no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary

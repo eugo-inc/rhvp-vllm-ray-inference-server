@@ -16,8 +16,9 @@ an `analysis` of the same shape can replace this module and stats.py together. S
 Two checks run over the verdict stats.verdict gives, and make it INCONCLUSIVE:
 
 - one side failing. A pair that lost a metric because one side failed in a way that is that side's doing (its round
-  failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at that load level) is evidence
-  against that side, and the pairs that are left would overstate it. So any such pair makes the metric
+  failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at that load level, or its value of the
+  metric is 0, such as no output tokens: a 0 gives no ratio) is evidence against that side, and the pairs that are
+  left would overstate it. So any such pair makes the metric
   INCONCLUSIVE, whichever side failed. Rounds that failed for other reasons (stopped, the GPU was not free, the
   platform) and rounds not run leave no such mark. Every row says how many pairs it lost and why (`pairs_lost`).
 - more than one node. Scored rounds that ran on different nodes compare the nodes as much as the images.
@@ -25,24 +26,33 @@ Two checks run over the verdict stats.verdict gives, and make it INCONCLUSIVE:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 from . import stats
 
-TOOL = {"name": "rhvp_compare.analyze", "version": "2"}
+TOOL = {"name": "rhvp_compare.analyze", "version": "3"}
 #: Round failure codes that belong to the side itself (runner.ROUND_CODES; not imported, to keep this module alone).
 SIDE_CODES = ("SIDE_FAILED", "SIDE_NEVER_READY", "LOAD_FAILED")
 
 
-def _value(round_: Mapping, metric: str) -> float | None:
+def _number(round_: Mapping, metric: str) -> float | None:
+    """The round's value of the metric when it is a finite number of 0 or more, else None (not measured)."""
     value = (round_.get("metrics") or {}).get(metric)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         return None
     return float(value)
 
 
+def _value(round_: Mapping, metric: str) -> float | None:
+    """A value a ratio can use: measured and above 0."""
+    value = _number(round_, metric)
+    return value if value is not None and value > 0 else None
+
+
 def paired(rounds: list[Mapping], kind: str, metric: str) -> list[tuple[float, float]]:
-    """(first, second) values per pair: (A, B) for scored pairs; for A/A pairs, the two A rounds in run order."""
+    """(first, second) values per pair: (A, B) for scored pairs; for A/A pairs, the two A rounds in run order. A pair
+    where either value is missing or 0 gives no ratio; pairs_lost says why for the scored pairs."""
     by_pair: dict[int, list[Mapping]] = {}
     for r in rounds:
         if r.get("kind") == kind and r.get("status") == "ok" and isinstance(r.get("pair"), int):
@@ -64,15 +74,16 @@ def paired(rounds: list[Mapping], kind: str, metric: str) -> list[tuple[float, f
 
 
 def _side_fault(round_: Mapping | None, metric: Mapping) -> bool | None:
-    """Whether this round's value of the metric is missing through the side's own doing: True (its round failed
-    with a side code, or requests failed at the metric's load level), False (missing for another reason), None (the
-    value is there)."""
+    """Whether this round gives no usable value of the metric through the side's own doing: True (its round failed
+    with a side code, requests failed at the metric's load level, or it measured 0), False (missing for another
+    reason), None (a value a ratio can use)."""
     if round_ is None:
         return False
     if round_.get("status") != "ok":
         return round_.get("error_code") in SIDE_CODES
-    if _value(round_, metric["id"]) is not None:
-        return None
+    value = _number(round_, metric["id"])
+    if value is not None:
+        return None if value > 0 else True  # 0: the side's own result, such as no output tokens at all
     level = next((lv for lv in round_.get("levels") or [] if lv.get("concurrency") == metric.get("concurrency")),
                  None)
     return bool(metric.get("concurrency") is not None and level is not None and level.get("usable") is False)
@@ -80,8 +91,8 @@ def _side_fault(round_: Mapping | None, metric: Mapping) -> bool | None:
 
 def pairs_lost(rounds: list[Mapping], metric: Mapping) -> dict[str, int]:
     """Scored pairs that ran at least one round but give no ratio for the metric, by cause: "A" or "B" when only
-    that side failed through its own doing, "both" when both did, "other" for any other cause (a round stopped, not
-    run yet, the GPU not free, a missing power reading)."""
+    that side failed through its own doing (a value of 0 included), "both" when both did, "other" for any other cause
+    (a round stopped, not run yet, the GPU not free, a missing power reading)."""
     by_pair: dict[int, dict[str, Mapping]] = {}
     for r in rounds:
         if r.get("kind") == "scored" and isinstance(r.get("pair"), int) and r.get("side") in ("A", "B"):
@@ -109,8 +120,9 @@ def nodes(rounds: list[Mapping]) -> list[str]:
 
 
 def _side_median(rounds: list[Mapping], side: str, metric: str) -> float | None:
+    """The side's median over its scored rounds that measured the metric, rounds that measured 0 included."""
     values = [v for r in rounds if r.get("kind") == "scored" and r.get("status") == "ok" and r.get("side") == side
-              and (v := _value(r, metric)) is not None]
+              and (v := _number(r, metric)) is not None]
     return stats.median(values) if values else None
 
 

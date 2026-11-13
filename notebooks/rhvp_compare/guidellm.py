@@ -15,6 +15,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import math
 import os
 import signal
 import subprocess
@@ -166,7 +167,9 @@ def levels(report: Mapping) -> list[dict]:
 
 
 def flat_metrics(level_list: list[Mapping]) -> dict[str, float]:
-    """The comparison's per-round figures from the usable levels (keys as in plan.metric_family)."""
+    """The comparison's per-round figures from the usable levels (keys as in plan.metric_family). A figure of 0 is
+    kept (a level whose requests finished without one output token has 0 tokens per second): the analysis counts it
+    as a pair lost to that side instead of leaving the pair out unseen."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")
@@ -176,5 +179,6 @@ def flat_metrics(level_list: list[Mapping]) -> dict[str, float]:
                  f"c{c}.itl_ms_median": (level.get("itl_ms") or {}).get("median"),
                  f"c{c}.output_tokens_per_s": level.get("output_tokens_per_s"),
                  f"c{c}.tokens_per_joule": (level.get("energy") or {}).get("tokens_per_joule")}
-        out.update({k: float(v) for k, v in pairs.items() if isinstance(v, (int, float)) and v > 0})
+        out.update({k: float(v) for k, v in pairs.items()
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0})
     return out

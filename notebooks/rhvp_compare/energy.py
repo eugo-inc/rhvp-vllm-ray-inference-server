@@ -144,6 +144,8 @@ def level_energy(level: Mapping, power: Power, source: str) -> dict:
         if isinstance(rate, (int, float)) and rate > 0:
             out["tokens_per_joule"] = rate / power.mean_w
             out["joules_per_token"] = power.mean_w / rate
+        elif isinstance(rate, (int, float)) and rate == 0:  # power drawn, no token out: 0 per joule, not unknown
+            out["tokens_per_joule"] = 0.0
     elif power.mean_w is not None and out["note"] is None:
         out["note"] = "mean power was 0 W"
     return out
