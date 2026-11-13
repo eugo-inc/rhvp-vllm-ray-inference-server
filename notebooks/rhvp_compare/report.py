@@ -144,8 +144,7 @@ def markdown(results: Mapping) -> str:
         lines += _scale_lines(results)
         fit = summary.surge_rate_fit(results)
         if fit:
-            lines += ["", "**" + (words.SCALE_RATE_ALL_MET if fit == "all_met" else words.SCALE_RATE_ALL_FAILED)
-                      + "**"]
+            lines += ["", "**" + words.SCALE_RATE_NOTES[fit] + "**"]
     failed = [r for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         lines += ["", "Rounds that did not finish:"]

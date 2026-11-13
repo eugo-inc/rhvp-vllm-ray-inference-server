@@ -177,9 +177,17 @@ SCALE_RATE_ALL_MET = ("Every scored surge met the latency goals for all of its r
                       "never pushed the replicas past the goals, and the share within the goals cannot tell the "
                       "sides apart. A higher scaleOut.requestRate suits these sides (README, \"Picking the surge "
                       "rate\").")
-SCALE_RATE_ALL_FAILED = ("Requests failed in every scored surge, on both sides. Failed requests count as misses, and "
-                         "the share within the goals then mostly counts them. A lower scaleOut.requestRate may suit "
-                         "these sides (README, \"Picking the surge rate\").")
+SCALE_RATE_ALL_FAILED = ("In every scored surge, on both sides, at least half of the requests GuideLLM judged (those "
+                         "that finished or failed) failed. A failed request counts as a miss, so the share within the "
+                         "goals then mostly counts failed requests. A lower scaleOut.requestRate may suit these sides "
+                         "(README, \"Picking the surge rate\").")
+SCALE_RATE_ALL_MISSED = ("In every scored surge, on both sides, at most 5% of the requests GuideLLM judged (those that "
+                         "finished or failed) met the latency goals: the rate kept both sides past the goals for "
+                         "nearly every request. A lower scaleOut.requestRate may suit these sides (README, \"Picking "
+                         "the surge rate\").")
+#: summary.surge_rate_fit's answer -> its note.
+SCALE_RATE_NOTES = {"all_met": SCALE_RATE_ALL_MET, "all_failed": SCALE_RATE_ALL_FAILED,
+                    "all_missed": SCALE_RATE_ALL_MISSED}
 
 # ---- section 5: provenance ----
 

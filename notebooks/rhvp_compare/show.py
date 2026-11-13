@@ -399,7 +399,7 @@ def scale_out(run: str | None = None) -> None:
             parts.append(_cache_note(plan))
         fit = summary.surge_rate_fit(results)
         if fit:
-            parts.append(draw.notice(words.SCALE_RATE_ALL_MET if fit == "all_met" else words.SCALE_RATE_ALL_FAILED))
+            parts.append(draw.notice(words.SCALE_RATE_NOTES[fit]))
         if any((rows.get(m) or {}).get("role") == "secondary" for m in ids):
             parts.append(line(words.SECONDARY_NOTE))
         stepped = {side: [r for r in _scored(results, side) if (r.get("scale") or {}).get("new_replica")]

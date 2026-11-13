@@ -84,11 +84,20 @@ def levels_unusable(results: Mapping) -> list[dict]:
     return out
 
 
+#: summary.surge_rate_fit: "all_failed" needs at least this share of a surge's judged requests (those that finished
+#: or failed) to have failed, in every scored surge of both sides; "all_missed" needs at most this share within the
+#: latency goals in every one. words.SCALE_RATE_ALL_FAILED and SCALE_RATE_ALL_MISSED state both.
+SURGE_FAILED_SHARE = 0.5
+SURGE_MET_SHARE_LOW = 0.05
+
+
 def surge_rate_fit(results: Mapping) -> str | None:
-    """Mode scaleout, when the surge rate did not separate the sides: "all_met" when every scored surge of both
-    sides met the latency goals for every request it judged and none failed, "all_failed" when requests failed in
-    every scored surge of both sides; else None (also when a side has no finished scored surge). README, "Picking
-    the surge rate", says what to change."""
+    """Mode scaleout, when the surge rate did not separate the sides, from what every scored surge of both sides
+    measured: "all_met" when each met the latency goals for every request it judged and none failed; "all_failed"
+    when in each at least SURGE_FAILED_SHARE of the judged requests (finished or failed) failed; "all_missed" when
+    in each at most SURGE_MET_SHARE_LOW of them met the goals (a surge in which nothing finished or failed counts
+    as 0). Else None (also when a side has no finished scored surge). README, "Picking the surge rate", says what to
+    change."""
     if (results.get("plan") or {}).get("mode") != "scaleout":
         return None
     surges: dict[str, list] = {"A": [], "B": []}
@@ -98,11 +107,23 @@ def surge_rate_fit(results: Mapping) -> str | None:
     if not surges["A"] or not surges["B"]:
         return None
     every = surges["A"] + surges["B"]
-    failed = [bool((lv.get("requests") or {}).get("errored")) for lv in every]
-    if not any(failed) and all(lv.get("slo_attainment") == 1 for lv in every):
+
+    def counts(level: Mapping) -> tuple[int, int]:
+        requests = level.get("requests") or {}
+        failed, finished = requests.get("errored") or 0, requests.get("successful") or 0
+        return failed, failed + finished
+
+    if all(counts(lv)[0] == 0 and lv.get("slo_attainment") == 1 for lv in every):
         return "all_met"
-    if all(failed):
+    if all(judged and failed >= SURGE_FAILED_SHARE * judged for failed, judged in map(counts, every)):
         return "all_failed"
+
+    def met(level: Mapping) -> float | None:
+        value = level.get("slo_attainment")
+        return 0.0 if value is None and not counts(level)[1] else value
+
+    if all(isinstance(share := met(lv), (int, float)) and share <= SURGE_MET_SHARE_LOW for lv in every):
+        return "all_missed"
     return None
 
 

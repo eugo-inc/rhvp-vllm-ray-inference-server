@@ -217,21 +217,35 @@ def _surges(results):
     return [lv for r in results["rounds"] if r["kind"] == "scored" for lv in r["levels"]]
 
 
-@pytest.mark.parametrize("case", ["all_met", "all_failed", "mixed"])
+@pytest.mark.parametrize("case", ["all_met", "all_failed", "all_missed", "one_failed_each", "mixed"])
 def test_a_surge_rate_that_did_not_separate_the_sides_is_named(monkeypatch, case):
     results = example.synthesize_scale_out()
     for i, level in enumerate(_surges(results)):
         if case == "all_met":
             level.update(slo_attainment=1.0, requests={"successful": 300, "errored": 0, "incomplete": 0})
-        elif case == "all_failed" or (case == "mixed" and i % 2):
-            level.update(usable=False, requests={"successful": 250, "errored": 50, "incomplete": 0})
-    note = {"all_met": words.SCALE_RATE_ALL_MET, "all_failed": words.SCALE_RATE_ALL_FAILED}.get(case)
-    assert summary.surge_rate_fit(results) == (None if case == "mixed" else case)
+        elif case == "all_failed" or (case == "mixed" and i % 2):  # half of the judged requests failed
+            level.update(usable=False, slo_attainment=0.2, requests={"successful": 150, "errored": 150, "incomplete": 0})
+        elif case == "all_missed":  # as in a real overloaded run: about 17% failed, nearly every finished one late
+            level.update(usable=False, slo_attainment=0.008, requests={"successful": 3700, "errored": 750,
+                                                                         "incomplete": 0})
+        elif case == "one_failed_each":  # one failed request per surge says nothing about the rate
+            level.update(usable=False, requests={"successful": 299, "errored": 1, "incomplete": 0})
+    expected = case if case in words.SCALE_RATE_NOTES else None
+    assert summary.surge_rate_fit(results) == expected
     text = _shown(monkeypatch, results, show.scale_out)
     markdown = report.markdown(results)
-    for shown in (words.SCALE_RATE_ALL_MET, words.SCALE_RATE_ALL_FAILED):
+    for fit, shown in words.SCALE_RATE_NOTES.items():
         head = shown.split(" (README")[0]
-        assert (head in text) == (shown == note) and (head in markdown) == (shown == note)
+        assert (head in text) == (fit == expected) and (head in markdown) == (fit == expected), fit
+
+
+def test_the_surge_rate_thresholds_are_the_ones_the_notes_state():
+    assert summary.SURGE_FAILED_SHARE == 0.5 and "at least half of the requests" in words.SCALE_RATE_ALL_FAILED
+    assert summary.SURGE_MET_SHARE_LOW == 0.05 and "at most 5% of the requests" in words.SCALE_RATE_ALL_MISSED
+    results = example.synthesize_scale_out()
+    for level in _surges(results):  # just under half failed in every surge, and more than 5% met the goals
+        level.update(usable=False, slo_attainment=0.06, requests={"successful": 151, "errored": 149, "incomplete": 0})
+    assert summary.surge_rate_fit(results) is None
 
 
 def test_the_surge_rate_note_needs_a_finished_surge_on_each_side():

@@ -821,9 +821,10 @@ tell the sides apart. `scaleOut.surgeSeconds` must also be well above the forced
 under load; a second replica that answers only after the surge gets none of its requests (`results.md` counts those
 rounds).
 
-After a run, `results.md` and the notebook say when the rate did not tell the sides apart: every scored surge of both
-sides met the goals for all of its requests (raise the rate), or requests failed in every scored surge of both sides
-(lower it).
+After a run, `results.md` and the notebook say when the rate did not tell the sides apart, judged over every scored
+surge of both sides: each met the goals for all of its requests (raise the rate); in each, at least half of the
+requests GuideLLM judged (those that finished or failed) failed (lower it); or in each, at most 5% of them met the
+goals (lower it). Fewer failed requests than that, or a share within the goals above 5% in some surge, gives no note.
 
 `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
 mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`, for
