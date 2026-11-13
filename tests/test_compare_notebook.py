@@ -167,6 +167,8 @@ def test_replay_run_in_mode_scaleout(tmp_path):
     assert "time to first token at most 500 ms and inter-token latency at most 50 ms" in scale
     assert words.SCALE_SHARE in scale and words.SCALE_REQUESTS_NOTE in scale and words.SCALE_SURGE_RULE in scale
     assert words.SCALE_GPU_SHARED in scale and words.SCALE_GPU_NONE not in scale
+    uuid = "GPU-00000000-0000-0000-0000-000000000000"
+    assert f"replica 1: 0 ({uuid}); replica 2: 0 ({uuid})" in scale  # each replica's request, with its UUIDs
     assert words.SCALE_EVENTS.format(a=0, na=8, b=0, nb=8) in scale
     assert "loading the weights" in scale  # the second replica's start phases
     assert words.SCALE_OFF not in scale and words.SCALE_LATE.split(":")[0] not in scale
@@ -224,7 +226,8 @@ def test_a_surge_rate_that_did_not_separate_the_sides_is_named(monkeypatch, case
         if case == "all_met":
             level.update(slo_attainment=1.0, requests={"successful": 300, "errored": 0, "incomplete": 0})
         elif case == "all_failed" or (case == "mixed" and i % 2):  # half of the judged requests failed
-            level.update(usable=False, slo_attainment=0.2, requests={"successful": 150, "errored": 150, "incomplete": 0})
+            level.update(usable=False, slo_attainment=0.2,
+                         requests={"successful": 150, "errored": 150, "incomplete": 0})
         elif case == "all_missed":  # as in a real overloaded run: about 17% failed, nearly every finished one late
             level.update(usable=False, slo_attainment=0.008, requests={"successful": 3700, "errored": 750,
                                                                          "incomplete": 0})
@@ -237,6 +240,18 @@ def test_a_surge_rate_that_did_not_separate_the_sides_is_named(monkeypatch, case
     for fit, shown in words.SCALE_RATE_NOTES.items():
         head = shown.split(" (README")[0]
         assert (head in text) == (fit == expected) and (head in markdown) == (fit == expected), fit
+
+
+def test_results_md_shows_each_replicas_gpu_request_with_its_uuids():
+    results = example.synthesize_scale_out()
+    second = next(r for r in results["rounds"] if r["kind"] == "scored")["launches"][1]
+    second.update(gpus="1", gpu_uuids=["GPU-1111"])
+    third = next(r for r in results["rounds"] if r["kind"] == "scored" and r["side"] == "B")["launches"][1]
+    third.update(gpus="1", gpu_uuids=None)
+    markdown = report.markdown(results)
+    assert ("replica 1: `0` (`GPU-00000000-0000-0000-0000-000000000000`); replica 2: `1` (`GPU-1111`) or `1` "
+            "(UUID not read) or `0` (`GPU-00000000-0000-0000-0000-000000000000`).") in markdown  # first seen first
+    assert "with the UUIDs nvidia-smi read through each request before the first round" in markdown
 
 
 def test_the_surge_rate_thresholds_are_the_ones_the_notes_state():

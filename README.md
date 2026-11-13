@@ -791,8 +791,9 @@ defaults to 0.4 then, and the plan refuses more than 0.475. The setting does not
 does (below), and the run is refused before anything changes when the two disagree: `sharedGpu: true` needs both
 replicas on the same GPU (leave `REPLICA_GPUS` empty), `false` needs a different GPU id for each (such as `0,1`).
 Before the first round the runner reads, with `nvidia-smi`, the GPUs each replica's device request reaches, so a GPU
-id the machine lacks fails there; every launch record keeps the request (`gpus`) and those GPUs' UUIDs
-(`gpu_uuids`), and `results.md` and the notebook show them. A side with `compileCache: warm` (docker only, and only
+id the machine lacks fails there, and so do two requests that reach the same GPU with `sharedGpu: false` (such as
+`0` and that GPU's UUID); every launch record keeps the request (`gpus`) and those GPUs' UUIDs (`gpu_uuids`), and
+`results.md` and the notebook show both for each replica. A side with `compileCache: warm` (docker only, and only
 with the warm-up round) keeps its compile caches from its warm-up round in a docker volume, so its scored rounds
 start with them; `cold`, the default, starts every replica with empty caches. `results.md` and the notebook show each
 side's setting, and when the two sides differ they say so next to the primary metrics: the start-up figures then

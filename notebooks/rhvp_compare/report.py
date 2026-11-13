@@ -215,7 +215,10 @@ def _scale_lines(results: Mapping) -> list[str]:
         declared = ("both replicas of a side share one GPU" if scale.get("shared_gpu")
                     else "each replica has its own GPU")
         given = summary.replica_gpus(results)
-        shown = "; ".join(f"replica {n}: `{' or '.join(g)}`" for n, g in given.items()) or "not recorded"
+        shown = "; ".join(f"replica {n}: " + " or ".join(
+            f"`{g['gpus']}` ({', '.join(f'`{u}`' for u in g['uuids']) or 'UUID not read'})" for g in entries)
+            for n, entries in given.items()) or "not recorded"
         out += ["", f"GPUs: declared, {declared} (scaleOut.sharedGpu {str(bool(scale.get('shared_gpu'))).lower()}). "
-                    f"Given to each replica's container, from the launch records: {shown}."]
+                    f"Given to each replica's container, from the launch records, with the UUIDs nvidia-smi read "
+                    f"through each request before the first round: {shown}."]
     return out

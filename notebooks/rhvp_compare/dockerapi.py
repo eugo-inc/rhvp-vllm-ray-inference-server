@@ -43,8 +43,9 @@ The scale round (mode scaleout): the second replica is a container named like th
 set by RHVP_COMPARE_REPLICA_GPUS (else RHVP_COMPARE_GPUS), and it must agree with the plan's scaleOut.sharedGpu
 (`check_plan`, before anything changes): sharedGpu true needs both replicas on the same GPUs, false needs a GPU id of
 its own for each. prepare() then reads, with nvidia-smi, the GPUs each replica's device request reaches (a request for
-a GPU this machine lacks fails there, before the first round), and every launch record keeps the request (`gpus`) and
-those GPUs' UUIDs (`gpu_uuids`).
+a GPU this machine lacks fails there, before the first round, and so do two requests that reach the same GPU when
+sharedGpu is false, such as an index and that GPU's UUID), and every launch record keeps the request (`gpus`) and
+those GPUs' UUIDs (`gpu_uuids`), which results.md and the notebook show.
 
 Launch records (`launch_facts`): the environment of the side's largest process (by resident memory, which is the
 server even when an entrypoint script or an init process is PID 1), read with docker exec once the server has
@@ -391,6 +392,12 @@ class DockerBackend:
                 raise runner.RoundError(f"{what} could not be read with nvidia-smi (exit {code}). Check GPUS and "
                                         "REPLICA_GPUS against this machine's GPUs")
             self._gpu_uuids[request] = [row[1].strip() for row in rows if len(row) > 1 and row[1].strip()]
+        same = set(self._gpu_uuids[self._gpus(1)]) & set(self._gpu_uuids[self._gpus(2)])
+        if not plan["scale_out"]["shared_gpu"] and same:  # two strings for one GPU, such as an index and its UUID
+            raise runner.RoundError(
+                f"scaleOut.sharedGpu is false (each replica on its own GPU), but REPLICA_GPUS {self._gpus(1)} and "
+                f"{self._gpus(2)} both reach GPU {', '.join(sorted(same))}: give each replica a different GPU, or set "
+                "scaleOut.sharedGpu: true")
 
     def on_stop(self) -> None:
         """A stop has begun: shorter waits from now on (flags only)."""

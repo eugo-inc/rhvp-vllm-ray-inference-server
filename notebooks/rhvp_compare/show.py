@@ -386,7 +386,10 @@ def scale_out(run: str | None = None) -> None:
             given = summary.replica_gpus(results)
             if given:
                 parts.append(line(words.SCALE_GPU_GIVEN.format(given="; ".join(
-                    words.SCALE_GPU_REPLICA.format(replica=n, gpus=" or ".join(g)) for n, g in given.items()))))
+                    words.SCALE_GPU_REPLICA.format(replica=n, gpus=words.SCALE_GPU_OR.join(
+                        words.SCALE_GPU_REQUEST.format(request=g["gpus"],
+                                                       uuids=", ".join(g["uuids"]) or words.SCALE_GPU_NO_UUID)
+                        for g in entries)) for n, entries in given.items()))))
         rows = _rows(results)
         declared = [m for m in plan["metrics"] if m["id"].startswith("scale.")]
         ids = [m["id"] for m in declared]

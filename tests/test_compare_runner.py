@@ -522,7 +522,8 @@ def test_a_hung_load_is_tried_once_more(tmp_path):
     assert first["status"] == "ok" and "run once more" in first["notes"][0]
     assert [r["load_retries"] for r in results["rounds"]] == [1, 0, 0, 0]
     text = (the_runner.dir / "results.md").read_text()
-    assert "Rounds whose load ran again after GuideLLM timed out (GuideLLM ran once more against the same server" in text
+    assert ("Rounds whose load ran again after GuideLLM timed out (GuideLLM ran once more against the same "
+            "server") in text
     assert "- round 1 (side A, scored): ran again, then finished" in text
     head = "".join(show._head(results, [], []))
     assert "Rounds whose load ran again after GuideLLM timed out: 1 (side A)." in head
@@ -1124,7 +1125,8 @@ def test_each_tries_memory_check_log_is_kept(tmp_path):
     assert [(l["replica"], l["discarded"], l["start_retries"]) for l in r3["launches"]] == [
         (1, True, 0), (2, True, 1), (1, False, 0), (2, False, 1)]
     first, second = r3["artifacts"]["server_log_2_attempt_1_try_1"], r3["artifacts"]["server_log_2_attempt_1"]
-    assert first == "rounds/03-A-scored/server-2.attempt-1.try-1.log" and second == "rounds/03-A-scored/server-2.attempt-1.log"
+    assert first == "rounds/03-A-scored/server-2.attempt-1.try-1.log"
+    assert second == "rounds/03-A-scored/server-2.attempt-1.log"
     assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
     text = (the_runner.dir / "results.md").read_text()
     assert ("- round 3 (side A, scored): replica 2 of the discarded try started 2 times, replica 2 started 2 times, "

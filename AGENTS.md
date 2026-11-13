@@ -286,11 +286,12 @@ Three parts, each off by default. With every default, the local charts render ex
   `PLAN_INVALID`). `scaleOut.sharedGpu` only sets the memory default and the 0.475 refusal; the docker backend places
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
   anything changes, a plan whose `sharedGpu` does not match (`DockerBackend.check_plan`); `prepare()` reads each
-  replica's GPUs with nvidia-smi into the launch records (`gpus`, `gpu_uuids`). `scaleOut.requestRate`'s default (4)
-  is a placeholder: the README's "Picking the surge rate" derives a rate from a pairs run of the same sides, and
-  `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored surge of both sides met the goals,
-  had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at most 5% within the goals
-  (`SURGE_MET_SHARE_LOW`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
+  replica's GPUs with nvidia-smi into the launch records (`gpus`, `gpu_uuids`, both shown in `results.md` and the
+  notebook), and refuses two requests that reach one GPU while `sharedGpu` is false. `scaleOut.requestRate`'s
+  default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a pairs run of the same
+  sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored surge of both sides
+  met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at most 5% within the
+  goals (`SURGE_MET_SHARE_LOW`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
   (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that one ScaledObject),
   and removes the pause when it brings the server back; the by-hand restore command it prints includes the
   `oc annotate` step, and so does the README's recovery for a runner killed outright (Argo CD ignores the

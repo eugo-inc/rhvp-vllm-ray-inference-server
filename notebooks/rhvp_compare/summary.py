@@ -189,16 +189,21 @@ def termination(results: Mapping) -> str:
                     "error_code": run.get("error_code"), "server_restored": run.get("server_restored")})
 
 
-def replica_gpus(results: Mapping) -> dict[int, list[str]]:
-    """Mode scaleout: per replica number, the GPU requests its starts got in the scored rounds that finished, from
-    the launch records (`gpus`), in first-seen order; empty when no record has one."""
-    out: dict[int, list[str]] = {}
+def replica_gpus(results: Mapping) -> dict[int, list[dict]]:
+    """Mode scaleout: per replica number, the GPUs its starts got in the scored rounds that finished, from the launch
+    records, in first-seen order: each the request (`gpus`) with the UUIDs nvidia-smi read through it (`uuids`, empty
+    when not read); empty when no record has a request."""
+    out: dict[int, list[dict]] = {}
     for r in results.get("rounds") or []:
         if r.get("kind") != "scored" or r.get("status") != "ok":
             continue
         for item in r.get("launches") or []:
-            if isinstance(item.get("gpus"), str) and item["gpus"] not in out.setdefault(item["replica"], []):
-                out[item["replica"]].append(item["gpus"])
+            if not isinstance(item.get("gpus"), str):
+                continue
+            uuids = [u for u in item.get("gpu_uuids") or [] if isinstance(u, str)]
+            entry = {"gpus": item["gpus"], "uuids": uuids}
+            if entry not in out.setdefault(item["replica"], []):
+                out[item["replica"]].append(entry)
     return {n: given for n, given in sorted(out.items()) if given}
 
 

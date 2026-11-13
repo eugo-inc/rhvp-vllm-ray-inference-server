@@ -150,9 +150,12 @@ SCALE_GOAL_TPOT = "inter-token latency at most {value:g} ms"
 SCALE_GOALS_JOIN = " and "
 SCALE_GPU_SHARED = "Declared: both replicas of a side share one GPU (scaleOut.sharedGpu true)."
 SCALE_GPU_OWN = "Declared: each replica has its own GPU (scaleOut.sharedGpu false)."
-SCALE_GPU_GIVEN = ("GPUs each replica's container was given, from the launch records: {given}. A vLLM server uses the "
-                   "first GPU it sees.")
+SCALE_GPU_GIVEN = ("GPUs each replica's container was given, from the launch records, with the UUIDs nvidia-smi read "
+                   "through each request before the first round: {given}. A vLLM server uses the first GPU it sees.")
 SCALE_GPU_REPLICA = "replica {replica}: {gpus}"
+SCALE_GPU_REQUEST = "{request} ({uuids})"
+SCALE_GPU_OR = " or "
+SCALE_GPU_NO_UUID = "UUID not read"
 SCALE_GPU_NONE = "The sides ran without a GPU."
 SCALE_HEADERS = ("The second replica", "A median", "B median", "B/A median", "Verdict")
 SCALE_FACT_HEADERS = ("The second replica, per round", "A median", "B median", "Rounds (A, B)")

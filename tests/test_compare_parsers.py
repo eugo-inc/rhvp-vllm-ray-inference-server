@@ -969,15 +969,29 @@ class ReplicaDocker(FakeDocker):
         self.volumes_removed.append(name)
 
 
+class ProbedDocker(ReplicaDocker):
+    """nvidia-smi's answer per GPU probe: `answers` maps the probe's replica (1 or 2) to its index, UUID line."""
+
+    def __init__(self, answers: dict):
+        super().__init__()
+        self.answers = answers
+
+    def run(self, name, body, timeout_s=300.0, log_to=None):
+        self.calls.append(("run", name, body))
+        for replica, answer in self.answers.items():
+            if f"gpu-probe-{replica}" in name:
+                return 0, f"2026-01-01T00:00:00Z {answer}\n"
+        return 0, ""
+
+
 def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
-    docker = ReplicaDocker()
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "1, GPU-1111"})  # what nvidia-smi lists for each replica's GPU
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_CPUSET="0-3",
                               RHVP_COMPARE_CACHE_VOLUME="cc")
     config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
               "scaleOut": {"sharedGpu": False},
               "sides": [{"name": "a", "image": "x/a:1", "compileCache": "warm"}, {"name": "b", "image": "x/b:1"}]}
     plan = plans.build(config, "docker")
-    docker.run_log = "2026-01-01T00:00:00Z 0, GPU-0000\n"  # what nvidia-smi lists for each replica's GPU
     backend.prepare(plan)
     volume = f"cc-{plan['run_id'][-8:]}-a"
     assert backend.cache_volumes == {"A": volume} and docker.volumes_removed == [volume]  # a fresh one
@@ -1047,8 +1061,7 @@ def test_a_mismatched_shared_gpu_setting_ends_the_run_plan_invalid_before_anythi
 
 
 def test_docker_reads_each_replicas_gpus_before_the_first_round_and_records_them():
-    docker = ReplicaDocker()
-    docker.run_log = "2026-01-01T00:00:00Z 1, GPU-1111\n"
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "1, GPU-1111"})
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1")
     plan = _scale_plan_for(False)
     backend.prepare(plan)
@@ -1066,6 +1079,22 @@ def test_docker_reads_each_replicas_gpus_before_the_first_round_and_records_them
     shared.docker.run_log = "2026-01-01T00:00:00Z 0, GPU-0000\n"
     shared.prepare(_scale_plan_for(True))
     assert len([c for c in shared.docker.calls if c[0] == "run" and "gpu-probe" in c[1]]) == 1
+
+
+def test_two_requests_that_reach_one_gpu_fail_in_prepare_when_each_replica_needs_its_own():
+    # An index and that GPU's UUID are different strings, so check_plan lets them through; nvidia-smi's UUIDs do not.
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"})
+    docker.server_state = {"Running": True}
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,GPU-0000", RHVP_COMPARE_SERVER_CONTAINER="live")
+    plan = _scale_plan_for(False)
+    backend.check_plan(plan)
+    with pytest.raises(runner.RoundError, match="REPLICA_GPUS 0 and GPU-0000 both reach GPU GPU-0000"):
+        backend.prepare(plan)
+    assert ("stop", "live") not in docker.calls
+    shared = _docker_backend(ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"}),
+                             RHVP_COMPARE_REPLICA_GPUS="0,GPU-0000")
+    with pytest.raises(plans.PlanError, match="gives replica 1 GPU 0 and replica 2 GPU GPU-0000"):
+        shared.check_plan(_scale_plan_for(True))  # sharedGpu true still compares the strings, before any probe
 
 
 def test_a_replica_gpu_this_machine_lacks_fails_in_prepare_before_the_server_stops():
