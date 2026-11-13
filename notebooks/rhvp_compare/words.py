@@ -69,8 +69,15 @@ RUN_LINE = ("Run {run} · {status} · {rounds} of {planned} rounds complete · {
             "{platform}")
 RUN_FAILED_LAUNCHES = "Launches that failed: {launches}."
 RUN_CODE = "Why the run did not finish: {code}."
-RUN_RETRIED = ("Launches whose side was started once more after vLLM's start-up memory check failed (timed from "
-               "the last start): {launches}.")
+RUN_RETRIED = ("Launches whose side was started again after vLLM's start-up memory check failed (timed from the "
+               "last start), with how many times it was started in all: {launches}.")
+RETRIED_LAUNCH = "{index} ({side}, {starts})"
+RUN_LOAD_RETRIED = "Launches whose GuideLLM timed out: {launches}. {how}"
+LOAD_RETRIED_HOW = ("After a time-out the side was taken down and the launch ran again from a new start, timed from "
+                    "that start, with the same requests; every figure of such a launch comes from that second try. A "
+                    "second time-out fails the launch (LOAD_FAILED).")
+LOAD_RETRIED_RAN = "{index} ({side}): ran again"
+LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
@@ -108,6 +115,10 @@ POWER_NOTE = ("With {rounds} rounds and {family} primary cases, a verdict on a p
 POWER_NONE = ("With {rounds} rounds and {family} primary cases no primary case can get a verdict: at least {needed} "
               "rounds are needed.")
 TWINS_NONE = "Without a twin for both sides no case can get a verdict."
+LOAD_TIMEOUTS = ("GuideLLM timed out {a} times in the launches of side A and {b} times in those of side B, twins "
+                 "included. Each such launch ran again from a new start, or failed.")
+LOAD_TIMEOUTS_ONE_SIDED = ("Only side {side} timed out: a load that stalls on one side only is a difference the "
+                           "verdicts above do not show.")
 METHOD_LINE = ("Exact two-sided sign test over the rounds, Holm's correction over {family} primary cases ({plain}), "
                "alpha {alpha:g}; the bar comes from the twins. All declared before the first round.")
 NO_FIGURE = "-"

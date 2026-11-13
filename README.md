@@ -472,6 +472,19 @@ launches use the same GPU. The runner then measures:
   `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's monitoring scrapes
   the exporter; the label is set on every install, also when the comparison is off.
 
+GuideLLM now and then stops making progress at the end of a level, and the launch's load then times out. The launch
+tries once more, from the start: the side is taken down, waits for the GPU, is started again and timed from that new
+start, and GuideLLM runs with the same requests. Sent again to the same server, those requests could find their
+prompts in its prefix cache, which no other launch has. Every figure of the launch then comes from that second try;
+the first try's files stay in the launch's folder as `*.try-1.*` and its notes are marked `try 1:`. A second
+time-out fails the launch with `LOAD_FAILED`. The launch's `load_timeouts` counts its time-outs and `load_retries`
+says whether the load ran again (it stays 0 when the second load never began: the run was stopped, or the side
+could not be taken down or started again); `starts` counts the side's starts in the launch, both tries and any
+memory-check start included.
+Every time-out counts against its side, also when the launch then finished: `analysis.load_timeouts` gives the
+totals per side (twins included) and each comparison its own over its rounds, and `results.md` and the notebook
+say when one side timed out and the other did not, a difference the verdicts do not show.
+
 ### How the verdicts are decided
 
 The rule is fixed before the first launch and written into the results (`plan.analysis`):
@@ -524,7 +537,8 @@ The runner writes to the PVC `image-compare-results` (5Gi, ReadWriteOnce, mounte
 ```text
 <run id>/results.json                    the whole run; schema: notebooks/rhvp_compare/results.schema.json
 <run id>/results.md                      a short table of the same
-<run id>/launches/<NN>-<side>-<kind>/    server.log, guidellm.json, guidellm.log for each launch
+<run id>/launches/<NN>-<side>-<kind>/    server.log, guidellm.json, guidellm.log for each launch (plus *.try-1.* and
+                                         server.attempt-1.log after a retry)
 ```
 
 `<NN>` is the launch's number in run order and `<side>` is `A`, `A-same`, `B` or `B-same`. The run id is
@@ -547,7 +561,7 @@ The Job's exit code:
 | 0 | every launch finished, and the server is back |
 | 1 | a partial run; its Job reads `Failed`, and the results of the launches that finished are kept |
 | 2 | the config cannot be run (`PLAN_INVALID`) |
-| 3 | the run failed outside a launch (`RUNNER_FAILED`), for example on a Kubernetes API error before the first launch |
+| 3 | the run failed outside a launch (`RUNNER_FAILED`), for example on a Kubernetes API error before the first launch, or, under docker, on a Docker API error while the runner reads the live server's state after the pulls (when the run was being stopped at that moment, it is partial instead: exit 1, with a note) |
 | 4 | the server could not be scaled back, whatever else happened (`run.server_restored` is `false`) |
 | 5 | another comparison was running, so this one did not start and changed nothing (`RUN_ACTIVE`) |
 
@@ -558,7 +572,7 @@ Each failed launch carries one of these codes in `launches[].error_code`:
 | `GPU_NOT_FREE` | another pod still held the GPU after 15 minutes |
 | `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
-| `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
+| `LOAD_FAILED` | GuideLLM failed, or timed out in both tries of the launch, or its report could not be read (after one time-out the side is started again and GuideLLM runs once more, with the same requests; see "What a run does") |
 | `STOPPED` | the runner was stopped during the launch |
 | `RUNNER_ERROR` | anything else, such as an error from the Kubernetes API |
 
@@ -582,7 +596,8 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   both images are pulled, and starts it again when the run ends, the counterpart of scaling the pattern's server on
   OpenShift. A stop during the pulls leaves it running. A container that was running when the run began but has
   stopped by itself (or been removed) by the end of the pulls is left as it is, and nothing starts it after the run:
-  the run says so in `run.server_found_down`, `results.md` and the log's last lines.
+  the run says so in `run.server_found_down`, `results.md` and the log's last lines, also when the run itself was
+  stopped during the pulls.
 - One comparison runs at a time here too: a second `compare-local.sh` refuses to start (exit 5) while the first
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the launch short and saves the run as partial.
 - Before each launch the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
@@ -590,11 +605,11 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
 - On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
   (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
   starts that side once more in the same launch and times its start from the new start; the launch's
-  `start_retries`, `results.md` and the notebook say so. A second such exit fails the launch (`SIDE_FAILED`). The
-  same measurement sets the size of the server's KV cache, so memory that other programs take in those seconds
-  shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same image got in the
-  other rounds. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as quiet as you can
-  during a run.
+  `start_retries`, `results.md` and the notebook say so. A second such exit of that start fails the launch
+  (`SIDE_FAILED`). The same measurement sets the size of the server's KV cache, so memory that other programs take
+  in those seconds shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same
+  image got in the other rounds. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as
+  quiet as you can during a run.
 
 ### Comparing with this pattern's own server
 

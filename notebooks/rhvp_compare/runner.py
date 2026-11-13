@@ -8,10 +8,20 @@ fake one in the tests). A launch that fails is recorded with its reason and a fi
 the run goes on; the comparison then has one pair fewer for the cases that launch would have given. A twin is
 launched exactly like its side (the same image, arguments and settings); only its name in the lineup differs.
 
+GuideLLM now and then stops making progress at the end of a level (seen once in about twenty runs against a stand-in
+server). A launch whose GuideLLM timed out runs once more (LOAD_RETRIES): the side is taken down, started again from
+the GPU check and timed from that new start, and GuideLLM runs with the same requests (the same load seed). Sent
+again to the same server, those requests could find their prompts in its prefix cache, which no other launch has.
+Every figure of the launch then comes from that second try; the first try's files are kept as *.try-1.*, its notes
+start with "try 1:", and nothing it measured stays in the launch's figures, also when the launch then fails or is
+stopped. The launch's `load_timeouts` counts every time-out and `load_retries` the loads that ran again; a second
+time-out is LOAD_FAILED. The analysis counts every time-out against its side, so a server that hangs under load is
+never hidden behind a launch that finished on its second try.
+
 SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the launch: the
 launch is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is
-saved as partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
-slow teardown, so a teardown that runs out of time cannot leave it at 0.
+saved as partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first,
+before the slow teardown, so a teardown that runs out of time cannot leave it at 0.
 
 One run at a time. Before it touches anything (the results file, the status, the live server), the runner asks the
 backend whether another comparison is running, and refuses to start if one is (RUN_ACTIVE): two runs would take the
@@ -20,9 +30,9 @@ GPU from each other, and the first to end would bring the live server back under
 The live server. The backend may scale the pattern's own server down for the run (kube.py) or stop a container
 (dockerapi.py); the runner asks it back however the run ends, and records in run.server_restored whether that
 worked. A server that could not be brought back makes the run exit 4, whatever its status, with the command that
-brings it back in the log. A server that was running when the run began but had stopped by itself before the backend
-came to take it away is left as it is: nothing brings it back, and the run records that in run.server_found_down, a
-note, results.md and the log.
+brings it back in the log. A server that was running when the run began but had stopped by itself during the image
+pulls, before the backend would have stopped it (also in a run stopped during the pulls), is left as it is: nothing
+brings it back, and the run records that in run.server_found_down, a note, results.md and the log.
 
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
 table), and launches/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
@@ -57,13 +67,20 @@ def utc_now() -> str:
 GPU_NOT_FREE = "GPU_NOT_FREE"          # another pod or program still held the GPU when the launch was to start
 SIDE_FAILED = "SIDE_FAILED"            # the side failed: bad image, pull failure, no node, or the server exited
 SIDE_NEVER_READY = "SIDE_NEVER_READY"  # the side did not list the model, or gave no answer, before its time limit
-LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its one retry), or its report is unusable
+LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed, or timed out in both tries of the launch, or its report is
+#                                        unusable
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the launch
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 LAUNCH_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
 #: How many more times a side is started in one launch when its server stopped at vLLM's start-up memory check
-#: (logs.memory_profiling_failed); recorded in the launch's start_retries. A second such failure is SIDE_FAILED.
+#: (logs.memory_profiling_failed); recorded in the launch's start_retries. A second such failure of the same start is
+#: SIDE_FAILED. A launch whose load runs again (LOAD_RETRIES) starts the side anew, and that start gets its own retry.
 START_RETRIES = 1
+#: How many more times a launch runs after its GuideLLM timed out (LoadError.timed_out), so one stall of the load tool
+#: is not a failure of the side. The retry takes the side down and starts it again (see the module's docstring); the
+#: launch's load_timeouts counts the time-out at once, its load_retries only once the second load has begun. A
+#: second time-out is LOAD_FAILED.
+LOAD_RETRIES = 1
 #: The run's `error_code`, null when every planned launch finished:
 LAUNCHES_FAILED = "LAUNCHES_FAILED"  # every launch ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every launch ran, but at some load level of some launch requests failed (or
@@ -80,8 +97,8 @@ EXIT_COMPLETE, EXIT_PARTIAL, EXIT_CONFIG, EXIT_FAILED, EXIT_SERVER_NOT_RESTORED,
 
 
 NOT_RESTORED = "the live server was not brought back"
-#: The start of the note a run keeps when its live server had stopped by itself before the backend came to take it
-#: away (run.server_found_down).
+#: The start of the note a run keeps when its live server had stopped by itself before the backend would have stopped
+#: it (run.server_found_down).
 FOUND_DOWN = "the live server was running when the run began but had stopped by itself"
 
 
@@ -151,9 +168,11 @@ class Backend(Protocol):
     #   and keep prepare() from taking the live server away if it has not yet (dockerapi.py: a stop during the image
     #   pulls leaves the server running). Called from the signal handler, also while prepare() runs, so it only sets
     #   flags. An error it raises is ignored, so it sets the flag prepare() reads before anything that can fail.
-    # - `server_found_down` (str or None, read after prepare()): the live server's state when prepare() came to take
-    #   it away, when it was running at the start but had stopped by itself by then (docker: "exited", or "gone");
-    #   the backend left it as it was. Recorded in run.server_found_down.
+    # - `server_found_down` (str or None, read after prepare()): the live server's state at prepare()'s last read,
+    #   when it was running at the start but had stopped by itself by then (docker: "exited", or "gone"), also in a
+    #   run stopped during the pulls; the backend left it as it was. Recorded in run.server_found_down.
+    # - `notes` (list of str, read after prepare()): what prepare() could not do and did not need to, such as a state
+    #   read that failed during a stop; each becomes a note of the run.
     # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
     #   results volume finds it (kube.py: a ConfigMap). Called after every save.
 
@@ -308,16 +327,17 @@ class Runner:
         run["server_restored"] = True if back else None
 
     def _found_down(self) -> None:
-        """Record a live server that had stopped by itself before the backend came to take it away
-        (run.server_found_down, and a note). The backend left it as it was, so nothing brings it back after the run
-        and run.server_restored stays null."""
+        """Record the backend's notes from prepare(), and a live server that had stopped by itself before the
+        backend would have stopped it (run.server_found_down, and a note). The backend left it as it was, so nothing
+        brings it back after the run and run.server_restored stays null."""
+        run = self.results["run"]
+        run["notes"] += [str(note) for note in getattr(self.backend, "notes", None) or []]
         state = getattr(self.backend, "server_found_down", None)
         if not state:
             return
-        run = self.results["run"]
         run["server_found_down"] = state
-        run["notes"].append(f"{FOUND_DOWN} before the runner came to take it away (its state then: {state}); it was "
-                            f"left as it was, and the run does not start it again")
+        run["notes"].append(f"{FOUND_DOWN} during the image pulls, before the runner would have stopped it (its state "
+                            f"then: {state}); it was left as it was, and the run does not start it again")
 
     def _backend_on_stop(self) -> None:
         on_stop = getattr(self.backend, "on_stop", None)
@@ -391,7 +411,8 @@ class Runner:
                         "side": launch["side"], "of": launch["of"], "kind": launch["kind"], "status": "failed",
                         "error": None, "error_code": None, "started_at": utc_now(), "finished_at": None,
                         "node": None, "image_digest": None, "server_version": None, "startup": None, "levels": [],
-                        "values": {}, "artifacts": {}, "start_retries": 0}
+                        "values": {}, "artifacts": {}, "starts": 0, "start_retries": 0, "load_timeouts": 0,
+                        "load_retries": 0}
         held: dict = {"handle": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
@@ -416,8 +437,8 @@ class Runner:
         finally:
             if self._stopping:  # also a stop that came in after the launch's own work: the server back first
                 self._begin_stop()
-            if held["handle"] is not None:
-                self._after(held["handle"], record, out_dir, rel)
+            if held["handle"] is not None:  # a try being discarded keeps its log under the try's name
+                self._after(held["handle"], record, out_dir, rel, *held.get("log_as", ("server.log", "server_log")))
             record["finished_at"] = utc_now()
         record.pop("_reported_version", None)
         record.pop("_started_epoch", None)
@@ -425,15 +446,48 @@ class Runner:
 
     def _launch(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                 held: dict) -> None:
-        """Wait for the GPU, start the side, time its start, load it; any failure raises. A server that stopped at
-        vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that start."""
+        """Wait for the GPU, start the side, time its start, load it; any failure raises. A load whose GuideLLM timed
+        out runs the launch once more (LOAD_RETRIES) from a new start of the side, so the second try meets the same
+        conditions as every other launch: a server that has served no load, and the same requests."""
+        tries = 0
+        while True:
+            first_note = len(record.get("notes") or [])  # the notes from here on belong to this try
+            handle, target = self._start_side(launch, side, spec, record, out_dir, rel, held)
+            if launch["kind"] == plans.WARMUP:
+                return
+            if tries:  # only now has the launch run again
+                record["load_retries"] = tries
+                record.setdefault("notes", []).append(
+                    f"the launch ran once more from a new start of the side, with the same requests (the first try's "
+                    f"files are the *.try-{tries}.* files)")
+            try:
+                record["levels"] = self._load(launch, handle, target, out_dir, rel, record)
+            except guidellm.LoadError as error:
+                if not error.timed_out:
+                    raise
+                record["load_timeouts"] += 1  # counted against the side whatever happens next
+                if tries >= LOAD_RETRIES:
+                    raise
+                tries += 1
+                self._discard_try(record, out_dir, rel, held, error, tries, first_note)
+                continue
+            record["values"].update(guidellm.flat_values(record["levels"]))
+            return
+
+    def _start_side(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+                    held: dict):
+        """Wait for the GPU, start the side and time it to its first answer: (handle, target). A server that stopped
+        at vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that
+        start."""
         timeout = self.plan["server"]["warmup_timeout_s" if launch["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
+        retries = 0
         while True:
             self.backend.gpu_free(self.plan, side)
             record["_started_epoch"] = self.wall()
             t0 = self.clock()
             handle = held["handle"] = self.backend.start(self.plan, launch, side, spec)
+            record["starts"] += 1
             deadline = t0 + timeout
             target = self.backend.endpoint(handle, deadline)
             alive = lambda: self.backend.alive(handle)  # noqa: E731
@@ -446,22 +500,21 @@ class Runner:
                     record["_reported_version"] = probe.reported_version(client)
                 break
             except probe.StartFailed as error:
-                if error.never_ready or record["start_retries"] >= START_RETRIES:
+                if error.never_ready or retries >= START_RETRIES:
                     raise
-                if not self._start_again(handle, record, out_dir, rel, error):
+                if not self._start_again(handle, record, out_dir, rel, error, retries + 1):
                     raise
+                retries += 1
                 held["handle"] = None  # torn down; the next start sets it
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["values"].update({"startup/ready_s": ready_s, "startup/first_answer_s": first_s})
-        if launch["kind"] != plans.WARMUP:
-            record["levels"] = self._load(launch, handle, target, out_dir, rel, record)
-            record["values"].update(guidellm.flat_values(record["levels"]))
+        return handle, target
 
-    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception) -> bool:
-        """When the server's log shows vLLM's memory-profiling check failing: keep that log as server.attempt-N.log,
-        take the side down and return True (the launch starts it again). Anything else: False, and the launch
-        fails."""
+    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception, attempt: int) -> bool:
+        """When the server's log shows vLLM's memory-profiling check failing: keep that log as
+        server.attempt-<attempt>.log, take the side down and return True (the launch starts it again). Anything
+        else: False, and the launch fails."""
         try:
             text = self.backend.logs(handle)
         except Exception:
@@ -469,14 +522,58 @@ class Runner:
         if not logs.memory_profiling_failed(text):
             return False
         record["start_retries"] += 1
-        name = f"server.attempt-{record['start_retries']}.log"
+        name = f"server.attempt-{attempt}.log"
         (out_dir / name).write_text(text, encoding="utf-8")
-        record["artifacts"][f"server_log_attempt_{record['start_retries']}"] = f"{rel}/{name}"
+        record["artifacts"][f"server_log_attempt_{attempt}"] = f"{rel}/{name}"
         record.setdefault("notes", []).append(
             f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side was started once "
-            f"more, and its start is timed from then ({name} is the first try's log)")
+            f"more, and its start is timed from then ({name} is the log of the start that stopped)")
         self.backend.stop(handle)
         return True
+
+    def _discard_try(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int,
+                     first_note: int) -> None:
+        """After a load whose GuideLLM timed out: clear what the try measured, keep every file of it as *.try-N.*
+        (artifact keys *_try_N), mark its notes as the try's, and take the side down, so the launch starts again
+        from the GPU check. The figures go first and the note before the teardown, so a teardown that fails or is
+        stopped half-way leaves a failed launch with none of the try's figures, and says why."""
+        record.pop("_reported_version", None)
+        record["startup"], record["levels"], record["values"] = None, [], {}
+        renamed: dict[str, str] = {}
+
+        def keep(name: str, key: str) -> None:
+            stem, dot, ext = name.rpartition(".")
+            kept = f"{stem}.try-{tries}{dot}{ext}"
+            if (out_dir / name).exists():
+                (out_dir / name).replace(out_dir / kept)
+                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
+                renamed[name] = kept
+
+        for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's server.attempt-1.log
+            if "_try_" not in key:
+                del record["artifacts"][key]
+                keep(path.rpartition("/")[2], key)
+        keep("guidellm.log", "guidellm")
+        keep("guidellm.json", "load_report")  # a report the stopped GuideLLM left; _load removed any older one
+        notes = record.setdefault("notes", [])
+        for i in range(first_note, len(notes)):  # such as a power sampler that did not start in that try
+            text = notes[i]
+            for old, new in renamed.items():
+                text = text.replace(old, new)
+            notes[i] = f"try {tries}: {text}"
+        notes.append(f"{error}; the side is taken down, and the launch runs once more from a new start with the same "
+                     f"requests (that try's files are the *.try-{tries}.* files)")
+        name, key = f"server.try-{tries}.log", f"server_log_try_{tries}"
+        held["log_as"] = (name, key)  # a stop from here on: the teardown keeps this try's log under its own name
+        handle = held["handle"]
+        try:
+            (out_dir / name).write_text(self.backend.logs(handle), encoding="utf-8")
+            record["artifacts"][key] = f"{rel}/{name}"
+        except Exception as read_error:
+            notes.append(f"the server log of that try not read: {type(read_error).__name__}")
+        self.backend.stop(handle)
+        held["handle"] = None
+        held.pop("log_as", None)
 
     def _load(self, launch: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None
@@ -488,19 +585,10 @@ class Runner:
             except Exception as error:
                 record.setdefault("notes", []).append(f"power sampling did not start: {type(error).__name__}")
                 sampler = None
+        for stale in ("guidellm.json", "guidellm.log"):  # from an earlier attempt of the run in a reused folder
+            (out_dir / stale).unlink(missing_ok=True)
         try:
-            try:
-                report_path = self.backend.run_load(self.plan, launch, target, out_dir)
-            except guidellm.LoadError as error:
-                if not error.timed_out:
-                    raise
-                # GuideLLM v0.8.1 now and then stops making progress at the end of a level (seen once in about
-                # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
-                # launch.
-                record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
-                if (out_dir / "guidellm.log").exists():
-                    (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")
-                report_path = self.backend.run_load(self.plan, launch, target, out_dir)
+            report_path = self.backend.run_load(self.plan, launch, target, out_dir)
         finally:
             if sampler is not None:
                 try:
@@ -547,12 +635,13 @@ class Runner:
                 result = energy.Power(None, result.samples, None, f"{result.note}; {note}")
             level["energy"] = energy.level_energy(level, result, sampler.source)
 
-    def _after(self, handle, record: dict, out_dir: Path, rel: str) -> None:
+    def _after(self, handle, record: dict, out_dir: Path, rel: str, log_name: str = "server.log",
+               log_key: str = "server_log") -> None:
         """Logs, facts and teardown, whatever happened in the launch."""
         try:
             text = self.backend.logs(handle)
-            (out_dir / "server.log").write_text(text, encoding="utf-8")
-            record["artifacts"]["server_log"] = f"{rel}/server.log"
+            (out_dir / log_name).write_text(text, encoding="utf-8")
+            record["artifacts"][log_key] = f"{rel}/{log_name}"
             if record.get("startup") is not None:
                 record["startup"]["breakdown"] = logs.breakdown(text, record.get("_started_epoch") or 0.0)
             version = record.get("_reported_version")

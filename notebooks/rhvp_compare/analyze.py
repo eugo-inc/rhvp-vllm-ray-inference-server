@@ -20,6 +20,11 @@ Two checks this pattern adds to the rule, because a failed launch does not stop 
   the GPU not free, the platform) only means one pair fewer;
 - launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
   (more_than_one_node).
+
+A launch whose GuideLLM timed out runs again from a new start of the side (runner.LOAD_RETRIES), so it can finish
+with figures like any other. Every time-out still counts against its side: `load_timeouts` per side over the whole
+run (twins included) and per comparison over its paired rounds, so a load that stalls on one side only is never
+hidden behind launches that finished on their second try.
 """
 
 from __future__ import annotations
@@ -74,9 +79,12 @@ def inputs(results: Mapping) -> dict:
     positions = {(launch["round"], launch["side"]): launch["pos"] for launch in _measured(results)}
     nodes = sorted({r["node"] for r in _measured(results) if r.get("status") == "ok"
                     and isinstance(r.get("node"), str) and r["node"]})
+    timeouts = [{"round": r["round"], "side": r["side"], "n": int(r.get("load_timeouts") or 0)}
+                for r in _measured(results) if r.get("load_timeouts")]
     return {"rows": rows, "positions": [{"round": r, "side": s, "pos": p} for (r, s), p in sorted(positions.items())],
             "twins": {e["key"]: e["twin_of"] for e in plan["lineup"] if e["twin_of"]},
-            "cases": cases, "faults": faults, "nodes": nodes, "alpha": plan["analysis"]["alpha"]}
+            "cases": cases, "faults": faults, "nodes": nodes, "alpha": plan["analysis"]["alpha"],
+            "timeouts": timeouts}
 
 
 def _by_round(rows: Iterable[Mapping], side: str, case: str) -> dict[int, float]:
@@ -96,14 +104,16 @@ def _floor_entry(floor: stats.Floor | None, case: str | None) -> dict | None:
 
 def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, str], cases: list[Mapping],
             alpha: float = 0.05, faults: Iterable[Mapping] = (), nodes: Iterable[str] = (),
-            subject: str = SUBJECT, baseline: str = BASELINE) -> dict:
+            subject: str = SUBJECT, baseline: str = BASELINE, timeouts: Iterable[Mapping] = ()) -> dict:
     """The analysis from plain rows. `rows`: round, pos, side, case, value. `positions`: round, side, pos of every
-    measured launch. `twins`: twin key -> the side it copies. `cases`: id, better, kind, role, group."""
+    measured launch. `twins`: twin key -> the side it copies. `cases`: id, better, kind, role, group. `timeouts`:
+    round, side, n for every measured launch whose GuideLLM timed out n times."""
     rule = stats.strict(alpha)
     pos = {(p["round"], p["side"]): p["pos"] for p in positions}
     twin_of = {side: twin for twin, side in twins.items()}
     fault_set = {(f["side"], f["case"], f["round"]) for f in faults}
     nodes = list(nodes)
+    timed_out = {(t["round"], t["side"]): int(t["n"]) for t in timeouts}
     primary_ids = [c["id"] for c in cases if c.get("role", "primary") == "primary"]
     needed = {"primary": stats.min_rounds(len(primary_ids), alpha), "secondary": stats.min_rounds(1, alpha)}
 
@@ -173,6 +183,7 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             "bar": bar, "p_raw": test.p if test else None, "p_raw_fraction": list(test.fraction) if test else None,
             "p_corrected": None, "order_split": [first, len(positive) - first],
             "lost": lost,
+            "load_timeouts": {side: sum(1 for r in paired if timed_out.get((r, side))) for side in (subject, baseline)},
             "_nonpositive": len(positive) != len(paired),
         })
 
@@ -191,6 +202,11 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
     if len(nodes) > 1:
         refusals.append({"code": "MORE_THAN_ONE_NODE", "scope": "experiment",
                          "message": f"the measured launches ran on {len(nodes)} nodes"})
+    totals = {side: 0 for side in (subject, baseline)}
+    for (_, side), n in timed_out.items():
+        base = twins.get(side, side)
+        if base in totals:
+            totals[base] += n
     return {
         "rule": {"name": rule.name, "fields": rule.fields(), "family_size": len(family),
                  "plain": stats.plain_family(len(family)), "min_rounds": needed},
@@ -199,6 +215,7 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
         "refusals": refusals,
         "notes": notes,
         "outcomes": outcomes,
+        "load_timeouts": totals,
     }
 
 
@@ -234,5 +251,5 @@ def analyze(results: Mapping) -> dict:
     """The `analysis` section for a results file (complete or partial)."""
     given = inputs(results)
     out = analyse(given["rows"], given["positions"], given["twins"], given["cases"], given["alpha"],
-                  given["faults"], given["nodes"])
+                  given["faults"], given["nodes"], timeouts=given["timeouts"])
     return {"tool": dict(TOOL), **out, "nodes": given["nodes"]}

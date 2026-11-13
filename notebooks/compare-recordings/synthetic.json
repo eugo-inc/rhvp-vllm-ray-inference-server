@@ -739,7 +739,10 @@
    "artifacts": {
     "server_log": "launches/01-A-warmup/server.log"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 2,
@@ -813,7 +816,10 @@
    "artifacts": {
     "server_log": "launches/02-B-warmup/server.log"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 3,
@@ -1024,7 +1030,10 @@
     "server_log": "launches/03-A-scored/server.log",
     "load_report": "launches/03-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 4,
@@ -1235,7 +1244,10 @@
     "server_log": "launches/04-A-same-scored/server.log",
     "load_report": "launches/04-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 5,
@@ -1446,7 +1458,10 @@
     "server_log": "launches/05-B-scored/server.log",
     "load_report": "launches/05-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 6,
@@ -1657,7 +1672,10 @@
     "server_log": "launches/06-B-same-scored/server.log",
     "load_report": "launches/06-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 7,
@@ -1868,7 +1886,10 @@
     "server_log": "launches/07-A-same-scored/server.log",
     "load_report": "launches/07-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 8,
@@ -2079,7 +2100,10 @@
     "server_log": "launches/08-B-scored/server.log",
     "load_report": "launches/08-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 9,
@@ -2290,7 +2314,10 @@
     "server_log": "launches/09-B-same-scored/server.log",
     "load_report": "launches/09-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 10,
@@ -2501,7 +2528,10 @@
     "server_log": "launches/10-A-scored/server.log",
     "load_report": "launches/10-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 11,
@@ -2712,7 +2742,10 @@
     "server_log": "launches/11-B-scored/server.log",
     "load_report": "launches/11-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 12,
@@ -2923,7 +2956,10 @@
     "server_log": "launches/12-B-same-scored/server.log",
     "load_report": "launches/12-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 13,
@@ -3134,7 +3170,10 @@
     "server_log": "launches/13-A-scored/server.log",
     "load_report": "launches/13-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 14,
@@ -3345,7 +3384,10 @@
     "server_log": "launches/14-A-same-scored/server.log",
     "load_report": "launches/14-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 15,
@@ -3556,7 +3598,10 @@
     "server_log": "launches/15-B-same-scored/server.log",
     "load_report": "launches/15-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 16,
@@ -3767,7 +3812,10 @@
     "server_log": "launches/16-A-scored/server.log",
     "load_report": "launches/16-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 17,
@@ -3978,7 +4026,10 @@
     "server_log": "launches/17-A-same-scored/server.log",
     "load_report": "launches/17-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 18,
@@ -4189,7 +4240,10 @@
     "server_log": "launches/18-B-scored/server.log",
     "load_report": "launches/18-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 19,
@@ -4400,7 +4454,10 @@
     "server_log": "launches/19-B-same-scored/server.log",
     "load_report": "launches/19-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 20,
@@ -4611,7 +4668,10 @@
     "server_log": "launches/20-B-scored/server.log",
     "load_report": "launches/20-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 21,
@@ -4822,7 +4882,10 @@
     "server_log": "launches/21-A-same-scored/server.log",
     "load_report": "launches/21-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 22,
@@ -5033,7 +5096,10 @@
     "server_log": "launches/22-A-scored/server.log",
     "load_report": "launches/22-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 23,
@@ -5244,7 +5310,10 @@
     "server_log": "launches/23-A-scored/server.log",
     "load_report": "launches/23-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 24,
@@ -5455,7 +5524,10 @@
     "server_log": "launches/24-B-same-scored/server.log",
     "load_report": "launches/24-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 25,
@@ -5666,7 +5738,10 @@
     "server_log": "launches/25-B-scored/server.log",
     "load_report": "launches/25-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 26,
@@ -5877,7 +5952,10 @@
     "server_log": "launches/26-A-same-scored/server.log",
     "load_report": "launches/26-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 27,
@@ -6088,7 +6166,10 @@
     "server_log": "launches/27-A-same-scored/server.log",
     "load_report": "launches/27-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 28,
@@ -6299,7 +6380,10 @@
     "server_log": "launches/28-A-scored/server.log",
     "load_report": "launches/28-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 29,
@@ -6510,7 +6594,10 @@
     "server_log": "launches/29-B-same-scored/server.log",
     "load_report": "launches/29-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 30,
@@ -6721,7 +6808,10 @@
     "server_log": "launches/30-B-scored/server.log",
     "load_report": "launches/30-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 31,
@@ -6932,7 +7022,10 @@
     "server_log": "launches/31-B-scored/server.log",
     "load_report": "launches/31-B-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 32,
@@ -7143,7 +7236,10 @@
     "server_log": "launches/32-A-same-scored/server.log",
     "load_report": "launches/32-A-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 33,
@@ -7354,7 +7450,10 @@
     "server_log": "launches/33-A-scored/server.log",
     "load_report": "launches/33-A-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   },
   {
    "index": 34,
@@ -7565,7 +7664,10 @@
     "server_log": "launches/34-B-same-scored/server.log",
     "load_report": "launches/34-B-same-scored/guidellm.json"
    },
-   "start_retries": 0
+   "starts": 1,
+   "start_retries": 0,
+   "load_timeouts": 0,
+   "load_retries": 0
   }
  ],
  "analysis": {
@@ -7659,6 +7761,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "unresolved",
     "reason": "not_significant",
     "verdict": "UNRESOLVED"
@@ -7722,6 +7828,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -7793,6 +7903,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "tie",
     "reason": null,
     "verdict": "TIE"
@@ -7859,6 +7973,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "FASTER"
@@ -7922,6 +8040,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -7994,6 +8116,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "BETTER"
@@ -8059,6 +8185,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -8128,6 +8258,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "FASTER"
@@ -8191,6 +8325,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -8263,6 +8401,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "BETTER"
@@ -8328,6 +8470,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -8397,6 +8543,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "FASTER"
@@ -8463,6 +8613,10 @@
      "B": 0,
      "A": 0
     },
+    "load_timeouts": {
+     "B": 0,
+     "A": 0
+    },
     "outcome": "better",
     "reason": null,
     "verdict": "BETTER"
@@ -8526,6 +8680,10 @@
      4
     ],
     "lost": {
+     "B": 0,
+     "A": 0
+    },
+    "load_timeouts": {
      "B": 0,
      "A": 0
     },
@@ -9005,6 +9163,10 @@
     "FASTER": 3,
     "BETTER": 4
    }
+  },
+  "load_timeouts": {
+   "B": 0,
+   "A": 0
   },
   "nodes": [
    "gpu-node-1"

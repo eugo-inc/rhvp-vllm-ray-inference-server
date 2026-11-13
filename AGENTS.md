@@ -174,9 +174,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
   (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
   (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the
-  launch's `start_retries`). When the run ends it scales the server back to `compare.serverReplicas` (1), tries
-  again for about a minute, reads the scale back, and records `run.server_restored`; a server that did not come back
-  is exit 4.
+  launch's `start_retries`). A GuideLLM time-out runs the launch once more from a new start of the side, timed from
+  that start, with the same requests (`runner.LOAD_RETRIES`). The launch's `load_timeouts` is counted when the
+  time-out happens and `load_retries` only once the second load begins; the first try's files are kept as
+  `*.try-1.*`, its notes are marked `try 1:`, and its figures are cleared before the teardown. Time-outs count
+  against their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it scales the server
+  back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and records
+  `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
   sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
 - SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current launch short and asks the server back at once,
@@ -223,7 +227,8 @@ Not checked yet: the twin rule with any real server (it has run against fakes on
 real server; tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label
 names it matches on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a
 run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the
-example's own settings; and the length of a run (an estimate of about 4 to 6 hours with the defaults).
+example's own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); and a launch
+whose GuideLLM timed out and ran again, which only the fake backend of the unit tests has gone through.
 
 ## How to deploy
 

@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
 from rhvp_compare import (  # noqa: E402
-    __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, show, summary)
+    __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, show, summary, words)
 
 FIXTURES = ROOT / "tests" / "fixtures"
 SCHEMA = json.loads((ROOT / "notebooks" / "rhvp_compare" / "results.schema.json").read_text())
@@ -87,8 +87,12 @@ class FakeBackend:
     def __init__(self, fail_launch: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
                  load_error: bool = False, term_in_launch: int | None = None, errored: dict | None = None,
                  nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None, dies: dict | None = None,
-                 dies_log: str = PROFILING_LOG):
+                 dies_log: str = PROFILING_LOG, hangs: dict | None = None, hang_report: bool = False):
         self.fail_launch, self.hang_once, self.fail_code = fail_launch, hang_once, fail_code
+        self.hangs = dict(hangs or {})  # launch index -> how many of its loads time out
+        self.hang_report = hang_report  # a load that times out leaves a partial guidellm.json
+        self.loads: list = []  # (launch index, the start of the launch's side that each load ran against)
+        self.gpu_checks = []  # the number of starts so far, at each GPU check
         self.load_error, self.term_in_launch = load_error, term_in_launch
         self.errored = errored or {}  # launch index -> the concurrency level where 40 requests fail
         self.zero = zero or {}  # launch index -> the concurrency level whose requests finish with no output token
@@ -106,7 +110,7 @@ class FakeBackend:
                          "kernel": "1", "container_runtime": "fake"}}
 
     def gpu_free(self, plan, side):
-        pass
+        self.gpu_checks.append(len(self.started))
 
     def start(self, plan, launch, side, spec):
         if launch["index"] == self.fail_launch:
@@ -128,9 +132,17 @@ class FakeBackend:
             raise AssertionError("SIGTERM did not cut the launch short")
         if self.load_error:
             raise guidellm.LoadError("GuideLLM exited with code 2; see guidellm.log")
-        if self.hang_once:
-            self.hang_once = False
+        self.loads.append((launch["index"], self.attempts.get(launch["index"])))
+        if self.hang_once or self.hangs.get(launch["index"]):
+            if self.hang_once:
+                self.hang_once = False
+            else:
+                self.hangs[launch["index"]] -= 1
+            (out_dir / "guidellm.log").write_text("stalled\n")
+            if self.hang_report:
+                (out_dir / "guidellm.json").write_text('{"partial": true}')
             raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped", timed_out=True)
+        (out_dir / "guidellm.log").write_text("finished\n")
         data = json.loads(json.dumps(REPORT))
         slower = 1.2 if launch["of"] == "B" and launch["kind"] == "scored" else 1.0
         rng = random.Random(launch["index"])  # every launch its own noise: a twin lands near its side, not on it
@@ -525,10 +537,148 @@ def test_the_termination_message_never_passes_4_kib():
     assert len(text.encode()) <= 4096 and "primary" not in json.loads(text)
 
 
-def test_a_hung_load_is_tried_once_more(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(hang_once=True), rounds={"count": 2, "warmup": False})
+def _clock(backend, index):
+    """A runner clock that each start of launch `index` moves 100 s back, so a start-up figure says which start it
+    came from: about 0 s from the first, about 100 s from the second."""
+    return lambda: time.monotonic() - 100 * backend.attempts.get(index, 0)
+
+
+def test_a_hung_load_runs_the_launch_once_more_from_a_new_start(tmp_path, monkeypatch):
+    # Launch 1: GuideLLM stalls and leaves a partial report. Its retry sends the same requests (the same seed), so it
+    # runs against a new start of the side, not against the server that has just served them, and the launch's
+    # figures come from that try.
+    backend = FakeBackend(hangs={1: 1}, hang_report=True)
+    results, _, the_runner = run(tmp_path, backend, clock=_clock(backend, 1), rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
     first = results["launches"][0]
-    assert first["status"] == "ok" and "run once more" in first["notes"][0]
+    assert (first["status"], first["error_code"], first["load_timeouts"], first["load_retries"]) == ("ok", None, 1, 1)
+    assert (first["starts"], first["start_retries"]) == (2, 0)
+    assert [x["load_retries"] for x in results["launches"]] == [1, 0, 0, 0]
+    assert backend.started.count((1, "A")) == 2 and backend.stopped.count(1) == 2
+    assert [load for load in backend.loads if load[0] == 1] == [(1, 1), (1, 2)]  # the second load: the second start
+    assert backend.gpu_checks == [0, 1, 2, 3, 4]  # every start, the second try's too, waits for the GPU first
+    assert 99 < first["startup"]["ready_s"] < 150  # the second start's figure, not the first's (about 0 s)
+    assert any("ran once more from a new start of the side, with the same requests" in n for n in first["notes"])
+    folder = the_runner.dir / "launches/01-A-scored"
+    assert first["artifacts"]["guidellm_try_1"] == "launches/01-A-scored/guidellm.try-1.log"
+    assert first["artifacts"]["server_log_try_1"] == "launches/01-A-scored/server.try-1.log"
+    assert first["artifacts"]["load_report_try_1"] == "launches/01-A-scored/guidellm.try-1.json"
+    assert (folder / "guidellm.try-1.log").read_text() == "stalled\n"
+    assert (folder / "guidellm.try-1.json").read_text() == '{"partial": true}'  # kept, never read
+    assert (folder / "guidellm.log").read_text() == "finished\n"
+    assert json.loads((folder / "guidellm.json").read_text())["benchmarks"]  # the second try's report
+    assert {"startup/ready_s", "c1/ttft_ms_median"} <= set(first["values"])
+    assert results["run"]["status"] == "complete"
+    # Every time-out counts against its side, though the launch finished.
+    assert results["analysis"]["load_timeouts"] == {"A": 1, "B": 0}
+    assert {row["load_timeouts"]["A"] for row in results["analysis"]["comparisons"]} == {1}
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 1 (A): timed out 1 time, ran again, then finished" in text
+    assert "**GuideLLM timed out** 1 times in the launches of side A and 0 times" in text
+    assert "Only side A timed out" in text and "started again after vLLM" not in text
+    head = "".join(show._head(results, [], []))
+    assert "Launches whose GuideLLM timed out: 1 (A): ran again." in head and words.LOAD_RETRIED_HOW in head
+    shown = []
+    monkeypatch.setenv("RHVP_COMPARE_REPLAY", str(the_runner.path))
+    monkeypatch.setattr(show.draw, "show", lambda *parts: shown.extend(parts))
+    show.verdicts()
+    assert words.LOAD_TIMEOUTS_ONE_SIDED.format(side="A") in "".join(shown)
+
+
+def test_a_report_left_by_an_earlier_attempt_is_not_kept_as_the_tries(tmp_path):
+    plan = plans.build(config(rounds=ONE_ROUND), "docker")
+    folder = tmp_path / plan["run_id"] / "launches/01-A-scored"
+    folder.mkdir(parents=True)
+    (folder / "guidellm.json").write_text('{"stale": true}')  # an earlier, unfinished attempt of the same run
+    results, _, _ = run(tmp_path, FakeBackend(hangs={1: 1}), rounds=ONE_ROUND)
+    first = results["launches"][0]
+    assert first["status"] == "ok" and "load_report_try_1" not in first["artifacts"]
+    assert not (folder / "guidellm.try-1.json").exists()
+
+
+def test_a_load_that_times_out_in_both_tries_is_load_failed(tmp_path):
+    backend = FakeBackend(hangs={1: 2})
+    results, _, the_runner = run(tmp_path, backend, clock=_clock(backend, 1), rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    assert (failed["status"], failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == (
+        "failed", "LOAD_FAILED", 2, 1)
+    assert backend.started.count((1, "A")) == 2 and backend.stopped.count(1) == 2
+    assert backend.loads.count((1, 1)) == 1 and backend.loads.count((1, 2)) == 1  # one load per start, no third
+    assert 99 < failed["startup"]["ready_s"] < 150  # the second start's own figure; nothing of the first try
+    assert failed["levels"] == [] and set(failed["values"]) == {"startup/ready_s", "startup/first_answer_s"}
+    assert results["analysis"]["load_timeouts"] == {"A": 2, "B": 0}
+    assert "- launch 1 (A): timed out 2 times, ran again, then LOAD_FAILED" in (the_runner.dir / "results.md").read_text()
+
+
+class DiesInEachTry(FakeBackend):
+    """Launch 3's side stops at vLLM's memory check on its 1st and 3rd starts: once in each try of the launch."""
+
+    def start(self, plan, launch, side, spec):
+        handle = super().start(plan, launch, side, spec)
+        handle["dies"] = launch["index"] == 3 and self.attempts[3] in (1, 3)
+        return handle
+
+
+def test_each_try_of_a_retried_launch_gets_its_own_memory_check_retry(tmp_path):
+    backend = DiesInEachTry(hangs={3: 1})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["load_retries"]) == ("ok", 4, 2, 1)
+    assert backend.started.count((3, "A")) == 4 and backend.stopped.count(3) == 4
+    assert [load for load in backend.loads if load[0] == 3] == [(3, 2), (3, 4)]
+    first, second = l3["artifacts"]["server_log_attempt_1_try_1"], l3["artifacts"]["server_log_attempt_1"]
+    assert first == "launches/03-A-scored/server.attempt-1.try-1.log"
+    assert second == "launches/03-A-scored/server.attempt-1.log"
+    assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
+    assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log_try_1"]).read_text()
+    # The first try's note is marked as that try's, and names its log as kept.
+    [old] = [n for n in l3["notes"] if n.startswith("try 1:")]
+    assert "server.attempt-1.try-1.log is the log of the start that stopped" in old
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): started 4 times in all, then finished" in text
+    assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
+    assert "3 (A, 4)" in "".join(show._head(results, [], []))
+
+
+class StopFailsOnce(FakeBackend):
+    """The first teardown of launch 1's side fails, as an API error would."""
+
+    def stop(self, handle):
+        super().stop(handle)
+        if self.stopped.count(1) == 1 and handle["launch"]["index"] == 1:
+            raise runner.RoundError("could not delete the side's pod (HTTP 500)")
+
+
+class TermInTeardown(FakeBackend):
+    """SIGTERM lands while launch 1's side is taken down between its two tries."""
+
+    def stop(self, handle):
+        super().stop(handle)
+        if self.stopped.count(1) == 1 and handle["launch"]["index"] == 1:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+
+@pytest.mark.parametrize("backend, code", [(StopFailsOnce(hang_once=True), "RUNNER_ERROR"),
+                                           (TermInTeardown(hang_once=True), "STOPPED")])
+def test_a_launch_cut_short_between_its_tries_keeps_none_of_the_first_try(tmp_path, backend, code):
+    results, _, the_runner = run(tmp_path, backend, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    # The time-out is on record and counts against the side; the load never ran again, so load_retries says 0.
+    assert (failed["status"], failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == (
+        "failed", code, 1, 0)
+    assert failed["startup"] is None and failed["levels"] == [] and failed["values"] == {}
+    assert any("did not finish within 1 s" in note for note in failed["notes"])
+    assert backend.started.count((1, "A")) == 1 and backend.stopped.count(1) == 2  # the launch's end tore it down
+    assert "server_log" not in failed["artifacts"] and "server_log_try_1" in failed["artifacts"]
+    assert results["analysis"]["load_timeouts"]["A"] == 1
+    text = (the_runner.dir / "results.md").read_text()
+    assert f"- launch 1 (A): timed out 1 time, did not run again, then {code}" in text
+    assert "ran again" not in text.split("- launch 1 (A): timed out", 1)[1].splitlines()[0]
+    if code == "STOPPED":
+        assert results["run"]["error_code"] == "STOPPED" and [x["index"] for x in results["launches"]] == [1]
 
 
 def test_a_complete_run_is_not_run_again(tmp_path):
@@ -682,9 +832,9 @@ def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):
     assert any("started once more" in note for note in l3["notes"])
     assert all(x["start_retries"] == 0 for x in results["launches"] if x["index"] != 3)
     assert results["run"]["status"] == "complete" and runner.exit_code(results) == runner.EXIT_COMPLETE
-    assert "- launch 3 (A): started 2 times, then finished" in (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): started 2 times in all, then finished" in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
-    assert "started once more" in head and "3 (A)" in head
+    assert "started again after vLLM" in head and "3 (A, 2)" in head
 
 
 def test_a_second_memory_check_failure_fails_the_launch(tmp_path):
@@ -695,7 +845,7 @@ def test_a_second_memory_check_failure_fails_the_launch(tmp_path):
     assert (l3["status"], l3["error_code"], l3["start_retries"]) == ("failed", "SIDE_FAILED", 1)
     assert l3["error"] == "the server exited with code 1"
     assert backend.started.count((3, "A")) == 2
-    assert "started 2 times, then SIDE_FAILED" in (the_runner.dir / "results.md").read_text()
+    assert "started 2 times in all, then SIDE_FAILED" in (the_runner.dir / "results.md").read_text()
 
 
 def test_a_server_that_exits_for_another_reason_is_not_started_again(tmp_path):

@@ -93,7 +93,7 @@ def synthesize() -> dict:
                         "clock": "runner, from just before the server was asked for", "breakdown": breakdown},
             "levels": [], "values": {"startup/ready_s": ready, "startup/first_answer_s": first},
             "artifacts": {"server_log": f"{folder}/server.log"},
-            "start_retries": 0,
+            "starts": 1, "start_retries": 0, "load_timeouts": 0, "load_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
         if planned["kind"] != plans.WARMUP:

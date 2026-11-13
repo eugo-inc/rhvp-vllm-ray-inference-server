@@ -176,9 +176,15 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
               for r in launches if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_LAUNCHES.format(launches=", ".join(failed))))
-    retried = [f"{r['index']} ({r['side']})" for r in launches if r.get("start_retries")]
+    retried = [words.RETRIED_LAUNCH.format(index=r["index"], side=r["side"], starts=r.get("starts"))
+               for r in launches if r.get("start_retries")]
     if retried:
         parts.append(line(words.RUN_RETRIED.format(launches=", ".join(retried))))
+    timed_out = [(words.LOAD_RETRIED_RAN if r.get("load_retries") else words.LOAD_RETRIED_NOT).format(
+        index=r["index"], side=r["side"], code=r.get("error_code") or r.get("status")) for r in launches
+        if r.get("load_timeouts")]
+    if timed_out:
+        parts.append(line(words.RUN_LOAD_RETRIED.format(launches=", ".join(timed_out), how=words.LOAD_RETRIED_HOW)))
     unusable = [f"launch {u['index']} ({u['side']}) at {u['concurrency']} streams"
                 for u in summary.levels_unusable(results)]
     if unusable:
@@ -252,6 +258,12 @@ def verdicts(run: str | None = None) -> None:
         parts.append(line(words.METHOD_LINE.format(family=power["family_size"],
                                                    plain=rule.get("plain") or power["plain"],
                                                    alpha=plan["analysis"]["alpha"])))
+        timeouts = (results.get("analysis") or {}).get("load_timeouts") or {}
+        a, b = timeouts.get("A", 0), timeouts.get("B", 0)
+        if a or b:
+            parts.append(draw.notice(words.LOAD_TIMEOUTS.format(a=a, b=b)))
+            if not (a and b):
+                parts.append(draw.notice(words.LOAD_TIMEOUTS_ONE_SIDED.format(side="A" if a else "B")))
         if not power["both_twins"]:
             parts.append(draw.notice(words.TWINS_NONE))
         elif power["must_agree"] is None or not power["reachable"]:

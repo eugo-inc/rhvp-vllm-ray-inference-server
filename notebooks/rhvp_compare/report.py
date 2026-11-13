@@ -97,6 +97,14 @@ def markdown(results: Mapping) -> str:
                          f"{_num(row['baseline_median'], unit)} | {_num(row['subject_median'], unit)} | "
                          f"{_ratio(row)} | {_bar(row)} | {row['n_rounds']} ({row['n_untied']}) | "
                          f"{_p(row.get(p_key))} | {_verdict(row)} |")
+    timeouts = analysis.get("load_timeouts") or {}
+    if timeouts.get("A") or timeouts.get("B"):
+        lines += ["", f"**GuideLLM timed out** {timeouts.get('A', 0)} times in the launches of side A and "
+                      f"{timeouts.get('B', 0)} times in those of side B, twins included. Each such launch ran again "
+                      f"from a new start, or failed."]
+        if not (timeouts.get("A") and timeouts.get("B")):
+            lines[-1] += (f" Only side {'A' if timeouts.get('A') else 'B'} timed out: a load that stalls on one side "
+                          f"only is a difference the verdicts above do not show.")
     if not power.get("both_twins"):
         lines += ["", "Note: without a twin for both sides no case can get a verdict."]
     elif not power.get("reachable"):
@@ -122,8 +130,18 @@ def markdown(results: Mapping) -> str:
     if retried:
         lines += ["", "Launches whose side was started again after vLLM's start-up memory check failed "
                   "(timed from the last start):"]
-        lines += [f"- launch {r['index']} ({r['side']}): started {r['start_retries'] + 1} times, "
+        lines += [f"- launch {r['index']} ({r['side']}): started {r.get('starts')} times in all, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
+    timed_out = [r for r in launches if r.get("load_timeouts")]
+    if timed_out:
+        lines += ["", "Launches whose GuideLLM timed out (after a time-out the side was taken down and the launch ran "
+                  "again from a new start, timed from that start, with the same requests; every figure of such a "
+                  "launch comes from that second try, and the first try's files are its *.try-1.* files):"]
+        lines += [f"- launch {r['index']} ({r['side']}): timed out {r['load_timeouts']} "
+                  f"time{'s' if r['load_timeouts'] > 1 else ''}, "
+                  + ("ran again, then " if r.get("load_retries") else "did not run again, then ")
+                  + ("finished" if r.get("status") == "ok" else (r.get("error_code") or "failed"))
+                  for r in timed_out]
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]
@@ -138,6 +156,7 @@ def markdown(results: Mapping) -> str:
         lines += ["", "**The live server was not brought back.** " + "; ".join(
             e for e in run.get("errors") or [] if "live server" in e)]
     if run.get("server_found_down"):
-        lines += ["", f"**The live server had stopped by itself** before the run came to take it away (its state "
-                      f"then: {run['server_found_down']}). The run left it as it was and did not start it again."]
+        lines += ["", f"**The live server had stopped by itself** during the image pulls, before the run would have "
+                      f"stopped it (its state then: {run['server_found_down']}). The run left it as it was and did not "
+                      f"start it again."]
     return "\n".join(lines) + "\n"

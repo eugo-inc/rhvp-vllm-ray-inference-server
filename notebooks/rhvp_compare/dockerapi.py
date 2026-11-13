@@ -261,9 +261,12 @@ class DockerBackend:
         self._server_stopped = False
         self._restored = False
         self._stop_requested = False
-        #: The server container's status when prepare() came to stop it, when it was running at the first read but
-        #: not any more ("exited", or "gone" once removed); the runner records it in run.server_found_down.
+        #: The server container's status at prepare()'s second read, after the pulls, when it was running at the
+        #: first read but not any more ("exited", or "gone" once removed), also in a run stopped during the pulls; the
+        #: runner records it in run.server_found_down.
         self.server_found_down: str | None = None
+        #: What prepare() could not do and did not need to; the runner keeps each as a note of the run.
+        self.notes: list[str] = []
         self.log_timeout_s, self.stop_grace_s = 300.0, 30
 
     restore_before_teardown = False  # no scheduler: the server would take the GPU from the side still on it
@@ -345,12 +348,21 @@ class DockerBackend:
             llm.write_text(plans.llm_yaml(plan), encoding="utf-8")
         # The live server stops last. The pulls above can take minutes and cannot be interrupted. A stop that lands
         # during them (SIGTERM or Ctrl-C) only sets flags, so it is checked here: the server is then left running,
-        # and a SIGKILL after the stop timeout cannot catch it half stopped. Its state is read again just before. A
-        # server that stopped by itself during the pulls is left as it is, and recorded (server_found_down).
-        if state is None or self._stop_requested:
+        # and a SIGKILL after the stop timeout cannot catch it half stopped. Its state is read again just before,
+        # also after such a stop. A server that stopped by itself during the pulls is left as it is, and recorded
+        # (server_found_down), whether or not a stop came too.
+        if state is None:
             return
         was_running = bool(state.get("Running"))
-        state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+        try:
+            state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+        except Exception as error:
+            if not self._stop_requested:
+                raise  # no stop: the run fails here (exit 3), before it has changed anything
+            # A stop came during the pulls: the server is left as it is either way, so a state that cannot be read
+            # only goes unrecorded, and the run ends as stopped (partial), not failed.
+            self.notes.append(f"the live server's state was not read again after the stop: {type(error).__name__}")
+            return
         if state.get("Running") and not self._stop_requested:
             self._server_stopped = True  # set first: a stop that fails half-way is still undone
             self.docker.stop(self.server_container, grace_s=self.stop_grace_s)

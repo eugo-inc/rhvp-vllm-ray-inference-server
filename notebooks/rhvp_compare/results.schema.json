@@ -1037,7 +1037,10 @@
         "levels",
         "values",
         "artifacts",
-        "start_retries"
+        "start_retries",
+        "starts",
+        "load_timeouts",
+        "load_retries"
       ],
       "properties": {
         "index": {
@@ -1176,6 +1179,22 @@
             "server_log_attempt_1": {
               "type": "string",
               "description": "The server log of the start that stopped at vLLM's start-up memory check, when the side was started again."
+            },
+            "guidellm_try_1": {
+              "type": "string",
+              "description": "GuideLLM's log of the launch's first try, whose GuideLLM timed out. Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
+            },
+            "server_log_try_1": {
+              "type": "string",
+              "description": "The server log of that first try, taken down before the launch ran again."
+            },
+            "load_report_try_1": {
+              "type": "string",
+              "description": "A GuideLLM report that the timed-out GuideLLM of that first try left, if it left one. Not read. A report left in the folder by an earlier attempt of the run is removed before each load, so this is always the try's own."
+            },
+            "server_log_attempt_1_try_1": {
+              "type": "string",
+              "description": "The server log of a start of that first try that stopped at vLLM's start-up memory check."
             }
           }
         },
@@ -1188,7 +1207,7 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started again in this launch after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1: a second such failure fails the launch (SIDE_FAILED). The start-up figures are timed from the last start."
+          "description": "How many times the side was started again in this launch after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of the side: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts the side anew, with its own retry, so the count can be 2. The start-up figures are timed from the last start."
         },
         "values": {
           "type": "object",
@@ -1197,6 +1216,23 @@
             "type": "number",
             "minimum": 0
           }
+        },
+        "starts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the side was started in this launch: 1, plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count."
+        },
+        "load_timeouts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "How many times GuideLLM timed out in this launch. After the first time-out the side is taken down and the launch runs once more from a new start (runner.LOAD_RETRIES), with the same requests; a second time-out fails the launch (LOAD_FAILED). Counted against the side in analysis.load_timeouts, whether or not the launch then finished."
+        },
+        "load_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How many times the load ran again after a GuideLLM time-out: set only once the second GuideLLM run has begun, so a launch stopped or failed before that reads 0 here while load_timeouts reads 1. Every figure of a launch whose load ran again comes from that second try, timed from the new start; the first try's files are the *_try_1 artifacts."
         }
       },
       "description": "One launch: one start of one server, as measured."
@@ -1231,7 +1267,8 @@
         "lost",
         "outcome",
         "reason",
-        "verdict"
+        "verdict",
+        "load_timeouts"
       ],
       "properties": {
         "case": {
@@ -1519,6 +1556,24 @@
             "NO VERDICT"
           ],
           "description": "The display word."
+        },
+        "load_timeouts": {
+          "type": "object",
+          "required": [
+            "A",
+            "B"
+          ],
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "Of the case's paired rounds, how many had a GuideLLM time-out in that side's own launch (its twin's are in analysis.load_timeouts). A launch whose load timed out once ran again from a new start, so its figures come from that start."
         }
       }
     },
@@ -1532,7 +1587,8 @@
         "refusals",
         "notes",
         "outcomes",
-        "nodes"
+        "nodes",
+        "load_timeouts"
       ],
       "properties": {
         "tool": {
@@ -1633,6 +1689,24 @@
           "items": {
             "type": "string"
           }
+        },
+        "load_timeouts": {
+          "type": "object",
+          "required": [
+            "A",
+            "B"
+          ],
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "GuideLLM time-outs over every measured launch of each side, its twin's included, whether the launch then finished or not. A server that hangs under load on one side only shows here, and the notebook and results.md say so next to the verdicts."
         }
       }
     },

@@ -260,8 +260,10 @@ def _own_namespace() -> str | None:
 
 
 def side_deadline(plan: Mapping, launch: Mapping) -> int:
-    """A side pod's own time limit: the start, GuideLLM twice (it is retried once on a hang), the energy settle time
-    and ten minutes more. The runner takes every side down itself; this only bounds a side whose runner was killed."""
+    """A side pod's own time limit: the start, twice GuideLLM's time limit, the energy settle time and ten minutes
+    more. A pod serves one load: after a GuideLLM time-out the runner takes it down and the launch's second try starts
+    a new pod, so the second load time is slack. The runner takes every side down itself; this only bounds a side
+    whose runner was killed."""
     server, load = plan["server"], plan["load"]
     start = server["warmup_timeout_s"] if launch["kind"] == "warmup" else server["ready_timeout_s"]
     return int(start + 2 * load["timeout_s"] + plan["energy"]["settle_s"] + 600)
