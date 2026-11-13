@@ -734,8 +734,43 @@ def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypat
     idle = _docker_backend(FakeDocker(server_state={"Running": False}), RHVP_COMPARE_SERVER_CONTAINER="live")
     idle.prepare(_plan())
     assert idle.restore_server() is None  # it was not running: left alone
+    missing = FakeDocker()
     with pytest.raises(runner.RoundError, match="names no container"):
-        _docker_backend(FakeDocker(), RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())
+        _docker_backend(missing, RHVP_COMPARE_SERVER_CONTAINER="missing").prepare(_plan())
+    assert not [c for c in missing.calls if c[0] == "pull"]  # a wrong name fails before any pull
+
+
+class PullHookDocker(FakeDocker):
+    """A FakeDocker that runs a callback during the first pull, standing in for a signal or a state change that
+    lands while an image downloads."""
+
+    def __init__(self, on_pull, **kwargs):
+        super().__init__(**kwargs)
+        self.on_pull = on_pull
+
+    def pull(self, ref):
+        super().pull(ref)
+        hook, self.on_pull = self.on_pull, None
+        if hook:
+            hook()
+
+
+def test_a_stop_during_the_pulls_leaves_the_server_running():
+    holder = {}
+    docker = PullHookDocker(lambda: holder["backend"].on_stop(), server_state={"Running": True})
+    backend = holder["backend"] = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    assert ("stop", "live") not in docker.calls and docker.server_state["Running"]
+    assert backend.restore_server() is None  # nothing was stopped, so nothing to bring back
+
+
+def test_the_server_state_is_read_again_just_before_the_stop():
+    docker = PullHookDocker(lambda: setattr(docker, "server_state", {"Running": False, "Status": "exited"}),
+                            server_state={"Running": True})
+    backend = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
+    backend.prepare(_plan())
+    assert ("stop", "live") not in docker.calls  # it had stopped by itself during the pulls: left alone
+    assert backend.restore_server() is None
 
 
 def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):

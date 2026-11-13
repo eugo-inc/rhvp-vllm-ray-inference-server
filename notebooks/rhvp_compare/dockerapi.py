@@ -257,6 +257,7 @@ class DockerBackend:
         self._gpu_facts: dict | None = None
         self._server_stopped = False
         self._restored = False
+        self._stop_requested = False
         self.log_timeout_s, self.stop_grace_s = 300.0, 30
 
     restore_before_teardown = False  # no scheduler: the server would take the GPU from the side still on it
@@ -279,7 +280,8 @@ class DockerBackend:
                                        f"nothing; start it again once that one has ended.")
 
     def on_stop(self) -> None:
-        """A stop has begun: shorter waits from now on (flags only)."""
+        """A stop has begun: shorter waits from now on, and prepare() no longer stops the server (flags only)."""
+        self._stop_requested = True
         self.log_timeout_s, self.stop_grace_s = 20.0, 10
 
     def restore_server(self) -> bool | None:
@@ -332,11 +334,15 @@ class DockerBackend:
 
             llm.parent.mkdir(parents=True, exist_ok=True)
             llm.write_text(plans.llm_yaml(plan), encoding="utf-8")
-        # The live server stops last. The pulls above can take minutes and cannot be interrupted; a stop (or a
-        # SIGKILL after the stop timeout) that lands during them then leaves the server running, not down.
-        if state is not None and state.get("Running"):
+        # The live server stops last. The pulls above can take minutes and cannot be interrupted. A stop that lands
+        # during them (SIGTERM or Ctrl-C) only sets flags, so it is checked here: the server is then left running,
+        # and a SIGKILL after the stop timeout cannot catch it half stopped. Its state is read again just before.
+        if state is None or self._stop_requested:
+            return
+        state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+        if state.get("Running") and not self._stop_requested:
             self._server_stopped = True  # set first: a stop that fails half-way is still undone
-            self.docker.stop(self.server_container, grace_s=30)
+            self.docker.stop(self.server_container, grace_s=self.stop_grace_s)
 
     def describe(self) -> dict:
         info = self.docker.info()
