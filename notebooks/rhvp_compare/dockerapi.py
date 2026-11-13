@@ -7,12 +7,12 @@ docker client is needed. Every side joins the runner's user-defined network, so 
 process of the runner) reach it by its container name.
 
 Like OpenShift, each side runs as an arbitrary UID in group 0 by default (RHVP_COMPARE_USER), with its caches on a
-fresh tmpfs at /cache and the model weights on a named volume at /models, kept between rounds. GPU power comes from
+fresh tmpfs at /cache and the model weights on a named volume at /models, kept between launches. GPU power comes from
 nvidia-smi in a small container that sees the same GPU (DCGM is not there).
 
 One run at a time: the runner container carries the label rhvp-compare.runner (compare-local.sh sets it); a run
 refuses to start while an older runner container is running. A server container that normally holds the GPU can be
-named in RHVP_COMPARE_SERVER_CONTAINER: the runner stops it before the first round, once both images are pulled, and
+named in RHVP_COMPARE_SERVER_CONTAINER: the runner stops it before the first launch, once both images are pulled, and
 starts it again when the run ends, however it ends (the docker counterpart of scaling the pattern's server on
 OpenShift). A stop during the pulls leaves it running. One that was running when the run began but has stopped by
 itself by then (exited, or removed) is left as it is; the run records that (run.server_found_down) and does not start
@@ -368,7 +368,7 @@ class DockerBackend:
         for cid in self.docker.by_label(self.run_id) if self.run_id else []:
             self.docker.remove(cid)
 
-    # ---- one round ----
+    # ---- one launch ----
 
     def _name(self, what: str) -> str:
         return f"rhvp-cmp-{self.run_id[-8:]}-{what}".lower()
@@ -393,8 +393,8 @@ class DockerBackend:
                                         f"nvidia-smi could not read the GPU (exit {code})", runner.GPU_NOT_FREE)
             time.sleep(10)
 
-    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
-        name = self._name(f"r{round_['index']:02d}-{round_['side'].lower()}")
+    def start(self, plan: Mapping, launch: Mapping, side: Mapping, spec: Mapping) -> dict:
+        name = self._name(f"{launch['index']:02d}-{launch['side'].replace('~', '-').lower()}")  # a twin: a-same
         env = dict(spec["env"])
         if self.hf_token:
             env["HF_TOKEN"] = self.hf_token
@@ -431,7 +431,7 @@ class DockerBackend:
             return "the server was killed: out of memory"
         return f"the server exited with code {state.get('ExitCode')}" if state else "the server container is gone"
 
-    def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path:
+    def run_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> Path:
         return guidellm.run(plan, target, out_dir)
 
     def sampler(self, plan: Mapping, handle: Mapping):

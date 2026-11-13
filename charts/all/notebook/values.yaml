@@ -65,11 +65,11 @@ compare:
   # then ends as partial, code RUN_TIMEOUT).
   activeDeadlineSeconds: 172800
   # How long the runner has to stop cleanly after SIGTERM (a deleted Job, or the
-  # time limit above): it cuts the current round short, deletes its side pod,
+  # time limit above): it cuts the current launch short, deletes its side pod,
   # scales the pattern's server back and saves the results as partial.
   terminationGracePeriodSeconds: 300
   # The pattern's own server, in notebook.serverNamespace. The runner scales it
-  # to 0 before the first round and back to serverReplicas when the run ends,
+  # to 0 before the first launch and back to serverReplicas when the run ends,
   # however it ends. Empty serverDeployment leaves the server alone (then free
   # the GPU yourself).
   serverDeployment: ray-serve-llm
@@ -103,7 +103,7 @@ compare:
     llmConfigMap: ray-serve-llm-config
     hfSecretName: huggingface-secret
     hfSecretKey: hftoken
-    # A side that has no node after this long fails its round, with the
+    # A side that has no node after this long fails its launch, with the
     # scheduler's message.
     pendingSeconds: 900
 

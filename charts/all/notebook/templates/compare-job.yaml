@@ -152,15 +152,15 @@ spec:
 {{- if include "notebook.compareEnabled" . }}
 {{- $hash := include "notebook.compareHash" . }}
 # The image comparison's runner: one Job per pod template (the name carries its
-# hash, and the template the config's). It scales the pattern's server to 0, runs
-# the rounds one at a time, each side as a pod in the server namespace, with
-# GuideLLM as its own child process, writes the results to the PVC
-# image-compare-results and a short status to ConfigMap compare-<run id>, and
-# scales the server back when it ends. A run whose results.json is complete is not
+# hash, and the template the config's). It scales the pattern's server to 0,
+# starts the sides one at a time (each side and its twin once per round), each as
+# a pod in the server namespace, with GuideLLM as its own child process, writes
+# the results to the PVC image-compare-results and a short status to ConfigMap
+# compare-<run id>, and scales the server back when it ends. A run whose results.json is complete is not
 # run again, so a Job that Argo CD creates a second time exits at once; a runner
 # that finds an older runner pod still going refuses to start (exit 5) and changes
 # nothing. Exit 1 (the Job reads Failed) means a partial run, 3 a run that failed
-# outside a round, 4 a server that could not be scaled back; the termination
+# outside a launch, 4 a server that could not be scaled back; the termination
 # message and the log's last lines summarise it.
 #
 # The container is the pinned GuideLLM image; an init container copies the

@@ -492,7 +492,7 @@ def test_compare_config_is_global_compare_plus_the_model(compare):
     from rhvp_compare import plan as plans
 
     plan = plans.build(config, "openshift")
-    assert plan["floor"]["reachable"] and plan["energy"]["source"] == "dcgm"
+    assert plan["power"]["reachable"] and plan["energy"]["source"] == "dcgm"
     for side in plan["sides"]:
         assert side["image"].startswith("docker.io/vllm/vllm-openai:v") and "@sha256:" in side["image"]
 

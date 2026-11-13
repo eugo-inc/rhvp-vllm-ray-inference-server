@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compare two inference-server images on one machine with docker, no cluster: the same runner, rounds, GuideLLM
+# Compare two inference-server images on one machine with docker, no cluster: the same runner, launches, GuideLLM
 # load and analysis as the OpenShift Job (see README, "Compare two images"), with GPU power from nvidia-smi instead
 # of DCGM. Needs docker and, for GPU sides, one NVIDIA GPU with the NVIDIA Container Toolkit; nothing else on the
 # host.
@@ -14,14 +14,14 @@
 #   1. Creates the docker network $NETWORK if it is missing.
 #   2. Runs the runner (notebooks/rhvp_compare, mounted read-only) in a container of the GuideLLM image on that
 #      network, with the docker socket mounted. The runner starts each side and the nvidia-smi sampler as sibling
-#      containers on the same network, one round at a time, and runs GuideLLM as its own child process, as the
+#      containers on the same network, one launch at a time, and runs GuideLLM as its own child process, as the
 #      OpenShift Job does.
-#   3. Prints where results.json and results.md are. The exit code is the runner's: 0 when every round finished,
-#      1 for a partial run, 2 for a config that cannot run, 3 for a run that failed outside a round, 4 when the
+#   3. Prints where results.json and results.md are. The exit code is the runner's: 0 when every launch finished,
+#      1 for a partial run, 2 for a config that cannot run, 3 for a run that failed outside a launch, 4 when the
 #      server container (SERVER_CONTAINER) could not be started again, 5 when another comparison was running.
 #
 # One comparison at a time: the runner container carries the label rhvp-compare.runner, and a run refuses to start
-# while an older one is running. Stopping the runner (docker stop, or Ctrl-C on this script) cuts the current round
+# while an older one is running. Stopping the runner (docker stop, or Ctrl-C on this script) cuts the current launch
 # short, takes its side down and saves the results as partial, within STOP_TIMEOUT.
 #
 # Each side runs as an arbitrary UID in group 0 (as on OpenShift), with its caches on a fresh tmpfs and the model

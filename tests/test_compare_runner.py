@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-"""rhvp_compare end to end without a platform: the plan, the round loop with a fake backend and a fake server, the
+"""rhvp_compare end to end without a platform: the plan, the launch loop with a fake backend and a fake server, the
 results file against results.schema.json, the analysis, the markdown report and the command line.
 
-The fake backend hands out one in-process server per round (httpx.MockTransport) and a GuideLLM report made from the
-fixture, with side B's inter-token latency 20 % higher and its throughput lower, and a constant 100 W of GPU power.
+The fake backend hands out one in-process server per launch (httpx.MockTransport) and a GuideLLM report made from
+the fixture. Every launch draws its own noise of about 1 % (seeded by its index), so a side and its twin land a
+little apart, as two launches of one image do; side B's inter-token latency is 20 % higher and its throughput 20 %
+lower. GPU power is a constant 100 W.
 
 Run with: python -m pytest -q tests/test_compare_runner.py
 """
 
 import json
 import os
+import random
 import re
 import signal
 import sys
@@ -29,13 +32,16 @@ from rhvp_compare import (  # noqa: E402
 FIXTURES = ROOT / "tests" / "fixtures"
 SCHEMA = json.loads((ROOT / "notebooks" / "rhvp_compare" / "results.schema.json").read_text())
 REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1.json").read_text())
+#: The launches of side B in the default plan (8 rounds, warm-up first), by round: rounds 1 and 2 are launches 5
+#: and 8.
+B_LAUNCHES = (5, 8, 11, 18, 20, 25, 30, 31)
 
 
 def config(**extra) -> dict:
     out = {"runName": "fake-run", "model": {"id": "m", "source": "org/m", "revision": ""},
            "sides": [{"name": "old", "image": "registry.example/server:1"},
                      {"name": "new", "image": "registry.example/server:2"}],
-           "rounds": {"pairs": 10, "warmup": True, "aaPairs": 2},
+           "rounds": {"count": 8, "warmup": True, "twins": "both"},
            "load": {"concurrencies": [1, 4], "secondsPerLevel": 8}}
     out.update(extra)
     return out
@@ -78,17 +84,17 @@ class FakeSampler:
 class FakeBackend:
     platform = "docker"
 
-    def __init__(self, fail_round: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
-                 load_error: bool = False, term_in_round: int | None = None, errored: dict | None = None,
+    def __init__(self, fail_launch: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
+                 load_error: bool = False, term_in_launch: int | None = None, errored: dict | None = None,
                  nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None, dies: dict | None = None,
                  dies_log: str = PROFILING_LOG):
-        self.fail_round, self.hang_once, self.fail_code = fail_round, hang_once, fail_code
-        self.load_error, self.term_in_round = load_error, term_in_round
-        self.errored = errored or {}  # round index -> the concurrency level where 40 requests fail
-        self.zero = zero or {}  # round index -> the concurrency level whose requests finish with no output token
-        self.dies, self.dies_log = dies or {}, dies_log  # round index -> how many of its starts exit, with that log
+        self.fail_launch, self.hang_once, self.fail_code = fail_launch, hang_once, fail_code
+        self.load_error, self.term_in_launch = load_error, term_in_launch
+        self.errored = errored or {}  # launch index -> the concurrency level where 40 requests fail
+        self.zero = zero or {}  # launch index -> the concurrency level whose requests finish with no output token
+        self.dies, self.dies_log = dies or {}, dies_log  # launch index -> how many of its starts exit, with that log
         self.attempts: dict[int, int] = {}
-        self.nodes = nodes  # the node of round i is nodes[i % len(nodes)]
+        self.nodes = nodes  # the node of launch i is nodes[i % len(nodes)]
         self.started, self.stopped, self.prepared, self.cleaned = [], [], False, False
         self.events: list = []
 
@@ -102,12 +108,12 @@ class FakeBackend:
     def gpu_free(self, plan, side):
         pass
 
-    def start(self, plan, round_, side, spec):
-        if round_["index"] == self.fail_round:
+    def start(self, plan, launch, side, spec):
+        if launch["index"] == self.fail_launch:
             raise runner.RoundError("the side never got a node", self.fail_code)
-        self.started.append((round_["index"], round_["side"]))
-        tries = self.attempts[round_["index"]] = self.attempts.get(round_["index"], 0) + 1
-        return {"round": round_, "side": side["key"], "dies": tries <= self.dies.get(round_["index"], 0)}
+        self.started.append((launch["index"], launch["side"]))
+        tries = self.attempts[launch["index"]] = self.attempts.get(launch["index"], 0) + 1
+        return {"launch": launch, "side": side["key"], "dies": tries <= self.dies.get(launch["index"], 0)}
 
     def endpoint(self, handle, deadline):
         return "http://dead.test:8000" if handle.get("dies") else "http://side.test:8000"
@@ -115,27 +121,28 @@ class FakeBackend:
     def alive(self, handle):
         return "the server exited with code 1" if handle.get("dies") else None
 
-    def run_load(self, plan, round_, target, out_dir):
-        if round_["index"] == self.term_in_round:  # as if the Job were deleted mid-load
+    def run_load(self, plan, launch, target, out_dir):
+        if launch["index"] == self.term_in_launch:  # as if the Job were deleted mid-load
             os.kill(os.getpid(), signal.SIGTERM)
             time.sleep(30)
-            raise AssertionError("SIGTERM did not cut the round short")
+            raise AssertionError("SIGTERM did not cut the launch short")
         if self.load_error:
             raise guidellm.LoadError("GuideLLM exited with code 2; see guidellm.log")
         if self.hang_once:
             self.hang_once = False
             raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped", timed_out=True)
         data = json.loads(json.dumps(REPORT))
-        slower = 1.2 if round_["side"] == "B" and round_["kind"] == "scored" else 1.0
-        wobble = 1.0 + 0.001 * round_["index"]
+        slower = 1.2 if launch["of"] == "B" and launch["kind"] == "scored" else 1.0
+        rng = random.Random(launch["index"])  # every launch its own noise: a twin lands near its side, not on it
+        itl, tps, ttft = (1.0 + rng.gauss(0.0, 0.01) for _ in range(3))
         for bench in data["benchmarks"]:
             metrics = bench["metrics"]
-            if bench["config"]["strategy"]["streams"] == self.errored.get(round_["index"]):
+            if bench["config"]["strategy"]["streams"] == self.errored.get(launch["index"]):
                 metrics["request_totals"]["errored"] = 40
-            metrics["inter_token_latency_ms"]["successful"]["median"] *= slower * wobble
-            metrics["output_tokens_per_second"]["total"]["mean"] /= slower * wobble
-            metrics["time_to_first_token_ms"]["successful"]["median"] *= wobble
-            if bench["config"]["strategy"]["streams"] == self.zero.get(round_["index"]):
+            metrics["inter_token_latency_ms"]["successful"]["median"] *= slower * itl
+            metrics["output_tokens_per_second"]["total"]["mean"] /= slower * tps
+            metrics["time_to_first_token_ms"]["successful"]["median"] *= ttft
+            if bench["config"]["strategy"]["streams"] == self.zero.get(launch["index"]):
                 metrics["output_tokens_per_second"]["total"]["mean"] = 0.0
         path = out_dir / "guidellm.json"
         path.write_text(json.dumps(data))
@@ -148,13 +155,13 @@ class FakeBackend:
         return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n" + (self.dies_log if handle.get("dies") else "")
 
     def facts(self, handle):
-        node = self.nodes[handle["round"]["index"] % len(self.nodes)]
+        node = self.nodes[handle["launch"]["index"] % len(self.nodes)]
         return {"node_name": node, "image_digest": f"registry.example/server@sha256:{handle['side'] * 64}",
                 "gpu": {"product": "Test GPU", "driver": "1", "memory_mib": 1, "count": 1, "source": "fake"}}
 
     def stop(self, handle):
-        self.stopped.append(handle["round"]["index"])
-        self.events.append(("stop", handle["round"]["index"]))
+        self.stopped.append(handle["launch"]["index"])
+        self.events.append(("stop", handle["launch"]["index"]))
 
     def cleanup(self):
         self.cleaned = True
@@ -210,6 +217,9 @@ class PublishingBackend(FakeBackend):
         self.published.append((run_id, json.loads(status_text), result_text))
 
 
+ONE_ROUND = {"count": 1, "warmup": False}
+
+
 def run(tmp_path, backend=None, model="m", clock=None, deadline_s=None, **extra) -> tuple[dict, FakeBackend,
                                                                                         runner.Runner]:
     backend = backend or FakeBackend()
@@ -220,12 +230,26 @@ def run(tmp_path, backend=None, model="m", clock=None, deadline_s=None, **extra)
     return the_runner.run(), backend, the_runner
 
 
-def test_round_order_is_abba_with_warmup_and_aa_last():
-    order = plans.round_order(4, True, 1)
-    assert [(r["side"], r["kind"]) for r in order] == [
-        ("A", "warmup"), ("B", "warmup"), ("A", "scored"), ("B", "scored"), ("B", "scored"), ("A", "scored"),
-        ("A", "scored"), ("B", "scored"), ("B", "scored"), ("A", "scored"), ("A", "aa"), ("A", "aa")]
-    assert [r["index"] for r in order] == list(range(1, 13))
+def rows_of(results) -> dict:
+    return {row["case"]: row for row in results["analysis"]["comparisons"]}
+
+
+def test_launch_order_rotates_and_reverses_with_the_warmup_first():
+    plan = plans.build(config(), "docker")
+    launches = plan["launches"]
+    assert len(launches) == 2 + 8 * 4 == 34 and [x["index"] for x in launches] == list(range(1, 35))
+    assert [(x["side"], x["kind"], x["round"]) for x in launches[:2]] == [("A", "warmup", None), ("B", "warmup", None)]
+    by_round = {r: [x["side"] for x in launches if x["round"] == r] for r in range(1, 9)}
+    assert by_round[1] == ["A", "A~same", "B", "B~same"]
+    assert by_round[2] == ["A~same", "B", "B~same", "A"]
+    assert by_round[5] == ["B~same", "B", "A~same", "A"]  # the second cycle runs reversed
+    assert by_round[8] == ["B", "A~same", "A", "B~same"]
+    assert tuple(x["index"] for x in launches if x["side"] == "B" and x["kind"] == "scored") == B_LAUNCHES
+    assert all(x["of"] == x["side"][0] for x in launches)  # a twin launches its own side
+    assert plan["balance"]["balanced"] and plan["balance"]["step"] == 8
+    assert plan["balance"]["pairs"]["B vs A"] == {"first_ran_first": 4, "second_ran_first": 4,
+                                                  "position_difference_sum": 0}
+    assert not plans.build(config(rounds={"count": 12}), "docker")["balance"]["balanced"]
 
 
 def test_plan_rejects_bad_configs():
@@ -237,39 +261,61 @@ def test_plan_rejects_bad_configs():
         plans.build({**config(), "sides": [config()["sides"][0]] * 2})
     with pytest.raises(plans.PlanError, match="model.source"):
         plans.build({**config(), "model": {"id": "m"}})
-    with pytest.raises(plans.PlanError, match="analysis.correction"):
-        plans.build({**config(), "analysis": {"correction": "sidak"}})
+    with pytest.raises(plans.PlanError, match="rounds.twins"):
+        plans.build(config(rounds={"count": 8, "twins": "C"}))
+    with pytest.raises(plans.PlanError, match="rounds.count"):
+        plans.build(config(rounds={"count": 0}))
+    # The keys of the earlier rule say what replaced them.
+    for section, key in (("rounds", "pairs"), ("rounds", "aaPairs"), ("analysis", "tieBand"),
+                         ("analysis", "correction"), ("analysis", "test"), ("analysis", "minPairs"),
+                         ("analysis", "ciLevel")):
+        with pytest.raises(plans.PlanError, match=rf"{section}\.{key} is no longer read"):
+            plans.build(config(**{section: {key: 1}}))
 
 
 def test_plan_declares_everything_before_the_run():
     plan = plans.build(config(), "openshift")
     assert plan["energy"]["source"] == "dcgm" and plans.build(config(), "docker")["energy"]["source"] == "nvidia-smi"
-    assert [m["id"] for m in plan["metrics"]][:3] == ["startup.ready_s", "startup.first_answer_s",
-                                                       "c1.ttft_ms_median"]
-    # Four primary metrics share the correction: time to first answer, and TTFT, throughput and tokens per joule
-    # at the highest level; the other six are secondary.
-    assert plan["analysis"]["primary"] == ["startup.first_answer_s", "c4.ttft_ms_median", "c4.output_tokens_per_s",
-                                           "c4.tokens_per_joule"]
-    assert [m["id"] for m in plan["metrics"] if m["role"] == "primary"] == plan["analysis"]["primary"]
-    assert sum(m["role"] == "secondary" for m in plan["metrics"]) == 6
-    assert plan["floor"] == {"family_size": 4, "min_adjusted_p": pytest.approx(4 * 2 ** -9), "reachable": True,
-                             "pairs_needed": 8}
-    assert plans.build(config(), "docker")["analysis"]["primary"][-1] == "c4.tokens_per_joule"
+    assert plan["energy"]["label"] == "GPU-only power" and plan["energy"]["scope"] == "gpu"
+    assert [c["id"] for c in plan["cases"]][:3] == ["startup/ready_s", "startup/first_answer_s", "c1/ttft_ms_median"]
+    # Four primary cases share the correction: time to first answer, and TTFT, throughput and tokens per joule at
+    # the highest level; the other six are secondary.
+    assert plan["analysis"]["primary"] == ["startup/first_answer_s", "c4/ttft_ms_median", "c4/output_tokens_per_s",
+                                           "c4/tokens_per_joule[gpu]"]
+    assert [c["id"] for c in plan["cases"] if c["role"] == "primary"] == plan["analysis"]["primary"]
+    assert sum(c["role"] == "secondary" for c in plan["cases"]) == 6
+    kinds = {c["id"]: c["kind"] for c in plan["cases"]}
+    assert (kinds["c4/ttft_ms_median"], kinds["c4/output_tokens_per_s"], kinds["c4/tokens_per_joule[gpu]"]) == (
+        "time", "rate", "efficiency")
+    groups = {c["id"]: c["group"] for c in plan["cases"]}
+    assert groups["c4/ttft_ms_median"] == "primary:ttft_ms_median"
+    assert groups["c1/ttft_ms_median"] == "secondary:ttft_ms_median"
+    assert plan["power"] == {"family_size": 4, "min_rounds": 8, "reachable": True, "both_twins": True,
+                             "must_agree": 8, "max_primary_cases": 6,
+                             "plain": "corrected for testing 4 cases at once"}
+    assert plan["analysis"]["rule_fields"]["bar"] == "sum_of_both" and plan["analysis"]["ratio"] == "B/A"
     mock = plans.build(config(sides=[{"name": "a", "image": "x:1", "preset": "guidellm-mock", "gpu": False},
                                      {"name": "b", "image": "x:2", "preset": "guidellm-mock", "gpu": False}]))
-    assert mock["analysis"]["primary"] == ["startup.first_answer_s", "c4.ttft_ms_median", "c4.output_tokens_per_s"]
+    assert mock["analysis"]["primary"] == ["startup/first_answer_s", "c4/ttft_ms_median", "c4/output_tokens_per_s"]
     assert plan["run_id"] == f"fake-run-{plans.digest(config())}"
     assert plans.build(config(), "docker")["run_id"] != plans.build(config(runName="other"), "docker")["run_id"]
-    few = plans.build(config(rounds={"pairs": 3}), "docker")
-    assert not few["floor"]["reachable"]
+    few = plans.build(config(rounds={"count": 7}), "docker")
+    assert not few["power"]["reachable"] and few["power"]["must_agree"] is None
+    one_twin = plans.build(config(rounds={"count": 8, "twins": "A"}), "docker")
+    assert [e["key"] for e in one_twin["lineup"]] == ["A", "A~same", "B"] and len(one_twin["launches"]) == 26
+    assert not one_twin["power"]["reachable"] and not one_twin["power"]["both_twins"]
+    assert any("without a twin for both sides" in line for line in runner.plan_lines(one_twin))
+    assert any("12 rounds do not balance" in line
+               for line in runner.plan_lines(plans.build(config(rounds={"count": 12}), "docker")))
 
 
 def test_plan_takes_a_declared_primary_list():
-    plan = plans.build(config(analysis={"primary": ["c1.itl_ms_median"]}), "docker")
-    assert plan["floor"]["family_size"] == 1 and plan["analysis"]["primary"] == ["c1.itl_ms_median"]
-    with pytest.raises(plans.PlanError, match="does not have: c64.itl_ms_median"):
-        plans.build(config(analysis={"primary": ["c64.itl_ms_median"]}), "docker")
-    for bad in ([], ["c1.itl_ms_median", "c1.itl_ms_median"], "c1.itl_ms_median", [{"id": "x"}]):
+    plan = plans.build(config(analysis={"primary": ["c1/itl_ms_median"]}), "docker")
+    assert plan["power"]["family_size"] == 1 and plan["analysis"]["primary"] == ["c1/itl_ms_median"]
+    assert plan["power"]["min_rounds"] == 6
+    with pytest.raises(plans.PlanError, match="does not have: c64/itl_ms_median"):
+        plans.build(config(analysis={"primary": ["c64/itl_ms_median"]}), "docker")
+    for bad in ([], ["c1/itl_ms_median", "c1/itl_ms_median"], "c1/itl_ms_median", [{"id": "x"}]):
         with pytest.raises(plans.PlanError, match="analysis.primary"):
             plans.build(config(analysis={"primary": bad}), "docker")
 
@@ -281,126 +327,153 @@ def test_a_full_run(tmp_path):
     assert on_disk == json.loads(json.dumps(results))
     assert results["run"]["status"] == "complete" and results["run"]["error_code"] is None
     assert backend.prepared and backend.cleaned
-    assert all(r["error_code"] is None for r in results["rounds"])
-    assert len(results["rounds"]) == 2 + 20 + 4 and all(r["status"] == "ok" for r in results["rounds"])
-    assert sorted(backend.stopped) == list(range(1, 27))
-    warm = results["rounds"][0]
-    assert warm["kind"] == "warmup" and warm["levels"] == [] and set(warm["metrics"]) == {
-        "startup.ready_s", "startup.first_answer_s"}
-    scored = results["rounds"][2]
+    launches = results["launches"]
+    assert len(launches) == 34 and all(x["status"] == "ok" and x["error_code"] is None for x in launches)
+    assert sorted(backend.stopped) == list(range(1, 35))
+    warm = launches[0]
+    assert warm["kind"] == "warmup" and warm["round"] is None and warm["levels"] == []
+    assert set(warm["values"]) == {"startup/ready_s", "startup/first_answer_s"}
+    scored, twin = launches[2], launches[3]
+    assert (scored["index"], scored["round"], scored["pos"], scored["side"], scored["of"]) == (3, 1, 1, "A", "A")
+    assert (twin["side"], twin["of"], twin["pos"]) == ("A~same", "A", 2)
     assert scored["server_version"] == {"vllm": "0.0.1-test", "source": "endpoint"}
     assert scored["levels"][0]["energy"]["method"] == "power_mean"
     assert scored["levels"][0]["energy"]["mean_power_w"] == pytest.approx(100.0)
-    assert scored["artifacts"] == {"server_log": "rounds/03-A-scored/server.log",
-                                   "load_report": "rounds/03-A-scored/guidellm.json"}
+    assert scored["artifacts"] == {"server_log": "launches/03-A-scored/server.log",
+                                   "load_report": "launches/03-A-scored/guidellm.json"}
+    assert twin["artifacts"]["server_log"] == "launches/04-A-same-scored/server.log"
     assert (the_runner.dir / scored["artifacts"]["server_log"]).is_file()
+    assert set(scored["values"]) == {c["id"] for c in results["plan"]["cases"]}
+    assert twin["image_digest"].endswith("A" * 64)  # the twin runs its side's image
     prov = results["provenance"]
-    assert prov["sides"]["B"]["image_digest"].endswith("B" * 64) and prov["gpu"]["product"] == "Test GPU"
+    assert set(prov["sides"]) == {"A", "B"} and prov["sides"]["B"]["image_digest"].endswith("B" * 64)
+    assert prov["gpu"]["product"] == "Test GPU"
     assert prov["load_tool"]["version"] == "0.8.1" and prov["seeds"] == {"load": 42, "server": 0}
 
-    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
-    assert rows["c4.output_tokens_per_s"]["role"] == "primary" and rows["c4.output_tokens_per_s"]["verdict"] == "SLOWER"
-    assert rows["c4.output_tokens_per_s"]["p_adjusted"] == pytest.approx(4 * 2 ** -9)  # Holm over the 4 primaries
-    assert rows["c4.tokens_per_joule"]["verdict"] == "LESS_EFFICIENT"
-    assert rows["c4.ttft_ms_median"]["verdict"] == "TIE"
-    # Secondary: the same rule on the uncorrected p-value, which is kept; p_adjusted is null.
-    assert rows["c1.itl_ms_median"]["role"] == "secondary" and rows["c1.itl_ms_median"]["verdict"] == "SLOWER"
-    assert rows["c1.itl_ms_median"]["p_adjusted"] is None and rows["c1.itl_ms_median"]["p_value"] == 2 ** -9
-    assert rows["c1.itl_ms_median"]["median_ratio"] == pytest.approx(1.2, rel=0.01)
-    assert rows["c1.ttft_ms_median"]["verdict"] == "TIE"
-    assert all(row["n_pairs"] == 10 for row in rows.values())
-    outcomes = results["analysis"]["outcomes"]
-    assert outcomes["primary"]["SLOWER"] == 1 and outcomes["primary"]["LESS_EFFICIENT"] == 1
+    analysis = results["analysis"]
+    assert analysis["rule"]["family_size"] == 4 and analysis["rule"]["plain"] == "corrected for testing 4 cases at once"
+    assert analysis["rule"]["min_rounds"] == {"primary": 8, "secondary": 6}
+    rows = rows_of(results)
+    tps = rows["c4/output_tokens_per_s"]
+    assert (tps["role"], tps["outcome"], tps["verdict"], tps["reason"]) == ("primary", "worse", "WORSE", None)
+    # All 8 rounds lean the same way: 2 * 2^-8 uncorrected, and Holm over the 4 primary cases makes it 4 times that.
+    assert tps["p_raw"] == 2 ** -7 and tps["p_raw_fraction"] == [2, 256]
+    assert tps["p_corrected"] == pytest.approx(4 * 2 ** -7)
+    assert tps["ratio"] == pytest.approx(1 / 1.2, rel=0.03) and tps["gap"] > tps["bar"] > 0
+    assert tps["floor"]["source"] == "twins" and tps["floor"]["subject"]["n"] == 8
+    assert rows["c4/tokens_per_joule[gpu]"]["verdict"] == "WORSE"
+    # Secondary: the same rule on the uncorrected p-value; p_corrected is null.
+    itl = rows["c1/itl_ms_median"]
+    assert (itl["role"], itl["verdict"], itl["p_corrected"], itl["p_raw"]) == ("secondary", "SLOWER", None, 2 ** -7)
+    assert itl["ratio"] == pytest.approx(1.2, rel=0.03) and itl["bar"] < 0.05
+    assert rows["c4/ttft_ms_median"]["verdict"] not in ("FASTER", "SLOWER")  # no difference was put in
+    assert all(row["n_rounds"] == 8 and row["lost"] == {"A": 0, "B": 0} for row in rows.values())
+    assert all(sum(row["order_split"]) == row["n_rounds"] for row in rows.values())
+    outcomes = analysis["outcomes"]
+    assert outcomes["primary"]["WORSE"] == 2
     assert sum(outcomes["primary"].values()) == 4  # the time to first answer is real time here: its verdict varies
-    assert sum(results["analysis"]["outcomes"]["secondary"].values()) == 6
-    noise = {row["id"]: row for row in results["analysis"]["noise_floor"]}
-    assert noise["c1.itl_ms_median"]["pairs"] == 2 and noise["c1.itl_ms_median"]["median_abs_change"] < 0.01
+    assert sum(outcomes["secondary"].values()) == 6
+    twins = {(t["side"], t["case"]): t for t in analysis["same_vs_same"]}
+    assert len(twins) == 2 * 10
+    assert twins[("B", "c1/itl_ms_median")]["n"] == 8 and twins[("B", "c1/itl_ms_median")]["floor"] < 0.02
+    assert twins[("A", "c1/itl_ms_median")]["twin"] == "A~same"
+    assert analysis["refusals"] == [] and analysis["nodes"] == ["node-1"]
 
 
-def test_a_failed_round_is_kept_and_the_run_goes_on(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(fail_round=5))
+def test_a_failed_launch_is_kept_and_the_run_goes_on(tmp_path):
+    results, _, _ = run(tmp_path, FakeBackend(fail_launch=5))  # side B in round 1
     jsonschema.validate(results, SCHEMA)
-    failed = [r for r in results["rounds"] if r["status"] != "ok"]
+    failed = [x for x in results["launches"] if x["status"] != "ok"]
     assert len(failed) == 1 and failed[0]["index"] == 5 and failed[0]["error"] == "the side never got a node"
     assert failed[0]["error_code"] == "SIDE_FAILED"
-    assert results["run"]["status"] == "partial" and len(results["rounds"]) == 26
-    assert results["run"]["error_code"] == "ROUNDS_FAILED"
-    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
-    assert rows["c1.itl_ms_median"]["n_pairs"] == 9
+    assert results["run"]["status"] == "partial" and len(results["launches"]) == 34
+    assert results["run"]["error_code"] == "LAUNCHES_FAILED"
+    # The 7 rounds left would flatter side B: no verdict, and the lost round is counted against B.
+    itl = rows_of(results)["c1/itl_ms_median"]
+    assert (itl["n_rounds"], itl["lost"], itl["outcome"], itl["reason"]) == (7, {"B": 1, "A": 0}, "no_verdict",
+                                                                             "side_failed")
+    # A launch lost to something that is not the side's doing (the GPU was not free) is only one round fewer.
+    not_hers, _, _ = run(tmp_path / "gpu", FakeBackend(fail_launch=5, fail_code=runner.GPU_NOT_FREE))
+    itl = rows_of(not_hers)["c1/itl_ms_median"]
+    assert (itl["n_rounds"], itl["lost"], itl["verdict"], itl["p_raw"]) == (7, {"B": 0, "A": 0}, "SLOWER", 2 ** -6)
 
 
 @pytest.mark.parametrize("backend, model, code", [
-    (FakeBackend(fail_round=1, fail_code=runner.GPU_NOT_FREE), "m", "GPU_NOT_FREE"),
+    (FakeBackend(fail_launch=1, fail_code=runner.GPU_NOT_FREE), "m", "GPU_NOT_FREE"),
     (FakeBackend(load_error=True), "m", "LOAD_FAILED"),
     (FakeBackend(), "another-model", "SIDE_NEVER_READY"),
 ])
 def test_each_failure_has_its_code(tmp_path, backend, model, code):
-    # A clock far in the past puts every round's deadline behind the probe's own clock: a side that never lists the
+    # A clock far in the past puts every launch's deadline behind the probe's own clock: a side that never lists the
     # model is SIDE_NEVER_READY at once.
-    results, _, _ = run(tmp_path, backend, model=model, clock=lambda: -1e9, rounds={"pairs": 1, "warmup": False})
+    results, _, _ = run(tmp_path, backend, model=model, clock=lambda: -1e9, rounds=ONE_ROUND)
     jsonschema.validate(results, SCHEMA)
-    assert results["rounds"][0]["status"] == "failed" and results["rounds"][0]["error_code"] == code
-    assert results["run"]["error_code"] == "ROUNDS_FAILED"
+    assert results["launches"][0]["status"] == "failed" and results["launches"][0]["error_code"] == code
+    assert results["run"]["error_code"] == "LAUNCHES_FAILED"
 
 
 def test_a_side_that_dies_is_side_failed(tmp_path):
     backend = FakeBackend()
     backend.alive = lambda handle: "the server exited: Error, exit code 1"
-    results, _, _ = run(tmp_path, backend, model="another-model", rounds={"pairs": 1, "warmup": False})
-    assert results["rounds"][0]["error_code"] == "SIDE_FAILED"
-    assert results["rounds"][0]["error"] == "the server exited: Error, exit code 1"
+    results, _, _ = run(tmp_path, backend, model="another-model", rounds=ONE_ROUND)
+    assert results["launches"][0]["error_code"] == "SIDE_FAILED"
+    assert results["launches"][0]["error"] == "the server exited: Error, exit code 1"
 
 
-def test_sigterm_cuts_the_round_short_and_cleans_up(tmp_path):
+def test_sigterm_cuts_the_launch_short_and_cleans_up(tmp_path):
     started = time.monotonic()
-    results, backend, the_runner = run(tmp_path, FakeBackend(term_in_round=3))
+    results, backend, the_runner = run(tmp_path, FakeBackend(term_in_launch=3))
     assert time.monotonic() - started < 20  # the load's 30 s sleep was interrupted
     jsonschema.validate(results, SCHEMA)
-    assert [r["index"] for r in results["rounds"]] == [1, 2, 3]  # no round after the stop
-    assert results["rounds"][2]["error_code"] == "STOPPED" and 3 in backend.stopped and backend.cleaned
+    assert [x["index"] for x in results["launches"]] == [1, 2, 3]  # no launch after the stop
+    assert results["launches"][2]["error_code"] == "STOPPED" and 3 in backend.stopped and backend.cleaned
     assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "STOPPED"
     assert json.loads(the_runner.path.read_text())["run"]["error_code"] == "STOPPED"
     assert signal.getsignal(signal.SIGTERM) is not the_runner._on_term
 
 
 def test_sigterm_near_the_jobs_time_limit_is_run_timeout(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(term_in_round=3), deadline_s=60)
-    assert results["run"]["error_code"] == "RUN_TIMEOUT" and results["rounds"][2]["error_code"] == "STOPPED"
+    results, _, _ = run(tmp_path, FakeBackend(term_in_launch=3), deadline_s=60)
+    assert results["run"]["error_code"] == "RUN_TIMEOUT" and results["launches"][2]["error_code"] == "STOPPED"
 
 
-def test_sigterm_between_rounds_stops_before_the_next(tmp_path):
+def test_sigterm_between_launches_stops_before_the_next(tmp_path):
     backend = FakeBackend()
     real_stop = backend.stop
 
     def stop(handle):
         real_stop(handle)
-        if handle["round"]["index"] == 2:
-            os.kill(os.getpid(), signal.SIGTERM)  # arrives during teardown: not interruptible, the round stands
+        if handle["launch"]["index"] == 2:
+            os.kill(os.getpid(), signal.SIGTERM)  # arrives during teardown: not interruptible, the launch stands
     backend.stop = stop
     results, _, _ = run(tmp_path, backend)
-    assert [r["status"] for r in results["rounds"]] == ["ok", "ok"]
+    assert [x["status"] for x in results["launches"]] == ["ok", "ok"]
     assert results["run"]["error_code"] == "STOPPED"
 
 
-def test_status_is_published_after_every_round(tmp_path):
+def test_status_is_published_after_every_launch(tmp_path):
     backend = PublishingBackend()
-    results, _, the_runner = run(tmp_path, backend, rounds={"pairs": 2, "warmup": True})
+    results, _, the_runner = run(tmp_path, backend, rounds={"count": 2, "warmup": True})
     status_schema = {"$defs": SCHEMA["$defs"], "properties": {"run": SCHEMA["properties"]["run"]},
                      "$ref": "#/$defs/status"}
-    assert len(backend.published) == 1 + 6 + 1  # the start, each round, the end
+    assert len(backend.published) == 1 + 10 + 1  # the start, each of the 2 + 2 * 4 launches, the end
     for run_id, status, result_text in backend.published:
         jsonschema.validate(status, status_schema)
         assert run_id == results["run"]["id"] and json.loads(result_text)["run"]["id"] == run_id
     first, last = backend.published[1][1], backend.published[-1][1]
-    assert first["phase"] == "running" and first["rounds_done"] == 1 and first["eta_seconds"] is not None
-    assert last["phase"] == "complete" and last["completed_pairs"] == last["total_pairs"] == 2
-    assert last["eta_seconds"] is None and [p["id"] for p in last["primary"]] == results["plan"]["analysis"]["primary"]
+    assert first["phase"] == "running" and first["launches_done"] == 1 and first["eta_seconds"] is not None
+    assert first["launches_total"] == 10 and first["completed_rounds"] == 0
+    assert last["phase"] == "complete" and last["completed_rounds"] == last["total_rounds"] == 2
+    assert last["eta_seconds"] is None
+    assert [p["case"] for p in last["primary"]] == results["plan"]["analysis"]["primary"]
+    # Two rounds are too few for any verdict, and the status says why.
+    assert {(p["verdict"], p["reason"]) for p in last["primary"]} == {("NO VERDICT", "too_few_rounds")}
 
 
 def test_a_failing_publish_is_a_note_not_a_failure(tmp_path):
     backend = PublishingBackend()
     backend.publish = lambda *a: (_ for _ in ()).throw(RuntimeError("forbidden"))
-    results, _, _ = run(tmp_path, backend, rounds={"pairs": 1, "warmup": False})
+    results, _, _ = run(tmp_path, backend, rounds=ONE_ROUND)
     assert results["run"]["status"] == "complete"
     assert [n for n in results["run"]["notes"] if "not published" in n] == [
         "the run's status was not published: RuntimeError: forbidden"]
@@ -408,7 +481,7 @@ def test_a_failing_publish_is_a_note_not_a_failure(tmp_path):
 
 def test_main_run_prints_the_results_and_writes_the_termination_message(tmp_path, capsys, monkeypatch):
     path = tmp_path / "compare.json"
-    path.write_text(json.dumps(config(rounds={"pairs": 1, "warmup": False})))
+    path.write_text(json.dumps(config(rounds=ONE_ROUND)))
     message = tmp_path / "termination-log"
     original = runner.Runner.__init__
 
@@ -416,18 +489,21 @@ def test_main_run_prints_the_results_and_writes_the_termination_message(tmp_path
         original(self, *a, client=lambda url: httpx.Client(base_url=url, transport=server()),
                  sleep=lambda s: None, **kw)
     monkeypatch.setattr(runner.Runner, "__init__", init)
-    code = runner.main_run(str(path), str(tmp_path / "results"), FakeBackend(fail_round=2),
+    code = runner.main_run(str(path), str(tmp_path / "results"), FakeBackend(fail_launch=2),
                            env={"RHVP_COMPARE_TERMINATION_LOG": str(message)})
     assert code == 1  # partial: the Job reads Failed
     out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("run fake-run-") and "4 server starts" in out[0]
     begin = out.index(summary.BEGIN)
     assert out[begin + 2] == summary.END
     printed = json.loads(out[begin + 1])
     jsonschema.validate(printed, SCHEMA)
+    # Launch 2 is side A's twin: its failure costs the floor a round, not the comparison of B with A.
+    assert "  c1/itl_ms_median (secondary): NO VERDICT, single_measurement (rounds 1)" in out
     short = json.loads(message.read_text())
     assert len(message.read_bytes()) <= 4096
-    assert short["status"] == "partial" and short["error_code"] == "ROUNDS_FAILED"
-    assert short["completed_pairs"] == 1 and short["total_pairs"] == 1 and short["run_id"] == printed["run"]["id"]
+    assert short["status"] == "partial" and short["error_code"] == "LAUNCHES_FAILED"
+    assert short["completed_rounds"] == 1 and short["total_rounds"] == 1 and short["run_id"] == printed["run"]["id"]
 
 
 def test_a_config_that_cannot_run_still_says_so(tmp_path, capsys):
@@ -442,48 +518,55 @@ def test_a_config_that_cannot_run_still_says_so(tmp_path, capsys):
 
 def test_the_termination_message_never_passes_4_kib():
     results = {"run": {"id": "r", "status": "complete", "error_code": None}, "plan": None,
-               "analysis": {"method": {"pairs_usable_min": 10}, "outcomes": {"primary": {"FASTER": 300}},
-                            "metrics": [{"id": f"c{i}.output_tokens_per_s", "verdict": "FASTER", "role": "primary"}
-                                        for i in range(300)]}}
+               "analysis": {"outcomes": {"primary": {"WORSE": 300}},
+                            "comparisons": [{"case": f"c{i}/output_tokens_per_s", "verdict": "WORSE",
+                                             "outcome": "worse", "role": "primary"} for i in range(300)]}}
     text = summary.termination(results)
     assert len(text.encode()) <= 4096 and "primary" not in json.loads(text)
 
 
 def test_a_hung_load_is_tried_once_more(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(hang_once=True), rounds={"pairs": 2, "warmup": False})
-    first = results["rounds"][0]
+    results, _, _ = run(tmp_path, FakeBackend(hang_once=True), rounds={"count": 2, "warmup": False})
+    first = results["launches"][0]
     assert first["status"] == "ok" and "run once more" in first["notes"][0]
 
 
 def test_a_complete_run_is_not_run_again(tmp_path):
-    first, _, _ = run(tmp_path, rounds={"pairs": 1, "warmup": False})
-    again, backend, _ = run(tmp_path, rounds={"pairs": 1, "warmup": False})
+    first, _, _ = run(tmp_path, rounds=ONE_ROUND)
+    again, backend, _ = run(tmp_path, rounds=ONE_ROUND)
     assert backend.started == [] and again == json.loads(json.dumps(first))
 
 
 def test_an_unfinished_run_is_kept_beside_the_new_one(tmp_path):
-    plan = plans.build(config(rounds={"pairs": 1, "warmup": False}), "docker")
+    plan = plans.build(config(rounds=ONE_ROUND), "docker")
     folder = tmp_path / plan["run_id"]
     folder.mkdir()
     (folder / "results.json").write_text(json.dumps({"run": {"status": "running"}}))
-    results, _, _ = run(tmp_path, rounds={"pairs": 1, "warmup": False})
+    results, _, _ = run(tmp_path, rounds=ONE_ROUND)
     assert results["run"]["status"] == "complete"
     assert len(list(folder.glob("results.attempt-*.json"))) == 1
 
 
-def test_analysis_is_a_pure_function_of_plan_and_rounds(tmp_path):
+def test_analysis_is_a_pure_function_of_plan_and_launches(tmp_path):
     results, _, _ = run(tmp_path)
-    again = analyze.analyze({"plan": results["plan"], "rounds": results["rounds"]})
+    again = analyze.analyze({"plan": results["plan"], "launches": results["launches"]})
     assert json.loads(json.dumps(again)) == json.loads(json.dumps(results["analysis"]))
     assert again["tool"] == analyze.TOOL
+    # The boundary a replacement plugs into: plain rows in, the same comparisons out.
+    given = analyze.inputs(results)
+    assert set(given["rows"][0]) == {"round", "pos", "side", "case", "value"}
+    assert given["twins"] == {"A~same": "A", "B~same": "B"}
+    out = analyze.analyse(given["rows"], given["positions"], given["twins"], given["cases"], given["alpha"])
+    assert json.loads(json.dumps(out["comparisons"])) == json.loads(json.dumps(results["analysis"]["comparisons"]))
 
 
 def test_markdown_report(tmp_path):
     results, _, the_runner = run(tmp_path)
     text = report.markdown(results)
     assert (the_runner.dir / "results.md").read_text() == text
-    assert "| inter-token latency, median, 1 concurrent |" in text and "SLOWER" in text
-    assert "registry.example/server:1" in text and "A/A" in text
+    assert "| inter-token latency, median, 1 concurrent |" in text and "SLOWER" in text and "WORSE" in text
+    assert "registry.example/server:1" in text and "A~same" in text
+    assert "corrected for testing 4 cases at once" in text
     assert not re.search(r"\d\s?[x×]\b", text)
 
 
@@ -492,7 +575,9 @@ def test_command_line_validate_analyze_report(tmp_path, capsys):
     path.write_text(json.dumps(config()))
     assert cli.main(["validate", "--config", str(path), "--platform", "docker"]) == 0
     out = capsys.readouterr().out
-    assert "rounds (26; w = warm-up, * = A/A): Aw Bw A B B A" in out and "verdict is possible" in out
+    assert "warm-up: A B" in out and "round 1: A A~same B B~same" in out and "round 5: B~same B A~same A" in out
+    assert "server starts: 34" in out and "twins: A, B" in out
+    assert "a verdict on a primary case needs 8 of the 8 rounds to lean the same way" in out
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({**config(), "sides": []}))
     assert cli.main(["validate", "--config", str(bad)]) == 2
@@ -500,6 +585,26 @@ def test_command_line_validate_analyze_report(tmp_path, capsys):
     assert cli.main(["analyze", str(the_runner.path), "--write"]) == 0
     assert "SLOWER" in capsys.readouterr().out
     assert cli.main(["report", str(the_runner.path)]) == 0
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    assert cli.main(["analyze", str(broken)]) == runner.EXIT_FAILED == 3  # never 1, which means a partial run
+
+
+def test_the_shipped_configs_build():
+    """The example in values-global.yaml (as the notebook chart passes it: global.compare without enabled, plus the
+    model) and the mock config of compare-local.sh, without a chart renderer."""
+    import yaml
+
+    values = yaml.safe_load((ROOT / "values-global.yaml").read_text())["global"]
+    example = {k: v for k, v in values["compare"].items() if k != "enabled"}
+    example["model"] = {k: values["model"][k] for k in ("id", "source", "revision")}
+    plan = plans.build(example, "openshift")
+    assert (plan["rounds"], len(plan["launches"]), plan["twins"], plan["warmup"]) == (8, 34, ["A", "B"], True)
+    assert plan["power"]["reachable"] and plan["balance"]["balanced"] and plan["energy"]["source"] == "dcgm"
+    assert plan["analysis"]["primary"] == ["startup/first_answer_s", "c32/ttft_ms_median",
+                                           "c32/output_tokens_per_s", "c32/tokens_per_joule[gpu]"]
+    mock = plans.build(json.loads((FIXTURES / "compare-local-mock.json").read_text()), "docker")
+    assert len(mock["launches"]) == 8 and mock["energy"]["source"] == "none"
 
 
 def test_the_pinned_guidellm_image_is_the_same_everywhere():
@@ -524,89 +629,71 @@ def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
     return code, root, message
 
 
-def test_requests_that_fail_on_one_side_make_its_metrics_inconclusive(tmp_path):
-    """Side B loses 40 requests at 4 streams in two of its scored rounds. Those two pairs drop out of the 4-stream
-    metrics; the 8 pairs left would make B look better than it was, so the metrics are INCONCLUSIVE, the run is
-    partial (REQUESTS_FAILED) and the levels are listed everywhere a reader looks."""
-    backend = PublishingBackend(errored={4: 4, 8: 4})  # rounds 4 and 8 are side B's scored rounds of pairs 1 and 3
-    results, _, the_runner = run(tmp_path, backend, rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+def test_requests_that_fail_on_one_side_give_no_verdict(tmp_path):
+    """Side B loses 40 requests at 4 streams in rounds 1 and 2. The 6 rounds left would make B look better than it
+    was, so the 4-stream cases get NO VERDICT (side_failed), the run is partial (REQUESTS_FAILED) and the levels are
+    listed everywhere a reader looks."""
+    backend = PublishingBackend(errored={5: 4, 8: 4})
+    results, _, the_runner = run(tmp_path, backend)
     jsonschema.validate(results, SCHEMA)
-    assert [(r["index"], r["side"]) for r in results["rounds"] if r["index"] in (4, 8)] == [(4, "B"), (8, "B")]
-    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
-    for metric in ("c4.ttft_ms_median", "c4.itl_ms_median", "c4.output_tokens_per_s", "c4.tokens_per_joule"):
-        assert rows[metric]["n_pairs"] == 8
-        assert rows[metric]["pairs_lost"] == {"A": 0, "B": 2, "both": 0, "other": 0}
-        assert (rows[metric]["verdict"], rows[metric]["reason"]) == ("INCONCLUSIVE", "pairs_lost_to_one_side_failing")
-    assert rows["c1.itl_ms_median"]["verdict"] == "SLOWER" and rows["c1.itl_ms_median"]["pairs_lost"]["B"] == 0
+    assert [(x["index"], x["side"], x["round"]) for x in results["launches"] if x["index"] in (5, 8)] == [
+        (5, "B", 1), (8, "B", 2)]
+    rows = rows_of(results)
+    for case in ("c4/ttft_ms_median", "c4/itl_ms_median", "c4/output_tokens_per_s", "c4/tokens_per_joule[gpu]"):
+        assert rows[case]["n_rounds"] == 6 and rows[case]["lost"] == {"B": 2, "A": 0}
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "side_failed")
+    assert rows["c1/itl_ms_median"]["verdict"] == "SLOWER" and rows["c1/itl_ms_median"]["lost"]["B"] == 0
     assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "REQUESTS_FAILED"
     status = backend.published[-1][1]
-    assert [(u["index"], u["side"], u["concurrency"], u["errored"]) for u in status["levels_unusable"]] == [
-        (4, "B", 4, 40), (8, "B", 4, 40)]
+    assert [(u["index"], u["round"], u["side"], u["concurrency"], u["errored"]) for u in status["levels_unusable"]] == [
+        (5, 1, "B", 4, 40), (8, 2, "B", 4, 40)]
     text = (the_runner.dir / "results.md").read_text()
-    assert "round 4 (side B, scored), 4 streams: 40 requests failed" in text
+    assert "- launch 5 (B), 4 streams: 40 requests failed" in text
     assert "side A 0, side B 2" in text
 
 
-def test_a_zero_from_one_side_is_a_pair_lost_to_it_not_a_pair_left_out(tmp_path):
-    """Side B's requests at 4 streams finish but give no output token in two of its scored rounds: 0 tokens per
-    second and 0 tokens per joule there. A 0 gives no ratio. Those two pairs used to drop out unseen, and the 8 left
-    decided the verdict (SLOWER here); now they are pairs lost to side B, and both metrics are INCONCLUSIVE."""
-    results, _, the_runner = run(tmp_path, FakeBackend(zero={4: 4, 8: 4}),
-                                 rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+def test_a_zero_from_one_side_gives_no_verdict(tmp_path):
+    """Side B's requests at 4 streams finish but give no output token in rounds 1 and 2: 0 tokens per second and 0
+    tokens per joule there. A 0 gives no ratio, and leaving those rounds out would decide the verdict on the rest, so
+    both cases get NO VERDICT (nonpositive_value)."""
+    results, _, the_runner = run(tmp_path, FakeBackend(zero={5: 4, 8: 4}))
     jsonschema.validate(results, SCHEMA)
-    b4 = next(r for r in results["rounds"] if r["index"] == 4)
-    assert b4["side"] == "B" and b4["metrics"]["c4.output_tokens_per_s"] == 0
-    assert b4["metrics"]["c4.tokens_per_joule"] == 0
-    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
-    for metric in ("c4.output_tokens_per_s", "c4.tokens_per_joule"):
-        assert rows[metric]["n_pairs"] == 8
-        assert rows[metric]["pairs_lost"] == {"A": 0, "B": 2, "both": 0, "other": 0}
-        assert (rows[metric]["verdict"], rows[metric]["reason"]) == ("INCONCLUSIVE", "pairs_lost_to_one_side_failing")
-    assert rows["c4.itl_ms_median"]["pairs_lost"]["B"] == 0 and rows["c4.itl_ms_median"]["n_pairs"] == 10
-    assert "side A 0, side B 2" in (the_runner.dir / "results.md").read_text()
-
-
-def test_a_zero_counts_against_the_side_that_measured_it():
-    metric = {"id": "c4.output_tokens_per_s", "concurrency": 4}
-
-    def scored(pair, side, value):
-        return {"kind": "scored", "pair": pair, "side": side, "status": "ok", "index": 2 * pair + (side == "B"),
-                "metrics": {} if value is None else {metric["id"]: value},
-                "levels": [{"concurrency": 4, "usable": True}]}
-    rounds = [scored(1, "A", 100.0), scored(1, "B", 0.0),   # B measured 0: lost to B
-              scored(2, "A", 0), scored(2, "B", 0.0),       # both measured 0
-              scored(3, "A", 0.0), scored(3, "B", None),    # A measured 0, B's figure is missing: lost to A
-              scored(4, "A", 100.0), scored(4, "B", 120.0)]
-    assert analyze.paired(rounds, "scored", metric["id"]) == [(100.0, 120.0)]
-    assert analyze.pairs_lost(rounds, metric) == {"A": 1, "B": 1, "both": 1, "other": 0}
-    assert analyze._side_median(rounds, "B", metric["id"]) == 0.0  # the zeros are in the side's median
+    b5 = next(x for x in results["launches"] if x["index"] == 5)
+    assert b5["side"] == "B" and b5["values"]["c4/output_tokens_per_s"] == 0
+    assert b5["values"]["c4/tokens_per_joule[gpu]"] == 0
+    rows = rows_of(results)
+    for case in ("c4/output_tokens_per_s", "c4/tokens_per_joule[gpu]"):
+        assert rows[case]["n_rounds"] == 8 and rows[case]["lost"] == {"B": 0, "A": 0}
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
+    assert rows["c4/itl_ms_median"]["verdict"] == "SLOWER" and rows["c4/itl_ms_median"]["n_rounds"] == 8
+    assert "NO VERDICT (nonpositive_value)" in (the_runner.dir / "results.md").read_text()
 
 
 def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):
     backend = FakeBackend(dies={3: 1})
     results, _, the_runner = run(tmp_path, backend)
     jsonschema.validate(results, SCHEMA)
-    r3 = next(r for r in results["rounds"] if r["index"] == 3)
-    assert (r3["side"], r3["kind"], r3["status"], r3["start_retries"]) == ("A", "scored", "ok", 1)
-    assert backend.started.count((3, "A")) == 2 and backend.stopped.count(3) == 2  # the first try, then the round
-    first_try = the_runner.dir / r3["artifacts"]["server_log_attempt_1"]
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["side"], l3["kind"], l3["status"], l3["start_retries"]) == ("A", "scored", "ok", 1)
+    assert backend.started.count((3, "A")) == 2 and backend.stopped.count(3) == 2  # the first try, then the launch
+    first_try = the_runner.dir / l3["artifacts"]["server_log_attempt_1"]
     assert "Error in memory profiling" in first_try.read_text()
-    assert "Error in memory profiling" not in (the_runner.dir / r3["artifacts"]["server_log"]).read_text()
-    assert any("started once more" in note for note in r3["notes"])
-    assert all(r["start_retries"] == 0 for r in results["rounds"] if r["index"] != 3)
+    assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log"]).read_text()
+    assert any("started once more" in note for note in l3["notes"])
+    assert all(x["start_retries"] == 0 for x in results["launches"] if x["index"] != 3)
     assert results["run"]["status"] == "complete" and runner.exit_code(results) == runner.EXIT_COMPLETE
-    assert "- round 3 (side A, scored): started 2 times, then finished" in (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): started 2 times, then finished" in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
-    assert "started once more" in head and "3 (side A)" in head
+    assert "started once more" in head and "3 (A)" in head
 
 
-def test_a_second_memory_check_failure_fails_the_round(tmp_path):
+def test_a_second_memory_check_failure_fails_the_launch(tmp_path):
     backend = FakeBackend(dies={3: 2})
     results, _, the_runner = run(tmp_path, backend)
     jsonschema.validate(results, SCHEMA)
-    r3 = next(r for r in results["rounds"] if r["index"] == 3)
-    assert (r3["status"], r3["error_code"], r3["start_retries"]) == ("failed", "SIDE_FAILED", 1)
-    assert r3["error"] == "the server exited with code 1"
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["error_code"], l3["start_retries"]) == ("failed", "SIDE_FAILED", 1)
+    assert l3["error"] == "the server exited with code 1"
     assert backend.started.count((3, "A")) == 2
     assert "started 2 times, then SIDE_FAILED" in (the_runner.dir / "results.md").read_text()
 
@@ -614,34 +701,41 @@ def test_a_second_memory_check_failure_fails_the_round(tmp_path):
 def test_a_server_that_exits_for_another_reason_is_not_started_again(tmp_path):
     backend = FakeBackend(dies={3: 1}, dies_log="2026-01-01T00:00:01Z torch.OutOfMemoryError: CUDA out of memory\n")
     results, _, _ = run(tmp_path, backend)
-    r3 = next(r for r in results["rounds"] if r["index"] == 3)
-    assert (r3["status"], r3["error_code"], r3["start_retries"]) == ("failed", "SIDE_FAILED", 0)
-    assert backend.started.count((3, "A")) == 1 and "server_log_attempt_1" not in r3["artifacts"]
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["error_code"], l3["start_retries"]) == ("failed", "SIDE_FAILED", 0)
+    assert backend.started.count((3, "A")) == 1 and "server_log_attempt_1" not in l3["artifacts"]
 
 
-def test_a_round_the_side_itself_failed_counts_against_it(tmp_path):
-    results, _, _ = run(tmp_path, FakeBackend(fail_round=5), rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
-    row = {r["id"]: r for r in results["analysis"]["metrics"]}["c1.itl_ms_median"]
-    assert row["pairs_lost"] == {"A": 0, "B": 1, "both": 0, "other": 0} and row["verdict"] == "INCONCLUSIVE"
-    not_hers, _, _ = run(tmp_path / "gpu", FakeBackend(fail_round=5, fail_code=runner.GPU_NOT_FREE),
-                         rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
-    row = {r["id"]: r for r in not_hers["analysis"]["metrics"]}["c1.itl_ms_median"]
-    assert row["pairs_lost"] == {"A": 0, "B": 0, "both": 0, "other": 1} and row["verdict"] == "SLOWER"
-
-
-def test_rounds_on_two_nodes_make_every_verdict_inconclusive(tmp_path):
+def test_launches_on_two_nodes_give_no_verdict(tmp_path):
     results, _, _ = run(tmp_path, FakeBackend(nodes=("node-1", "node-2")))
     jsonschema.validate(results, SCHEMA)
-    assert {row["reason"] for row in results["analysis"]["metrics"]} <= {"rounds_ran_on_more_than_one_node",
-                                                                         "median_inside_tie_band_but_interval_is_not",
-                                                                         "not_significant_outside_tie_band"}
-    assert {row["verdict"] for row in results["analysis"]["metrics"]} == {"INCONCLUSIVE"}
+    rows = results["analysis"]["comparisons"]
+    assert {(row["outcome"], row["reason"]) for row in rows} == {("no_verdict", "more_than_one_node")}
+    assert [r["code"] for r in results["analysis"]["refusals"]] == ["MORE_THAN_ONE_NODE"]
     assert [n["name"] for n in results["provenance"]["nodes"]] == ["node-2", "node-1"]
+
+
+@pytest.mark.parametrize("twins, launches, reason", [("A", 24, "one_sided_floor"), ("none", 16, "no_floor")])
+def test_without_both_twins_no_case_gets_a_verdict(tmp_path, twins, launches, reason):
+    results, _, _ = run(tmp_path, rounds={"count": 8, "warmup": False, "twins": twins})
+    jsonschema.validate(results, SCHEMA)
+    assert len(results["launches"]) == launches
+    assert {(row["verdict"], row["reason"]) for row in results["analysis"]["comparisons"]} == {("NO VERDICT", reason)}
+
+
+def test_rounds_too_few_for_the_primary_cases_still_grade_the_secondary_ones(tmp_path):
+    # 6 rounds: one case alone can reach alpha (2 * 2^-6 < 0.05), four corrected together cannot (they need 8).
+    results, _, _ = run(tmp_path, rounds={"count": 6, "warmup": False})
+    rows = rows_of(results)
+    assert (rows["c4/output_tokens_per_s"]["verdict"], rows["c4/output_tokens_per_s"]["reason"]) == (
+        "NO VERDICT", "too_few_rounds")
+    assert rows["c1/itl_ms_median"]["verdict"] == "SLOWER" and rows["c1/itl_ms_median"]["p_raw"] == 2 ** -5
+    assert any("need at least 8 rounds" in line for line in runner.plan_lines(results["plan"]))
 
 
 def test_the_live_server_comes_back_and_the_run_says_so(tmp_path, monkeypatch):
     backend = ServerBackend()
-    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds=ONE_ROUND)
     assert code == 0 and backend.server_up
     assert backend.events[-2:] == [("restore",), ("cleanup",)]  # back first, then the cleanup
     [path] = root.glob("*/results.json")
@@ -651,7 +745,7 @@ def test_the_live_server_comes_back_and_the_run_says_so(tmp_path, monkeypatch):
 
 
 def test_a_server_that_stopped_by_itself_before_the_run_took_it_is_recorded(tmp_path, monkeypatch, capsys):
-    code, root, _ = _main(tmp_path, FoundDownBackend(), monkeypatch, rounds={"pairs": 1, "warmup": False})
+    code, root, _ = _main(tmp_path, FoundDownBackend(), monkeypatch, rounds=ONE_ROUND)
     assert code == runner.EXIT_COMPLETE  # the run took nothing away, so this is not its failure
     [path] = root.glob("*/results.json")
     results = json.loads(path.read_text())
@@ -666,7 +760,7 @@ def test_a_server_that_stopped_by_itself_before_the_run_took_it_is_recorded(tmp_
 
 def test_a_server_that_does_not_come_back_is_exit_4(tmp_path, monkeypatch, capsys):
     backend = ServerBackend(restore_fails=True)
-    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds=ONE_ROUND)
     assert code == runner.EXIT_SERVER_NOT_RESTORED == 4
     [path] = root.glob("*/results.json")
     results = json.loads(path.read_text())
@@ -679,7 +773,7 @@ def test_a_server_that_does_not_come_back_is_exit_4(tmp_path, monkeypatch, capsy
 
 
 def test_a_stop_asks_the_server_back_before_the_teardown(tmp_path):
-    backend = ServerBackend(term_in_round=3)
+    backend = ServerBackend(term_in_launch=3)
     results, _, _ = run(tmp_path, backend)
     assert results["run"]["error_code"] == "STOPPED" and results["run"]["server_restored"] is True
     events = backend.events
@@ -693,7 +787,7 @@ def test_a_second_run_refuses_to_start_and_changes_nothing(tmp_path, monkeypatch
     def busy():
         raise runner.RunActive("another comparison is running: runner pod compare-x-1 (Running)")
     backend.check_alone = busy
-    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds=ONE_ROUND)
     assert code == runner.EXIT_RUN_ACTIVE == 5
     assert not backend.prepared and backend.events == [] and backend.server_up  # nothing touched
     assert not list(root.glob("*/results.json")) if root.exists() else True
@@ -701,7 +795,7 @@ def test_a_second_run_refuses_to_start_and_changes_nothing(tmp_path, monkeypatch
     assert short["error_code"] == "RUN_ACTIVE" and short["status"] == "failed"
 
 
-def test_a_run_that_fails_outside_a_round_is_exit_3(tmp_path, monkeypatch):
+def test_a_run_that_fails_outside_a_launch_is_exit_3(tmp_path, monkeypatch):
     backend = ServerBackend()
     backend.describe = lambda: (_ for _ in ()).throw(KeyError("boom"))  # recorded as a note, not a failure
     backend.gpu_free = lambda plan, side: None
@@ -711,7 +805,7 @@ def test_a_run_that_fails_outside_a_round_is_exit_3(tmp_path, monkeypatch):
         original(plan)
         raise runner.RoundError("could not list pods in vllm-inference: HTTP 403")
     backend.prepare = prepare
-    code, root, message = _main(tmp_path, backend, monkeypatch, rounds={"pairs": 1, "warmup": False})
+    code, root, message = _main(tmp_path, backend, monkeypatch, rounds=ONE_ROUND)
     assert code == runner.EXIT_FAILED == 3
     [path] = root.glob("*/results.json")
     results = json.loads(path.read_text())
@@ -720,7 +814,7 @@ def test_a_run_that_fails_outside_a_round_is_exit_3(tmp_path, monkeypatch):
 
 
 def test_a_server_that_comes_back_on_the_last_try_is_back(tmp_path):
-    backend = ServerBackend(term_in_round=3)
+    backend = ServerBackend(term_in_launch=3)
     tries = {"n": 0}
 
     def restore():

@@ -6,7 +6,7 @@
     python -m rhvp_compare analyze <results.json> [--write]
     python -m rhvp_compare report <results.json>
 
-validate prints the plan: the round order, the metrics, and whether the planned pairs can reach alpha at all.
+validate prints the plan: every round's order, the cases, and whether the planned rounds can give a verdict.
 analyze recomputes the verdicts of a results file (after a change to the analysis, or with another tool behind the
 same boundary) and prints them; --write puts them back into the file and rewrites results.md next to it.
 """
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from . import analyze, plan as plans, report, runner
@@ -23,24 +24,22 @@ from . import analyze, plan as plans, report, runner
 
 def _validate(args) -> int:
     the_plan = plans.load(args.config, args.platform)
-    floor = the_plan["floor"]
-    order = " ".join(f"{r['side']}{'w' if r['kind'] == plans.WARMUP else ''}{'*' if r['kind'] == plans.AA else ''}"
-                     for r in the_plan["rounds"])
     print(f"run id: {the_plan['run_id']}")
     print(f"sides: A = {the_plan['sides'][0]['name']} ({the_plan['sides'][0]['image']})")
     print(f"       B = {the_plan['sides'][1]['name']} ({the_plan['sides'][1]['image']})")
-    print(f"rounds ({len(the_plan['rounds'])}; w = warm-up, * = A/A): {order}")
+    print(f"twins: {', '.join(the_plan['twins']) or 'none'}")
+    warmups = [launch for launch in the_plan["launches"] if launch["kind"] == plans.WARMUP]
+    if warmups:
+        print(f"warm-up: {' '.join(launch['side'] for launch in warmups)}")
+    for r in range(1, the_plan["rounds"] + 1):
+        order = [launch["side"] for launch in the_plan["launches"] if launch["round"] == r]
+        print(f"round {r}: {' '.join(order)}")
+    print(f"server starts: {len(the_plan['launches'])}")
     print(f"energy: {the_plan['energy']['source']}")
-    print(f"metrics: {floor['family_size']}; test {the_plan['analysis']['test']}, correction "
-          f"{the_plan['analysis']['correction']}, alpha {the_plan['analysis']['alpha']}, tie band "
-          f"{the_plan['analysis']['tie_band']}")
-    if floor["reachable"]:
-        print(f"the smallest adjusted p-value with {the_plan['pairs']} pairs is {floor['min_adjusted_p']:.3g}: "
-              "a FASTER or SLOWER verdict is possible")
-    else:
-        print(f"warning: with {the_plan['pairs']} pairs the smallest adjusted p-value is "
-              f"{floor['min_adjusted_p']:.3g}, above alpha; no metric can be FASTER or SLOWER below "
-              f"{floor['pairs_needed']} pairs")
+    print(f"cases: {len(the_plan['cases'])}, primary {the_plan['power']['family_size']}; rule "
+          f"{the_plan['analysis']['rule']}, alpha {the_plan['analysis']['alpha']}")
+    for line in runner.plan_lines(the_plan)[1:]:
+        print(line)
     return 0
 
 
@@ -103,7 +102,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except runner.RoundError as error:
         print(f"error: {error}", file=sys.stderr)
-        return 3
+        return runner.EXIT_FAILED
+    except Exception:  # anything else is a failure too (3), never the 1 that means a partial run
+        traceback.print_exc()
+        return runner.EXIT_FAILED
 
 
 if __name__ == "__main__":

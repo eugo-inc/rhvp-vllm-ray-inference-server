@@ -136,7 +136,8 @@ flowchart TB
   `vllm-notebook` namespace (its editors and admins, and cluster admins) can open it. It talks to the server
   through the in-cluster Service.
 - **The image comparison**, off by default, adds a Job in `vllm-notebook` that takes the server down and measures
-  two server images in turn on its GPU ([Compare two images](#compare-two-images)).
+  two server images in turn on its GPU, each against an identical copy of itself
+  ([Compare two images](#compare-two-images)).
 
 ## What is in the stock stack
 
@@ -366,18 +367,23 @@ committed without outputs.
 ## Compare two images
 
 The pattern can compare two inference-server images on your cluster: the same model, the same GPU and the same
-requests, measured in rounds that take turns between the two. It is off by default. The example in
-`values-global.yaml` compares two upstream vLLM releases, `vllm/vllm-openai` v0.32.0 (side A, the baseline) and
-v0.33.0 (side B), both pinned by digest. Every ratio it reports is B/A.
+requests. It measures in rounds: each round starts side A, an identical copy of side A (its twin), side B and side
+B's twin once each, in an order that rotates from round to round. The twins measure how far two starts of one image
+land apart, and a difference between A and B counts only when it is larger than that. It is off by default. The
+example in `values-global.yaml` compares two upstream vLLM releases, `vllm/vllm-openai` v0.32.0 (side A, the
+baseline) and v0.33.0 (side B), both pinned by digest. Every ratio it reports is B/A.
 
 ### Plan it as a maintenance window
 
 A run takes the pattern's own server down for its whole length. The comparison needs the server's GPU and its model
-volume, so the runner scales Deployment `ray-serve-llm` to 0 before the first round and back to 1 when the run ends,
-whether it finished, failed or was stopped. When it is stopped, it asks the server back first, before it takes the
-round's side down; the server's pod then waits for the GPU. It tries the scale for about a minute and reads it back
-to check. With the default settings a run is 22 rounds; we estimate 2 to 3 hours on one GPU, but we have not timed
-it on a cluster.
+volume, so the runner scales Deployment `ray-serve-llm` to 0 before the first launch and back to 1 when the run
+ends, whether it finished, failed or was stopped. When it is stopped, it asks the server back first, before it takes
+the current side down; the server's pod then waits for the GPU. It tries the scale for about a minute and reads it
+back to check.
+
+With the default settings a run is 8 rounds of 4 server starts, plus one warm-up start per side: 34 server starts.
+Each start is followed by three 60-second load levels, the power read and the teardown. We estimate about 4 to 6
+hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but we have not timed a run on a cluster.
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
@@ -403,7 +409,8 @@ oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
    - set the two `sides`: a `name`, an `image` (pin it by digest), and a `preset`: `vllm-openai` for an upstream
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
-   - check `runName`, `rounds`, `load` and `analysis`. The comments there explain each setting.
+   - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
+     comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
    app to show Progressing while the Job runs; this has not been tried on a cluster.
 4. Follow it: `oc get configmap -n vllm-notebook -l app.kubernetes.io/component=compare-run`, or the Job's log.
@@ -418,11 +425,11 @@ reads `Failed`. This also covers a changed value in the notebook chart's `compar
 `arch`, which makes a new Job for the same run while the first is still going. Push a new run after the current one
 has finished, or delete the running Job first.
 
-A run that ends partial (some rounds failed, requests failed at some load level, or it was stopped) exits 1, so its
-Job reads `Failed`, and we expect Argo CD to show the `notebook` app as Degraded until that Job is gone (not tried
-on a cluster). The results of the rounds that finished are kept. Do not just delete the Job: it is still in Git,
-so the next sync (after any later commit) would create it again, and a run that is not complete runs again from the
-start and takes the server down again. First set `enabled: false`, or change the config to start a new run, push,
+A run that ends partial (some launches failed, requests failed at some load level, or it was stopped) exits 1, so
+its Job reads `Failed`, and we expect Argo CD to show the `notebook` app as Degraded until that Job is gone (not
+tried on a cluster). The results of the launches that finished are kept. Do not just delete the Job: it is still in
+Git, so the next sync (after any later commit) would create it again, and a run that is not complete runs again from
+the start and takes the server down again. First set `enabled: false`, or change the config to start a new run, push,
 and only then delete the old Job.
 
 Setting `enabled: false` deletes nothing, because the apps sync without pruning. Delete old Jobs, the
@@ -431,16 +438,23 @@ need them.
 
 ### What a run does
 
-1. One unscored warm-up round per side. It pulls the image and downloads the model to the shared model volume, so
-   no scored round pays for a download.
-2. The scored pairs, in ABBA order: A then B, B then A, A then B, and so on. A slow drift in the machine then lands
-   on both sides.
-3. Optional A/A pairs (`rounds.aaPairs`): side A against itself, to show how far two rounds of one image land
-   apart.
+A launch is one start of one server: start it, time its start, load it, take it down. The lineup is A, A~same, B,
+B~same, where A~same is side A's twin: the same image, arguments and settings, under another name.
 
-In each round the runner starts the side as a pod in `vllm-inference`. The pod runs like the pattern's own server:
-one GPU, the model volume, fresh caches. Every side pod after the first runs on the first one's node, so all rounds
-use the same GPU. The runner then measures:
+1. One unmeasured warm-up launch per side (`rounds.warmup`). It pulls the image and downloads the model to the
+   shared model volume, so no measured launch pays for a download.
+2. `rounds.count` rounds (8 by default), each launching every entry of the lineup once. The order rotates by one
+   place from round to round, and runs reversed in the second set of four: round 1 is A, A~same, B, B~same; round 2
+   is A~same, B, B~same, A; round 5 is B~same, B, A~same, A. With 8, 16 or 24 rounds every entry runs in every
+   position equally often, and of every compared pair (B and A, each side and its twin) each runs first in half
+   the rounds, so a slow drift in the machine lands on both. `python -m rhvp_compare validate` prints every
+   round's order.
+3. `rounds.twins` says which sides get a twin: `both` (the default), `A`, `B` or `none`. Without both twins no case
+   can get a verdict; the other choices only shorten a run that checks the setup.
+
+In each launch the runner starts the side as a pod in `vllm-inference`. The pod runs like the pattern's own server:
+one GPU, the model volume, fresh caches. Every side pod after the first runs on the first one's node, so all
+launches use the same GPU. The runner then measures:
 
 - **Start-up.** Time to ready (until `GET /v1/models` lists the model), time to first answer (until the first
   generated text of a streamed request comes back), and the phases each server writes to its own log, such as
@@ -449,39 +463,58 @@ use the same GPU. The runner then measures:
   with fixed prompt and output lengths and a fixed seed. Per level it records time to first token, inter-token
   latency and output tokens per second.
 - **Energy.** Output tokens per joule at each level, from the GPU's own board power read from DCGM through the
-  cluster's monitoring. This is GPU-only power: the rest of the machine is not in it. The pattern labels the
-  `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's monitoring
-  scrapes the DCGM exporter; the label is set on every install, also when the comparison is off.
+  cluster's monitoring. This is GPU-only power: the rest of the machine is not in it, and the results label it so
+  (case ids end in `tokens_per_joule[gpu]`). A level with fewer power samples than `energy.minSamples` (10) gets no
+  figure. The DCGM exporter collects every 30 seconds by default, which gives about 2 samples in a 60-second level,
+  so while `global.compare.enabled` is true (and the energy source is not `none`) the pattern's ClusterPolicy sets
+  the exporter's interval (`DCGM_EXPORTER_INTERVAL`) and its scrape interval to 2 seconds. We expect the GPU
+  Operator to restart the DCGM exporter pods when the comparison is turned on or off. The pattern labels the
+  `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's monitoring scrapes
+  the exporter; the label is set on every install, also when the comparison is off.
 
 ### How the verdicts are decided
 
-The rule is fixed in the config before the first round and written into the results:
+The rule is fixed before the first launch and written into the results (`plan.analysis`):
 
-- For each metric and each pair, the ratio B/A. The median ratio comes with a distribution-free confidence interval.
-- An exact two-sided sign test on those ratios (`analysis.test: wilcoxon` picks the exact Wilcoxon signed-rank test
-  instead).
-- **Primary metrics.** By default: time to first answer, and at the highest concurrency the median time to first
+- **Cases.** A case is one figure per launch: time to ready, time to first answer, and at each load level the median
+  time to first token, the median inter-token latency, the output tokens per second and the output tokens per joule.
+  Requests are never pooled across launches. Case ids look like `startup/first_answer_s` and `c32/ttft_ms_median`.
+- **Ratios.** For each case and each round, side B's figure divided by side A's from the same round. The verdict
+  uses the median of those ratios.
+- **The noise floor and the bar.** For each side, the median over the rounds of side / twin, and the floor
+  `abs(median - 1)`: how far two launches of one image land apart. A side's floor on a case is the largest over the
+  cases of the same metric and role (for example every secondary inter-token latency), so one quiet level does not
+  set a low bar for the others. The bar is side B's floor plus side A's. Each floor lists its spread and the rounds
+  outside the usual range (named, never dropped), and is marked provisional from fewer than 8 rounds.
+- **The test.** An exact two-sided sign test over the rounds whose two figures differ.
+- **Primary cases.** By default: time to first answer, and at the highest concurrency the median time to first
   token, the output tokens per second and the output tokens per joule. Only these share Holm's correction for
-  multiple comparisons, so only their verdicts are findings. `analysis.primary` lists other metric ids.
-- **Secondary metrics.** Every other metric gets the same test, interval and tie band, but an uncorrected p-value.
-  Its verdict describes the run; it is not a finding.
-- **Tie band.** TIE needs the median ratio and its whole confidence interval between 1/1.05 and 1.05
-  (`analysis.tieBand: 0.05`), whatever the p-value. A median inside the band with an interval that reaches outside
-  it, or with too few pairs for an interval (fewer than 6 at the default 95%), is INCONCLUSIVE: it does not show the
-  two images are within 5%.
-- **Outside the band**, B is FASTER or SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) when the
-  p-value is at most alpha (0.05) and the test leans the same way as the median ratio, and INCONCLUSIVE otherwise.
-- **A side that fails.** When a pair lost a metric because one side failed on its own account (its round failed
-  with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, requests failed at that load level, or it measured 0,
-  such as no output tokens, which gives no ratio), the metric is INCONCLUSIVE, whichever side failed: the pairs that
-  are left would flatter the side that failed. Each metric lists the pairs it lost and why (`pairs_lost`).
-- **One node.** When the scored rounds ran on more than one node, every verdict is INCONCLUSIVE.
+  testing several cases at once, so only their verdicts are findings. `analysis.primary` lists other case ids. Every
+  other case is secondary: the same rule on its uncorrected p-value, so its verdict describes the run and is not a
+  finding.
+- **The verdict.** Outside the bar and p below alpha (0.05): B is FASTER or SLOWER for times, BETTER or WORSE for
+  output tokens per second and tokens per joule. Inside the bar and p not below alpha: TIE. Inside the bar but
+  significant, or outside the bar but not significant: UNRESOLVED. A win, a loss and a tie need the same evidence.
+  A FASTER, SLOWER, BETTER, WORSE or TIE whose pairs had one side first more than three times as often as the other
+  is UNRESOLVED (`order_unbalanced`); with the default plan that does not happen.
+- **NO VERDICT**, with its reason, when a case cannot be graded: launches on more than one node
+  (`more_than_one_node`); a launch of side A or B that failed on its own account, in a round where the other side
+  did not (`side_failed`: its launch failed with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests
+  failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
+  a figure of 0, such as no output tokens (`nonpositive_value`); one paired round (`single_measurement`); fewer
+  rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side only, or a floor of exactly 0
+  (`no_floor`, `one_sided_floor`, `zero_floor`).
 
-With n pairs no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
-metrics. With the 4 default primary metrics, at least 8 pairs are needed for any FASTER or SLOWER verdict; the
-default is 10. The runner prints a warning when the plan cannot reach alpha. When failed rounds leave the metrics
-with different numbers of pairs, each metric's `reachable` flag uses the smallest corrected p-value its own pairs
-allow.
+Every outcome is in `analysis.comparisons[].outcome` (`better`, `worse`, `tie`, `unresolved`, `no_verdict`), with
+`reason` and the display word in `verdict`.
+
+With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
+cases. With the 4 default primary cases, fewer than 8 rounds give every primary case NO VERDICT
+(`too_few_rounds`); at 8 rounds a FASTER, SLOWER, BETTER or WORSE needs all 8 rounds to lean the same way, and at 16
+rounds 14 of the 16. A secondary case needs at least 6 rounds. A failed launch takes its round out of that case's
+count, so at 8 rounds one failed or unmeasured launch of A or B leaves the primary cases it touches without a
+verdict. `python -m rhvp_compare validate` prints what a plan allows, and the runner prints it before the first
+launch.
 
 ### Where the results are
 
@@ -491,17 +524,19 @@ The runner writes to the PVC `image-compare-results` (5Gi, ReadWriteOnce, mounte
 ```text
 <run id>/results.json                    the whole run; schema: notebooks/rhvp_compare/results.schema.json
 <run id>/results.md                      a short table of the same
-<run id>/rounds/<NN>-<side>-<kind>/      server.log, guidellm.json, guidellm.log for each round
+<run id>/launches/<NN>-<side>-<kind>/    server.log, guidellm.json, guidellm.log for each launch
 ```
 
-The run id is `runName` plus the first 8 hex digits of the config's sha256. Without access to the PVC:
+`<NN>` is the launch's number in run order and `<side>` is `A`, `A-same`, `B` or `B-same`. The run id is
+`runName` plus the first 8 hex digits of the config's sha256. A results file written under the earlier rule
+(schema `rhvp-image-compare/1`) is not shown by the notebook. Without access to the PVC:
 
-- ConfigMap `compare-<run id>` in `vllm-notebook` holds `status.json` (phase, pairs done, an estimate of the time
-  left, failure codes, the load levels left out because requests failed, whether the server is back, the primary
-  verdicts), rewritten after every round, and `result.json`, the whole results file while it is smaller than about
-  900 kB.
+- ConfigMap `compare-<run id>` in `vllm-notebook` holds `status.json` (phase, rounds and launches done, an estimate
+  of the time left, failure codes, the load levels left out because requests failed, whether the server is back,
+  the primary verdicts), rewritten after every launch, and `result.json`, the whole results file while it is
+  smaller than about 900 kB.
 - The runner container's termination message holds a summary of at most 4 KB: the status, the failure code, whether
-  the server is back, the pairs and the verdict counts.
+  the server is back, the rounds done and the verdict counts.
 - At the end of its log, the runner prints the whole results file as one line between
   `===== rhvp-compare results begin =====` and `===== rhvp-compare results end =====`.
 
@@ -509,14 +544,14 @@ The Job's exit code:
 
 | Exit | Meaning |
 |---|---|
-| 0 | every round finished, and the server is back |
-| 1 | a partial run; its Job reads `Failed`, and the results of the rounds that finished are kept |
+| 0 | every launch finished, and the server is back |
+| 1 | a partial run; its Job reads `Failed`, and the results of the launches that finished are kept |
 | 2 | the config cannot be run (`PLAN_INVALID`) |
-| 3 | the run failed outside a round (`RUNNER_FAILED`), for example on a Kubernetes API error before the first round |
+| 3 | the run failed outside a launch (`RUNNER_FAILED`), for example on a Kubernetes API error before the first launch |
 | 4 | the server could not be scaled back, whatever else happened (`run.server_restored` is `false`) |
 | 5 | another comparison was running, so this one did not start and changed nothing (`RUN_ACTIVE`) |
 
-Each failed round carries one of these codes in `rounds[].error_code`:
+Each failed launch carries one of these codes in `launches[].error_code`:
 
 | Code | Meaning |
 |---|---|
@@ -524,40 +559,41 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
 | `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
-| `STOPPED` | the runner was stopped during the round |
+| `STOPPED` | the runner was stopped during the launch |
 | `RUNNER_ERROR` | anything else, such as an error from the Kubernetes API |
 
-The run's own `run.error_code` is null when every round finished, `ROUNDS_FAILED` when some rounds failed,
-`REQUESTS_FAILED` when every round ran but requests failed at some load level (that level is left out),
+The run's own `run.error_code` is null when every launch finished, `LAUNCHES_FAILED` when some launches failed,
+`REQUESTS_FAILED` when every launch ran but requests failed at some load level (that level is left out),
 `STOPPED` when the Job was deleted, `RUN_TIMEOUT` when it reached its time limit (48 hours by default), and
-`RUNNER_FAILED` when the run failed outside a round. A config that cannot be run, or a run that found another one
+`RUNNER_FAILED` when the run failed outside a launch. A stopped or timed-out run is analysed on the launches it
+finished. A config that cannot be run, or a run that found another one
 going, writes no results file; `PLAN_INVALID` or `RUN_ACTIVE` then appears only in the log and the termination
 message.
 
 ### On one machine, without a cluster
 
-`scripts/compare-local.sh <config.json> <results folder>` runs the same runner, rounds, load and analysis with
+`scripts/compare-local.sh <config.json> <results folder>` runs the same runner, launches, load and analysis with
 docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi` instead of DCGM.
 `tests/fixtures/compare-local-mock.json` is a small config that needs no GPU: two GuideLLM mock servers.
 
 - `SIDE_MEMORY` (for example `32g`) and `RUNNER_MEMORY` (default `8g`) limit the containers' memory. On a GPU whose
   memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
-- `SERVER_CONTAINER` names a container that normally holds the GPU: the runner stops it before the first round, once
+- `SERVER_CONTAINER` names a container that normally holds the GPU: the runner stops it before the first launch, once
   both images are pulled, and starts it again when the run ends, the counterpart of scaling the pattern's server on
   OpenShift. A stop during the pulls leaves it running. A container that was running when the run began but has
   stopped by itself (or been removed) by the end of the pulls is left as it is, and nothing starts it after the run:
   the run says so in `run.server_found_down`, `results.md` and the log's last lines.
 - One comparison runs at a time here too: a second `compare-local.sh` refuses to start (exit 5) while the first
-  runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
-- Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
+  runs. `docker stop` on the runner container, or Ctrl-C, cuts the launch short and saves the run as partial.
+- Before each launch the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
   namespace).
 - On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
   (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
-  starts that side once more in the same round and times its start from the new start; the round's
-  `start_retries`, `results.md` and the notebook say so. A second such exit fails the round (`SIDE_FAILED`). The
+  starts that side once more in the same launch and times its start from the new start; the launch's
+  `start_retries`, `results.md` and the notebook say so. A second such exit fails the launch (`SIDE_FAILED`). The
   same measurement sets the size of the server's KV cache, so memory that other programs take in those seconds
   shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same image got in the
-  other rounds. Each round's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as quiet as you can
+  other rounds. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as quiet as you can
   during a run.
 
 ### Comparing with this pattern's own server
@@ -569,35 +605,45 @@ images, not on vLLM versions inside one image. To compare this pattern's server 
 ray-serve-llm:latest -n vllm-inference` shows the digest). The run id comes from the config only, so an image rebuilt
 under the same tag is not a new run: change the digest, or `runName`.
 
+Time to first token and inter-token latency are timed where GuideLLM receives the streamed text. A serving layer
+that sends several generated tokens in one streamed write moves the first token later and shortens the measured
+gaps between tokens, compared with a server that sends each token as it is generated. Between a `ray-serve-llm` side
+and a `vllm-openai` side these two figures can differ for that reason alone; the comparison does not correct for
+it. Output tokens per second, over the whole level, is not timed per token.
+
 ### What has not been checked
 
-- Real inference servers have run in two smoke runs only, with docker on one machine with one GPU
-  (`scripts/compare-local.sh`): the example's two images (vLLM v0.32.0 and v0.33.0) and model, one warm-up round
-  per side and 2 scored pairs, but not the example's settings (30 s per level instead of 60, `gpuMemoryUtilization`
-  0.1, `maxModelLen` 2048). The second run finished all 6 rounds: each server started as an arbitrary UID, listed
-  the model and answered; the runner read the start-up phases from its log and its version from `GET /version`;
-  GuideLLM measured both sides at all three levels with no failed request; a stand-in container playing the live
-  server was stopped before the first round and started again after; and one side, stopped by vLLM's start-up
-  memory check, was started once more and finished its round (see "On one machine"). The first run, from before
-  that second start existed, lost one of its four scored rounds to the same check and ended partial. With 2 pairs
-  every verdict is INCONCLUSIVE by design; the runs checked the harness, and their figures say nothing about the
-  two releases. No run with the example's own settings or its 10 pairs has been made, and the Kubernetes backend
-  has never started a real server.
+- The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run only against fake servers in
+  the unit tests. No run with real servers has used it, and no run has had 8 rounds.
+- Real inference servers have run in two smoke runs only, under the earlier rule (rounds of A and B, no twins), with
+  docker on one machine with one GPU (`scripts/compare-local.sh`): the example's two images (vLLM v0.32.0 and
+  v0.33.0) and model, one warm-up launch per side and 2 scored pairs, but not the example's settings (30 s per level
+  instead of 60, `gpuMemoryUtilization` 0.1, `maxModelLen` 2048). The second run finished all 6 launches: each
+  server started as an arbitrary UID, listed the model and answered; the runner read the start-up phases from its
+  log and its version from `GET /version`; GuideLLM measured both sides at all three levels with no failed request;
+  a stand-in container playing the live server was stopped before the first launch and started again after; and
+  one side, stopped by vLLM's start-up memory check, was started once more and finished its launch (see "On one
+  machine"). The first run, from before that second start existed, lost one of its four scored launches to the
+  same check and ended partial. With 2 pairs no verdict was possible by design; the runs checked the harness, and
+  their figures say nothing about the two releases. The Kubernetes backend has never started a real server.
 - Tokens per joule has been computed from real power samples in those two runs only, from nvidia-smi (2 samples a
   second). It has never been computed from DCGM: that reader is tested only against hand-written answers in the
   documented format (a Prometheus `query_range` matrix), and the DCGM label names it matches on (`exported_pod`,
-  `exported_namespace`, `pod`, `Hostname`) have not been checked against a real DCGM exporter.
+  `exported_namespace`, `pod`, `Hostname`) have not been checked against a real DCGM exporter. The 2-second DCGM
+  interval is set through ClusterPolicy fields the GPU Operator's CRD defines (`spec.dcgmExporter.env`,
+  `spec.dcgmExporter.serviceMonitor.interval`), but it has not been applied on a cluster: whether the cluster's
+  monitoring then keeps a sample every 2 seconds is unchecked.
 - No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
   a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote
-  the status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
-  `STOPPED`, deleted the side and brought the server back within seconds. That run came before the refusal of a
-  second run, the scale read-back and the early restore on a stop; on Kubernetes those are covered by unit tests
-  only. None of it says anything about OpenShift's restricted security context, the internal registry, the
-  cluster's monitoring or Argo CD. Under docker (`scripts/compare-local.sh`), against the same mock server, a
-  second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-round saved the run
-  as partial / `STOPPED` and started the stand-in live server again.
+  the status ConfigMap and the termination message, and, when its Job was deleted mid-launch, recorded the launch
+  as `STOPPED`, deleted the side and brought the server back within seconds. That run came before the refusal of a
+  second run, the scale read-back, the early restore on a stop and the twins; on Kubernetes those are covered by
+  unit tests only. None of it says anything about OpenShift's restricted security context, the internal registry,
+  the cluster's monitoring or Argo CD. Under docker (`scripts/compare-local.sh`), against the same mock server, a
+  second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-launch saved the
+  run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
-- The length of a run, and so of the server's outage, is an estimate.
+- The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
 
 ## Changing the model
 

@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""rhvp_compare.stats: the exact tests, the corrections, the interval, the floor and the verdict rule.
-
-Reference p-values were computed with SciPy 1.16.3 (scipy.stats.wilcoxon on the log ratios, scipy.stats.binomtest,
-scipy.stats.false_discovery_control), in a container; SciPy itself is not needed to run these tests.
+"""rhvp_compare.stats and analyze.analyse: the sign test, Holm's correction, the fewest rounds, the run order, the
+noise floor from the twins and the verdict table, each against answers written here as constants.
 
 Run with: python -m pytest -q tests/test_compare_stats.py
 """
 
-import math
+import random
 import sys
 from pathlib import Path
 
@@ -15,197 +13,263 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "notebooks"))
 
-from rhvp_compare import stats  # noqa: E402
-
-W1 = [1.10, 0.95, 1.20, 1.05, 1.30, 0.98, 1.15, 1.08]
-W2 = [1.02, 1.02, 0.97, 1.05, 1.05, 1.05, 0.99, 1.10, 1.01, 1.03]  # tied magnitudes
-W3 = [0.9, 0.8, 0.85, 0.95, 0.7, 0.92]
-W4 = [1.1, 0.9, 1.2, 0.8, 1.05, 0.95]
+from rhvp_compare import analyze, plan as plans, stats  # noqa: E402
 
 
-@pytest.mark.parametrize("values, sign_p, wilcoxon_p", [
-    (W1, 0.2890625, 0.0546875),
-    (W2, 0.109375, 0.046875),
-    (W3, 0.03125, 0.03125),
-    (W4, 1.0, 0.84375),
+# ---- the sign test ----
+
+@pytest.mark.parametrize("lower, higher, p", [
+    (12, 0, 2 / 4096), (10, 2, 158 / 4096), (6, 0, 0.03125), (5, 1, 0.21875), (0, 2, 0.5), (0, 0, 1.0),
+    (5, 0, 0.0625),
 ])
-def test_tests_match_scipy(values, sign_p, wilcoxon_p):
-    assert stats.sign_test(values).p == pytest.approx(sign_p, abs=1e-12)
-    assert stats.wilcoxon_test(values).p == pytest.approx(wilcoxon_p, abs=1e-12)
+def test_sign_test_known_answers(lower, higher, p):
+    assert stats.sign_test(lower, higher).p == p
 
 
-def test_sign_test_counts_and_zero_rule():
-    assert stats.sign_test([1.1] * 6).p == pytest.approx(0.03125)
-    assert stats.sign_test([1.1] * 5 + [0.9]).p == pytest.approx(0.21875)
-    assert stats.sign_test([1.1] * 8 + [0.9] * 2).p == pytest.approx(0.109375)
-    result = stats.sign_test([1.0, 1.0, 1.2, 0.8])
-    assert (result.n, result.above, result.below) == (2, 1, 1)
-    assert stats.sign_test([1.0, 1.0]).p == 1.0
-    assert stats.sign_test([]).p == 1.0
+def test_sign_test_fraction_and_symmetry():
+    assert stats.sign_test(12, 0).fraction == (2, 4096)
+    assert stats.sign_test(10, 2).fraction == (158, 4096)
+    assert stats.sign_test(1, 1).fraction == (4, 4)  # capped at 1
+    assert round(stats.sign_test(18, 6).p, 4) == 0.0227
+    assert stats.sign_test(3, 9).p == stats.sign_test(9, 3).p
+    # No p below 0.05 with fewer than 6 untied pairs.
+    assert min(stats.sign_test(n, 0).p for n in range(1, 6)) >= 0.05
 
 
-def test_wilcoxon_drops_zeros_and_is_symmetric():
-    assert stats.wilcoxon_test([1.0, 1.0]).p == 1.0
-    up = stats.wilcoxon_test(W3)
-    down = stats.wilcoxon_test([1 / r for r in W3])
-    assert up.p == pytest.approx(down.p)
-    assert up.w_plus == 0 and down.w_plus == pytest.approx(21)
-    with pytest.raises(ValueError):
-        stats.wilcoxon_test([1.1, -1.0])
+def test_ties_are_not_trials():
+    # Three lower and three exact ties: 3 against 0, not 6 against 0.
+    lower, higher = stats.signs([0.9, 0.8, 0.95, 1.0, 1.0, 1.0])
+    assert (lower, higher) == (3, 0) and stats.sign_test(lower, higher).p == 0.25
+    assert stats.sign_test(*stats.signs([1.0] * 9)).p == 1.0
 
 
-def test_corrections_match_references():
-    p = [0.01, 0.04, 0.03, 0.005, 0.2]
-    assert stats.adjust(p, "bh") == pytest.approx([0.025, 0.05, 0.05, 0.025, 0.2])
-    assert stats.adjust(p, "holm") == pytest.approx([0.04, 0.09, 0.09, 0.025, 0.2])
-    assert stats.adjust(p, "bonferroni") == pytest.approx([0.05, 0.2, 0.15, 0.025, 1.0])
-    assert stats.adjust(p, "none") == p
-    assert stats.adjust([], "holm") == []
-    with pytest.raises(ValueError):
-        stats.adjust(p, "sidak")
+# ---- Holm ----
 
-
-def test_holm_is_monotone_and_capped():
-    p = [0.9, 0.5, 0.6, 0.01]
-    out = stats.adjust(p, "holm")
-    assert all(0 <= x <= 1 for x in out)
-    ordered = [out[i] for i in sorted(range(len(p)), key=lambda i: p[i])]
-    assert ordered == sorted(ordered)
-
-
-def test_median_interval_order_statistics():
-    interval = stats.median_interval(list(range(1, 11)), 0.95)
-    assert (interval.low, interval.high) == (2, 9)
-    assert interval.level == pytest.approx(0.978515625)
-    assert stats.median_interval([1.0, 2.0, 3.0], 0.95).low is None  # 3 values cannot reach 95 %
-    assert stats.median_interval([5.0] * 6, 0.95).low == 5.0
-
-
-def test_floor_and_pairs_needed():
-    assert stats.floor_p(10, 14, "holm") == pytest.approx(0.02734375)
-    assert stats.floor_p(10, 14, "bh") == pytest.approx(2 ** -9)
-    assert stats.floor_p(0, 14, "holm") == 1.0
-    assert stats.pairs_needed(14, "holm", 0.05) == 10
-    assert stats.pairs_needed(14, "bh", 0.05) == 6
-    assert stats.pairs_needed(1, "none", 0.05) == 6
-    # the floor is what the tests really give with every pair one way
-    assert stats.sign_test([1.2] * 6).p == pytest.approx(stats.floor_p(6, 1, "none"))
-    assert stats.wilcoxon_test([1.2, 1.3, 1.1, 1.4, 1.5, 1.6]).p == pytest.approx(stats.floor_p(6, 1, "none"))
-
-
-def test_tie_band_is_symmetric_in_log_space():
-    assert stats.inside_band(1.05, 0.05)
-    assert stats.inside_band(1 / 1.05, 0.05)
-    assert not stats.inside_band(1.0501, 0.05)
-    assert not stats.inside_band(0.95, 0.05)  # 0.95 < 1/1.05 = 0.952...
-    assert stats.inside_band(1.0, 0.0)
-
-
-TIGHT = stats.Interval(1.01, 1.04, 0.98)   # inside the 5% band
-WIDE = stats.Interval(0.80, 1.30, 0.98)    # reaches outside it
-NONE = stats.Interval(None, None, None)    # too few pairs for an interval
-
-
-@pytest.mark.parametrize("median_ratio, p_adj, better, n, reachable, interval, direction, outcome, reason", [
-    (0.80, 0.01, stats.LOWER, 10, True, WIDE, -1, stats.BETTER, stats.REASON_SIGNIFICANT),
-    (1.25, 0.01, stats.LOWER, 10, True, WIDE, 1, stats.WORSE, stats.REASON_SIGNIFICANT),
-    (1.25, 0.01, stats.HIGHER, 10, True, WIDE, 1, stats.BETTER, stats.REASON_SIGNIFICANT),
-    (0.80, 0.01, stats.HIGHER, 10, True, WIDE, -1, stats.WORSE, stats.REASON_SIGNIFICANT),
-    (1.03, 0.001, stats.LOWER, 10, True, TIGHT, 1, stats.TIE, stats.REASON_IN_BAND),
-    (1.02, 1.0, stats.HIGHER, 10, True, WIDE, 0, stats.INCONCLUSIVE, stats.REASON_WIDE),
-    (1.02, 1.0, stats.HIGHER, 3, True, NONE, 0, stats.INCONCLUSIVE, stats.REASON_NO_INTERVAL),
-    (0.80, 0.01, stats.LOWER, 50, True, WIDE, 1, stats.INCONCLUSIVE, stats.REASON_DISAGREE),
-    (0.80, 0.20, stats.LOWER, 10, True, WIDE, -1, stats.INCONCLUSIVE, stats.REASON_NOT_SIGNIFICANT),
-    (0.80, 1.00, stats.LOWER, 4, False, NONE, -1, stats.INCONCLUSIVE, stats.REASON_FLOOR),
-    (0.80, 0.01, stats.LOWER, 2, True, NONE, -1, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
-    (None, None, stats.LOWER, 0, False, NONE, 0, stats.INCONCLUSIVE, stats.REASON_TOO_FEW),
+@pytest.mark.parametrize("raw, adjusted", [
+    ([0.01, 0.04, 0.5], [0.03, 0.08, 0.5]),
+    ([0.01, 0.012, 0.5], [0.03, 0.03, 0.5]),
+    ([0.01, 0.04, 0.03], [0.03, 0.06, 0.06]),
+    ([0.03125, 0.03125, 0.21875], [0.09375, 0.09375, 0.21875]),
 ])
-def test_verdict_rule(median_ratio, p_adj, better, n, reachable, interval, direction, outcome, reason):
-    decided = stats.verdict(median_ratio, p_adj, better, 0.05, 0.05, n, 3, reachable, interval, direction)
-    assert (decided.outcome, decided.reason) == (outcome, reason)
+def test_holm_known_answers(raw, adjusted):
+    got = stats.holm({f"c{i}": p for i, p in enumerate(raw)})
+    assert [got[f"c{i}"] for i in range(len(raw))] == pytest.approx(adjusted)
 
 
-def test_a_tie_needs_the_interval_inside_the_band():
-    """A median inside the band is not enough: three pairs (no interval), or ten whose interval runs from 0.75 to
-    1.35, do not show the two images are within 5%."""
-    for values in ([0.8, 1.02, 1.3], [0.70, 0.75, 0.8, 0.9, 1.0, 1.04, 1.1, 1.3, 1.35, 1.40]):
-        ratio, interval = stats.median_ratio(values), stats.median_interval(values)
-        assert stats.inside_band(ratio, 0.05)
-        decided = stats.verdict(ratio, 1.0, stats.HIGHER, 0.05, 0.05, len(values), 3, True, interval, 0)
-        assert decided.outcome == stats.INCONCLUSIVE
-    close = [1.01, 1.02, 0.99, 1.03, 1.0, 1.02, 0.98, 1.01, 1.02, 1.0]
-    decided = stats.verdict(stats.median_ratio(close), 1.0, stats.HIGHER, 0.05, 0.05, 10, 3, True,
-                            stats.median_interval(close), stats.sign_test(close).direction)
-    assert (decided.outcome, decided.reason) == (stats.TIE, stats.REASON_IN_BAND)
+def test_holm_wording():
+    assert stats.plain_family(1) == "one case tested"
+    assert stats.plain_family(4) == "corrected for testing 4 cases at once"
 
 
-def test_the_direction_comes_from_the_test_not_only_the_median():
-    """27 pairs where B is 5% faster and 23 where it is 50% slower: the median says faster, the signed-rank test is
-    significant because B is mostly slower. That is not FASTER."""
-    values = [0.95] * 27 + [1.5] * 23
-    wilcoxon = stats.wilcoxon_test(values)
-    assert wilcoxon.p < 0.01 and wilcoxon.direction == 1
-    assert stats.sign_test(values).direction == -1
-    decided = stats.verdict(stats.median_ratio(values), wilcoxon.p * 4, stats.LOWER, 0.05, 0.05, 50, 8, True,
-                            stats.median_interval(values), wilcoxon.direction)
-    assert (decided.outcome, decided.reason) == (stats.INCONCLUSIVE, stats.REASON_DISAGREE)
-    assert stats.wilcoxon_test([1.0, 1.0]).direction == 0
+# ---- the fewest rounds ----
+
+@pytest.mark.parametrize("m, n", [(1, 6), (2, 7), (4, 8), (10, 9), (35, 11), (100, 12)])
+def test_min_rounds_known_answers(m, n):
+    assert stats.min_rounds(m) == n
 
 
-def test_the_median_ratio_does_not_depend_on_which_image_is_a():
-    values = [0.9, 0.95, 0.97, 0.99, 1.0, 1.101, 1.11, 1.12, 1.15, 1.2]
-    assert stats.median_ratio(values) == pytest.approx(1 / stats.median_ratio([1 / r for r in values]))
-    assert stats.median_ratio(values) == pytest.approx(math.sqrt(1.0 * 1.101))
-    assert stats.median_ratio([1.3, 1.02, 0.8]) == 1.02
-    with pytest.raises(ValueError):
-        stats.median_ratio([])
+def test_eight_rounds():
+    assert stats.max_cases(8) == 6  # at most 6 primary cases can get a verdict at 8 rounds
+    assert stats.must_agree(8, 4) == 8  # and with 4 primaries all 8 rounds must agree
+    assert stats.must_agree(16, 4) == 14  # 16 rounds: a verdict survives two disagreeing rounds
+    assert stats.must_agree(7, 4) is None
 
 
-@pytest.mark.parametrize("pairs, correction, expected", [
-    ([10, 10, 10, 10], "holm", [4 * 2 ** -9] * 4),
-    ([10, 6, 6, 6], "holm", [2 ** -9 * 4, 3 * 2 ** -5, 3 * 2 ** -5, 3 * 2 ** -5]),
-    ([10, 10, 10, 7], "holm", [4 * 2 ** -9, 4 * 2 ** -9, 4 * 2 ** -9, 2 ** -6]),
-    ([10, 7], "bonferroni", [2 * 2 ** -9, 2 * 2 ** -6]),
-    ([10, 7], "none", [2 ** -9, 2 ** -6]),
-    ([0, 3], "holm", [1.0, 0.5]),
+# ---- the run order ----
+
+def test_rotate_reverse_known_answers():
+    two = [plans.round_order(["A", "B"], r) for r in range(1, 5)]
+    assert ["".join(o) for o in two] == ["AB", "BA", "BA", "AB"]
+    three = [plans.round_order(["A", "B", "C"], r) for r in range(1, 7)]
+    assert ["".join(o) for o in three] == ["ABC", "BCA", "CAB", "CBA", "ACB", "BAC"]
+
+
+def test_balance_with_both_twins():
+    entries = plans.lineup("both")
+    assert [e["key"] for e in entries] == ["A", "A~same", "B", "B~same"]
+    for rounds in (8, 16, 24):
+        assert plans.balance(entries, rounds)["balanced"]
+    for rounds, behind in ((12, (7, 5)), (20, (11, 9))):
+        got = plans.balance(entries, rounds)
+        assert not got["balanced"]
+        assert got["pairs"]["B vs A"]["first_ran_first"] * 2 == rounds  # subject and baseline even
+        twin = got["pairs"]["A vs A~same"]
+        assert (twin["first_ran_first"], twin["second_ran_first"]) == behind
+    assert plans.balance(entries, 8)["step"] == 8
+
+
+def test_launches_of_the_default_plan():
+    entries = plans.lineup("both")
+    launches = plans.launch_order(entries, 8, True)
+    assert len(launches) == 34  # 2 warm-ups and 8 rounds of 4: 34 server starts
+    assert [(x["side"], x["kind"]) for x in launches[:2]] == [("A", "warmup"), ("B", "warmup")]
+    assert [x["side"] for x in launches[2:6]] == ["A", "A~same", "B", "B~same"]
+    assert [x["side"] for x in launches[6:10]] == ["A~same", "B", "B~same", "A"]
+    assert [x["side"] for x in launches[18:22]] == ["B~same", "B", "A~same", "A"]  # round 5, reversed
+    assert {x["of"] for x in launches if x["side"] == "B~same"} == {"B"}
+    assert [x["key"] for x in plans.lineup("A")] == ["A", "A~same", "B"]
+    assert [x["key"] for x in plans.lineup("none")] == ["A", "B"]
+
+
+# ---- the verdict table ----
+
+@pytest.mark.parametrize("ratio, p, better, outcome, reason", [
+    (0.90, 0.01, "lower", "better", None),       # M < 1 - bar, significant, lower is better: FASTER
+    (0.90, 0.01, "higher", "worse", None),       # the same for a rate: WORSE
+    (1.10, 0.01, "lower", "worse", None),        # SLOWER
+    (1.10, 0.01, "higher", "better", None),      # BETTER
+    (1.01, 0.30, "lower", "tie", None),          # inside the bar and not significant
+    (1.01, 0.01, "lower", "unresolved", "inside_noise"),
+    (1.10, 0.30, "lower", "unresolved", "not_significant"),
+    (1.10, 0.05, "lower", "unresolved", "not_significant"),  # p equal to alpha is not significant
 ])
-def test_each_metric_has_its_own_floor(pairs, correction, expected):
-    assert stats.floors(pairs, correction) == pytest.approx(expected)
+def test_grade(ratio, p, better, outcome, reason):
+    assert stats.grade(ratio, p, 0.05, better, 0.05) == (outcome, reason)
 
 
-def test_holm_floors_are_what_holm_gives_at_the_floors():
-    """With every metric at its own smallest p-value, Holm's adjusted p-value of the metric with the most pairs, and
-    the floor of the one with the fewest, are what `floors` says."""
-    pairs = [10, 6, 6, 6]
-    adjusted = stats.adjust([2.0 ** (1 - n) for n in pairs], "holm")
-    floors = stats.floors(pairs, "holm")
-    assert adjusted[0] == pytest.approx(floors[0])
-    assert min(adjusted[1:]) == pytest.approx(floors[1])
-    assert floors[1] > 0.05  # three 6-pair metrics cannot reach alpha next to a 10-pair one
+def test_exactly_on_the_bar_is_inside():
+    assert stats.grade(1.25, 0.30, 0.25, "lower", 0.05) == ("tie", None)
+    assert stats.grade(0.75, 0.01, 0.25, "lower", 0.05) == ("unresolved", "inside_noise")
 
 
-def test_verdict_words():
-    assert stats.SPEED_WORDS[stats.BETTER] == "FASTER" and stats.SPEED_WORDS[stats.WORSE] == "SLOWER"
-    assert stats.EFFICIENCY_WORDS[stats.BETTER] == "MORE_EFFICIENT"
-    assert set(stats.SPEED_WORDS) == set(stats.EFFICIENCY_WORDS) == {stats.BETTER, stats.TIE, stats.WORSE,
-                                                                      stats.INCONCLUSIVE}
+def test_words():
+    assert stats.word("better", "time") == "FASTER" and stats.word("worse", "time") == "SLOWER"
+    assert stats.word("better", "rate") == "BETTER" and stats.word("worse", "efficiency") == "WORSE"
+    assert [stats.word(o, "time") for o in ("tie", "unresolved", "no_verdict")] == ["TIE", "UNRESOLVED", "NO VERDICT"]
 
 
-def test_ratios_and_median():
-    assert stats.ratios([(2.0, 1.0), (1.0, 3.0)]) == [0.5, 3.0]
-    with pytest.raises(ValueError):
-        stats.ratios([(0.0, 1.0)])
-    with pytest.raises(ValueError):
-        stats.ratios([(1.0, math.inf)])
-    assert stats.median([3, 1, 2]) == 2
-    assert stats.median([4, 1, 2, 3]) == 2.5
-    with pytest.raises(ValueError):
-        stats.median([])
+def test_median_and_floor():
+    assert stats.median([3.0, 1.0, 2.0]) == 2.0 and stats.median([1.0, 2.0, 4.0, 3.0]) == 2.5
+    floor = stats.floor({1: 1.01, 2: 0.99, 3: 1.02, 4: 1.03, 5: 0.98, 6: 1.01, 7: 1.0, 8: 1.5})
+    assert floor.value == pytest.approx(0.01) and floor.n == 8 and not floor.provisional
+    assert floor.outlier_rounds == (8,)  # named, never dropped
+    assert stats.floor({1: 1.0, 2: 1.0}).provisional
+    assert stats.floor({}) is None
 
 
-def test_noise_floor():
-    floor = stats.noise([1.02, 0.98, 1.10])
-    assert floor.pairs == 3
-    assert floor.median_abs_change == pytest.approx(math.exp(abs(math.log(0.98))) - 1)
-    assert floor.max_abs_change == pytest.approx(0.10)
-    assert stats.noise([]).median_abs_change is None
+# ---- analyse: rows in, verdicts out ----
+
+CASES = [{"id": "t", "better": "lower", "kind": "time", "role": "primary", "group": "primary:t"}]
+
+
+def _rows(per_round: dict[str, list[float]], case: str = "t") -> tuple[list[dict], list[dict]]:
+    """Rows and positions for rounds 1..n of the given sides, in the default rotate-reverse order."""
+    keys = [k for k in ("A", "A~same", "B", "B~same") if k in per_round]
+    rows, positions = [], []
+    for i in range(len(next(iter(per_round.values())))):
+        order = plans.round_order(keys, i + 1)
+        for key in keys:
+            positions.append({"round": i + 1, "side": key, "pos": order.index(key) + 1})
+            rows.append({"round": i + 1, "pos": order.index(key) + 1, "side": key, "case": case,
+                         "value": per_round[key][i]})
+    return rows, positions
+
+
+TWINS = {"A~same": "A", "B~same": "B"}
+SECONDARY = [{**CASES[0], "role": "secondary"}]
+
+
+def _noisy(a: float, b: float, n: int = 8, sd: float = 0.02, seed: int = 7, keys=("A", "A~same", "B", "B~same")):
+    """Every launch its own noise: A and A~same around a, B and B~same around b."""
+    rng = random.Random(seed)
+    return {k: [(a if k.startswith("A") else b) * rng.gauss(1.0, sd) for _ in range(n)] for k in keys}
+
+
+def _one(per_round, twins=TWINS, cases=CASES, **kw) -> dict:
+    rows, positions = _rows(per_round)
+    return analyze.analyse(rows, positions, twins, cases, **kw)["comparisons"][0]
+
+
+def test_a_known_difference_reads_its_ratio_and_word():
+    got = _one(_noisy(10.0, 5.0), cases=SECONDARY)
+    assert got["ratio"] == pytest.approx(0.5, rel=0.03) and got["verdict"] == "FASTER" and got["outcome"] == "better"
+    assert got["n_lower"] == 8 and got["p_raw"] == 2 / 256 and got["bar"] > 0
+
+
+def test_identical_sides_tie_and_noise_free_sides_have_no_floor():
+    got = _one(_noisy(10.0, 10.0), cases=SECONDARY)
+    assert (got["outcome"], got["verdict"]) == ("tie", "TIE")
+    flat = _one({"A": [10.0] * 8, "A~same": [10.0] * 8, "B": [10.0] * 8, "B~same": [10.0] * 8}, cases=SECONDARY)
+    assert (flat["outcome"], flat["reason"]) == ("no_verdict", "zero_floor")
+
+
+def test_swapping_the_sides_flips_the_word():
+    base = _noisy(10.0, 12.0)
+    swapped = {"A": base["B"], "A~same": base["B~same"], "B": base["A"], "B~same": base["A~same"]}
+    one, two = _one(base, cases=SECONDARY), _one(swapped, cases=SECONDARY)
+    assert one["verdict"] == "SLOWER" and two["verdict"] == "FASTER"
+    assert one["ratio"] == pytest.approx(1 / two["ratio"], rel=0.02)
+
+
+def test_a_missing_twin_gives_no_verdict():
+    one = _one(_noisy(10.0, 5.0, keys=("A", "A~same", "B")), twins={"A~same": "A"})
+    assert (one["outcome"], one["reason"]) == ("no_verdict", "one_sided_floor")
+    none = _one(_noisy(10.0, 5.0, keys=("A", "B")), twins={})
+    assert (none["outcome"], none["reason"]) == ("no_verdict", "no_floor")
+
+
+def test_eighteen_of_twentyfour_alone_and_among_four():
+    # 18 rounds lower and 6 higher: p = 0.0227 alone (a verdict), above alpha once corrected for four cases.
+    signs = [0.8] * 18 + [1.2] * 6
+    noise = [1.0 + 0.002 * (i % 4) for i in range(24)]
+    base = {"A": [10.0] * 24, "A~same": [10.0 * x for x in noise], "B": [10.0 * s for s in signs],
+            "B~same": [10.0 * s * x for s, x in zip(signs, noise)]}
+    alone = _one(base)
+    assert alone["verdict"] == "FASTER" and alone["p_corrected"] == pytest.approx(0.0227, abs=1e-4)
+    rows, positions = _rows(base)
+    cases = [{"id": c, "better": "lower", "kind": "time", "role": "primary", "group": f"primary:{c}"}
+             for c in ("t", "u", "v", "w")]
+    for c in ("u", "v", "w"):  # three more cases with no difference at all
+        rows += [{**r, "case": c} for r in _rows(_noisy(10.0, 10.0, n=24, seed=ord(c)), c)[0]]
+    got = {c["case"]: c for c in analyze.analyse(rows, positions, TWINS, cases)["comparisons"]}
+    assert (got["t"]["outcome"], got["t"]["reason"]) == ("unresolved", "not_significant")
+    assert got["t"]["p_corrected"] > 0.05
+
+
+def test_significant_inside_the_bar_is_unresolved_never_tie():
+    noisy = _noisy(10.0, 10.0, sd=0.03)
+    per_round = {"A": [10.0] * 8, "A~same": noisy["A~same"], "B": [10.0 * 0.995] * 8, "B~same": noisy["B~same"]}
+    got = _one(per_round, cases=SECONDARY)  # all eight lower, by 0.5 %, against a bar of several percent
+    assert got["bar"] > 0.005 and (got["outcome"], got["reason"]) == ("unresolved", "inside_noise")
+
+
+def test_too_few_rounds_and_one_measurement():
+    got = _one(_noisy(10.0, 5.0, n=5))
+    assert (got["outcome"], got["reason"]) == ("no_verdict", "too_few_rounds")  # 1 primary case needs 6 rounds
+    one = _one(_noisy(10.0, 5.0, n=1))
+    assert (one["outcome"], one["reason"]) == ("no_verdict", "single_measurement") and one["p_raw"] is None
+
+
+def test_a_zero_figure_and_a_failed_side():
+    base = _noisy(10.0, 5.0)
+    zero = _one({**base, "B": [0.0] + base["B"][1:]})
+    assert (zero["outcome"], zero["reason"]) == ("no_verdict", "nonpositive_value")
+    rows, positions = _rows(base)
+    rows = [r for r in rows if not (r["side"] == "B" and r["round"] == 3)]
+    got = analyze.analyse(rows, positions, TWINS, CASES, faults=[{"round": 3, "side": "B", "case": "t"}])
+    row = got["comparisons"][0]
+    assert (row["outcome"], row["reason"]) == ("no_verdict", "side_failed") and row["lost"] == {"B": 1, "A": 0}
+    split = analyze.analyse(*_rows(base), TWINS, CASES, nodes=["n1", "n2"])
+    assert split["comparisons"][0]["reason"] == "more_than_one_node" and split["refusals"]
+
+
+def test_an_order_that_never_changes_is_unresolved():
+    rows, _ = _rows(_noisy(10.0, 5.0))
+    fixed = {"A": 1, "A~same": 2, "B": 3, "B~same": 4}
+    positions = [{"round": r["round"], "side": r["side"], "pos": fixed[r["side"]]} for r in rows]
+    got = analyze.analyse(rows, positions, TWINS, SECONDARY)["comparisons"][0]
+    assert (got["outcome"], got["reason"]) == ("unresolved", "order_unbalanced") and got["order_split"] == [0, 8]
+
+
+def test_the_floor_is_the_largest_over_its_group_and_a_twin_that_differs_is_loud():
+    cases = [{"id": i, "better": "lower", "kind": "time", "role": "secondary", "group": "secondary:t"}
+             for i in ("c1/t", "c8/t")]
+    rows, positions = [], []
+    for case, wide in (("c1/t", 1.01), ("c8/t", 1.04)):
+        r, p = _rows({"A": [10.0] * 8, "A~same": [10.0 / wide] * 8, "B": [10.0] * 8, "B~same": [10.0] * 8}, case)
+        rows += r
+        positions = p
+    got = analyze.analyse(rows, positions, TWINS, cases)
+    floors = {c["case"]: c["floor"]["baseline"]["value"] for c in got["comparisons"]}
+    assert floors["c1/t"] == pytest.approx(0.04) and floors["c8/t"] == pytest.approx(0.04)
+    assert any("differs from its twin" in note for note in got["notes"])

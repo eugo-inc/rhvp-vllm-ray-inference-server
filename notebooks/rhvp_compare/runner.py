@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The round loop: bring one side up, time its start, load it with GuideLLM, read its GPU power, take it down;
-round after round in the plan's order, writing the results file after every round.
+"""The launch loop: bring one side up, time its start, load it with GuideLLM, read its GPU power, take it down;
+launch after launch in the plan's order (a round runs every side and its twin once), writing the results file after
+every launch.
 
 The loop knows nothing about Kubernetes or docker: a Backend does the platform work (kube.py, dockerapi.py, or a
-fake one in the tests). A round that fails is recorded with its reason and a fixed failure code (ROUND_CODES), and
-the run goes on; the comparison then has one pair fewer for the metrics that round would have given.
+fake one in the tests). A launch that fails is recorded with its reason and a fixed failure code (LAUNCH_CODES), and
+the run goes on; the comparison then has one pair fewer for the cases that launch would have given. A twin is
+launched exactly like its side (the same image, arguments and settings); only its name in the lineup differs.
 
-SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the round: the round
-is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is saved as
-partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
+SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the launch: the
+launch is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is
+saved as partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
 slow teardown, so a teardown that runs out of time cannot leave it at 0.
 
 One run at a time. Before it touches anything (the results file, the status, the live server), the runner asks the
@@ -23,7 +25,7 @@ came to take it away is left as it is: nothing brings it back, and the run recor
 note, results.md and the log.
 
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
-table), and rounds/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
+table), and launches/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
 is already complete is not run again (so a Job that Argo CD creates a second time does nothing). See summary.py for
 the short views a reader gets without the results volume.
 """
@@ -51,28 +53,28 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-#: Fixed failure codes. A round's `error_code`, null when the round is ok:
-GPU_NOT_FREE = "GPU_NOT_FREE"          # another pod or program still held the GPU when the round was to start
+#: Fixed failure codes. A launch's `error_code`, null when the launch is ok:
+GPU_NOT_FREE = "GPU_NOT_FREE"          # another pod or program still held the GPU when the launch was to start
 SIDE_FAILED = "SIDE_FAILED"            # the side failed: bad image, pull failure, no node, or the server exited
 SIDE_NEVER_READY = "SIDE_NEVER_READY"  # the side did not list the model, or gave no answer, before its time limit
 LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its one retry), or its report is unusable
-STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the round
+STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the launch
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
-ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
-#: How many more times a side is started in one round when its server stopped at vLLM's start-up memory check
-#: (logs.memory_profiling_failed); recorded in the round's start_retries. A second such failure is SIDE_FAILED.
+LAUNCH_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
+#: How many more times a side is started in one launch when its server stopped at vLLM's start-up memory check
+#: (logs.memory_profiling_failed); recorded in the launch's start_retries. A second such failure is SIDE_FAILED.
 START_RETRIES = 1
-#: The run's `error_code`, null when every planned round finished:
-ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
-REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
-#                                      finished), so that level is left out (status partial)
+#: The run's `error_code`, null when every planned launch finished:
+LAUNCHES_FAILED = "LAUNCHES_FAILED"  # every launch ran and some failed (status partial)
+REQUESTS_FAILED = "REQUESTS_FAILED"  # every launch ran, but at some load level of some launch requests failed (or
+#                                      none finished), so that level is left out (status partial)
 RUN_TIMEOUT = "RUN_TIMEOUT"      # stopped near the Job's time limit (status partial); STOPPED for any other stop
-RUNNER_FAILED = "RUNNER_FAILED"  # the run failed outside a round, for example before the first one (status failed)
+RUNNER_FAILED = "RUNNER_FAILED"  # the run failed outside a launch, for example before the first one (status failed)
 PLAN_INVALID = "PLAN_INVALID"    # the config cannot be run; no results file, only the summary in the log and the
 #                                  termination message
 RUN_ACTIVE = "RUN_ACTIVE"        # another comparison was running, so this one did not start and changed nothing; no
 #                                  results file, only the summary in the log and the termination message
-RUN_CODES = (ROUNDS_FAILED, REQUESTS_FAILED, STOPPED, RUN_TIMEOUT, RUNNER_FAILED, PLAN_INVALID, RUN_ACTIVE)
+RUN_CODES = (LAUNCHES_FAILED, REQUESTS_FAILED, STOPPED, RUN_TIMEOUT, RUNNER_FAILED, PLAN_INVALID, RUN_ACTIVE)
 #: Exit codes of `python -m rhvp_compare run`.
 EXIT_COMPLETE, EXIT_PARTIAL, EXIT_CONFIG, EXIT_FAILED, EXIT_SERVER_NOT_RESTORED, EXIT_RUN_ACTIVE = 0, 1, 2, 3, 4, 5
 
@@ -84,7 +86,7 @@ FOUND_DOWN = "the live server was running when the run began but had stopped by 
 
 
 class RoundError(Exception):
-    """A round could not be measured; the message is safe to show and to store, the code is one of ROUND_CODES."""
+    """A launch could not be measured; the message is safe to show and to store, the code is one of LAUNCH_CODES."""
 
     def __init__(self, message: str, code: str = RUNNER_ERROR) -> None:
         super().__init__(message)
@@ -96,7 +98,7 @@ class RunActive(Exception):
 
 
 class Stopped(BaseException):
-    """Raised by the SIGTERM handler inside a round, so a stop does not wait for the round to finish. A
+    """Raised by the SIGTERM handler inside a launch, so a stop does not wait for the launch to finish. A
     BaseException, so no `except Exception` on the way swallows it."""
 
 
@@ -120,13 +122,13 @@ class Backend(Protocol):
 
     def gpu_free(self, plan: Mapping, side: Mapping) -> None: ...
 
-    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> Any: ...
+    def start(self, plan: Mapping, launch: Mapping, side: Mapping, spec: Mapping) -> Any: ...
 
     def endpoint(self, handle: Any, deadline: float) -> str: ...
 
     def alive(self, handle: Any) -> str | None: ...
 
-    def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path: ...
+    def run_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> Path: ...
 
     def sampler(self, plan: Mapping, handle: Any) -> Sampler | None: ...
 
@@ -143,7 +145,7 @@ class Backend(Protocol):
     # - `restore_server() -> bool | None`: bring back the live server the backend took away in prepare(); True once
     #   it is back (and checked), None when there was nothing to bring back; raises when it could not. Called again
     #   until it has worked, so it must do nothing once the server is back.
-    # - `restore_before_teardown` (bool): ask the server back as soon as a stop begins, before the round's side is
+    # - `restore_before_teardown` (bool): ask the server back as soon as a stop begins, before the launch's side is
     #   taken down (Kubernetes: its pod waits for the GPU); otherwise after the teardown (docker: no scheduler).
     # - `on_stop()`: a stop has begun; shorten the waits of what is left (log reads, deletes) to fit the grace period,
     #   and keep prepare() from taking the live server away if it has not yet (dockerapi.py: a stop during the image
@@ -164,8 +166,8 @@ def write_json(path: Path, data: Mapping) -> None:
     os.replace(tmp, path)
 
 
-def round_dir(round_: Mapping) -> str:
-    return f"rounds/{round_['index']:02d}-{round_['side']}-{round_['kind']}"
+def launch_dir(launch: Mapping) -> str:
+    return f"launches/{launch['index']:02d}-{plans.token(launch['side'])}-{launch['kind']}"
 
 
 class Runner:
@@ -204,7 +206,7 @@ class Runner:
                            "sides": {s["key"]: {"image": s["image"], "image_digest": None, "server_version": None}
                                      for s in self.plan["sides"]},
                            "gpu": None, "node": None, "nodes": [], "cluster": None},
-            "rounds": [],
+            "launches": [],
             "analysis": None,
         }
 
@@ -259,14 +261,14 @@ class Runner:
             self.backend.prepare(self.plan)
             self._found_down()
             self._describe()
-            for round_ in self.plan["rounds"]:
+            for launch in self.plan["launches"]:
                 if self._stopping:
                     self._begin_stop()
                     break
-                self.results["rounds"].append(self.measure(round_))
+                self.results["launches"].append(self.measure(launch))
                 self.save()
             self._settle()
-        except Stopped:  # a stop that landed outside a round's own handling
+        except Stopped:  # a stop that landed outside a launch's own handling
             self._begin_stop()
             self._settle()
         except Exception as error:  # recorded, then raised for the Job's exit code
@@ -341,21 +343,21 @@ class Runner:
     def _settle(self) -> None:
         """The run's status and failure code once the loop has ended."""
         run = self.results["run"]
-        failed = [r for r in self.results["rounds"] if r["status"] != "ok"]
-        done = len(self.results["rounds"]) == len(self.plan["rounds"])
+        failed = [r for r in self.results["launches"] if r["status"] != "ok"]
+        done = len(self.results["launches"]) == len(self.plan["launches"])
         if self._stopping:
             late = self.deadline_s is not None and self.clock() - self._t_start >= self.deadline_s - 300
             run["status"], run["error_code"] = "partial", (RUN_TIMEOUT if late else STOPPED)
             run["errors"].append("stopped near the Job's time limit" if late else "stopped by SIGTERM")
         elif failed or not done:
-            run["status"], run["error_code"] = "partial", ROUNDS_FAILED
+            run["status"], run["error_code"] = "partial", LAUNCHES_FAILED
         elif summary.levels_unusable(self.results):
             run["status"], run["error_code"] = "partial", REQUESTS_FAILED
         else:
             run["status"], run["error_code"] = "complete", None
 
     def _on_term(self, signum, frame) -> None:  # noqa: ARG002 (signal handler signature)
-        """Stop: inside a round, cut it short now (Stopped); between rounds, the loop stops before the next one. The
+        """Stop: inside a launch, cut it short now (Stopped); between launches, the loop stops before the next one. The
         backend's on_stop is called here at once, not left to _begin_stop: a stop that lands while prepare() runs (the
         image pulls under docker can take minutes) must reach the backend before prepare() goes on to take the live
         server away, and dockerapi.py then leaves the server running. Without this call, a stop during the pulls
@@ -377,31 +379,31 @@ class Runner:
             if facts.get(key):
                 self.results["provenance"][key] = facts[key]
 
-    # ---- one round ----
+    # ---- one launch ----
 
-    def measure(self, round_: Mapping) -> dict:
-        side = next(s for s in self.plan["sides"] if s["key"] == round_["side"])
+    def measure(self, launch: Mapping) -> dict:
+        side = next(s for s in self.plan["sides"] if s["key"] == launch["of"])  # a twin launches its side
         spec = plans.side_spec(self.plan, side)
-        rel = round_dir(round_)
+        rel = launch_dir(launch)
         out_dir = self.dir / rel
         out_dir.mkdir(parents=True, exist_ok=True)
-        record: dict = {"index": round_["index"], "side": round_["side"], "kind": round_["kind"],
-                        "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
-                        "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
-                        "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
-                        "start_retries": 0}
+        record: dict = {"index": launch["index"], "round": launch["round"], "pos": launch["pos"],
+                        "side": launch["side"], "of": launch["of"], "kind": launch["kind"], "status": "failed",
+                        "error": None, "error_code": None, "started_at": utc_now(), "finished_at": None,
+                        "node": None, "image_digest": None, "server_version": None, "startup": None, "levels": [],
+                        "values": {}, "artifacts": {}, "start_retries": 0}
         held: dict = {"handle": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
             try:
                 if self._stopping:
                     raise Stopped()
-                self._round(round_, side, spec, record, out_dir, rel, held)
+                self._launch(launch, side, spec, record, out_dir, rel, held)
                 record["status"] = "ok"
             finally:
                 self._interruptible = False
         except Stopped:
-            record["error"], record["error_code"] = "stopped by SIGTERM during the round", STOPPED
+            record["error"], record["error_code"] = "stopped by SIGTERM during the launch", STOPPED
             self._begin_stop()
         except RoundError as error:
             record["error"], record["error_code"] = str(error), error.code
@@ -409,10 +411,10 @@ class Runner:
             record["error"], record["error_code"] = str(error), SIDE_NEVER_READY if error.never_ready else SIDE_FAILED
         except (guidellm.LoadError, guidellm.ReportError) as error:
             record["error"], record["error_code"] = str(error), LOAD_FAILED
-        except Exception as error:  # a fault in one round must not lose the rounds before it
+        except Exception as error:  # a fault in one launch must not lose the launches before it
             record["error"], record["error_code"] = f"{type(error).__name__}: {error}", RUNNER_ERROR
         finally:
-            if self._stopping:  # also a stop that came in after the round's own work: the server back first
+            if self._stopping:  # also a stop that came in after the launch's own work: the server back first
                 self._begin_stop()
             if held["handle"] is not None:
                 self._after(held["handle"], record, out_dir, rel)
@@ -421,17 +423,17 @@ class Runner:
         record.pop("_started_epoch", None)
         return record
 
-    def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
-               held: dict) -> None:
+    def _launch(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+                held: dict) -> None:
         """Wait for the GPU, start the side, time its start, load it; any failure raises. A server that stopped at
         vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that start."""
-        timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
+        timeout = self.plan["server"]["warmup_timeout_s" if launch["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
         while True:
             self.backend.gpu_free(self.plan, side)
             record["_started_epoch"] = self.wall()
             t0 = self.clock()
-            handle = held["handle"] = self.backend.start(self.plan, round_, side, spec)
+            handle = held["handle"] = self.backend.start(self.plan, launch, side, spec)
             deadline = t0 + timeout
             target = self.backend.endpoint(handle, deadline)
             alive = lambda: self.backend.alive(handle)  # noqa: E731
@@ -451,14 +453,15 @@ class Runner:
                 held["handle"] = None  # torn down; the next start sets it
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
-        record["metrics"].update({"startup.ready_s": ready_s, "startup.first_answer_s": first_s})
-        if round_["kind"] != plans.WARMUP:
-            record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
-            record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+        record["values"].update({"startup/ready_s": ready_s, "startup/first_answer_s": first_s})
+        if launch["kind"] != plans.WARMUP:
+            record["levels"] = self._load(launch, handle, target, out_dir, rel, record)
+            record["values"].update(guidellm.flat_values(record["levels"]))
 
     def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception) -> bool:
         """When the server's log shows vLLM's memory-profiling check failing: keep that log as server.attempt-N.log,
-        take the side down and return True (the round starts it again). Anything else: False, and the round fails."""
+        take the side down and return True (the launch starts it again). Anything else: False, and the launch
+        fails."""
         try:
             text = self.backend.logs(handle)
         except Exception:
@@ -475,7 +478,7 @@ class Runner:
         self.backend.stop(handle)
         return True
 
-    def _load(self, round_: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
+    def _load(self, launch: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None
         if self.plan["energy"]["source"] != "none":
             try:
@@ -487,17 +490,17 @@ class Runner:
                 sampler = None
         try:
             try:
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
+                report_path = self.backend.run_load(self.plan, launch, target, out_dir)
             except guidellm.LoadError as error:
                 if not error.timed_out:
                     raise
                 # GuideLLM v0.8.1 now and then stops making progress at the end of a level (seen once in about
                 # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
-                # round.
+                # launch.
                 record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
                 if (out_dir / "guidellm.log").exists():
                     (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
+                report_path = self.backend.run_load(self.plan, launch, target, out_dir)
         finally:
             if sampler is not None:
                 try:
@@ -545,7 +548,7 @@ class Runner:
             level["energy"] = energy.level_energy(level, result, sampler.source)
 
     def _after(self, handle, record: dict, out_dir: Path, rel: str) -> None:
-        """Logs, facts and teardown, whatever happened in the round."""
+        """Logs, facts and teardown, whatever happened in the launch."""
         try:
             text = self.backend.logs(handle)
             (out_dir / "server.log").write_text(text, encoding="utf-8")
@@ -566,7 +569,7 @@ class Runner:
             record["node"] = facts.get("node_name")
             record["image_digest"] = facts.get("image_digest")
             prov = self.results["provenance"]
-            side = prov["sides"][record["side"]]
+            side = prov["sides"][record["of"]]  # a twin's image is its side's
             if record["image_digest"] and not side.get("image_digest"):
                 side["image_digest"] = record["image_digest"]
             if record.get("server_version") and not side.get("server_version"):
@@ -605,9 +608,30 @@ def exit_code(results: Mapping) -> int:
     return {"complete": EXIT_COMPLETE, "partial": EXIT_PARTIAL}.get(run.get("status"), EXIT_FAILED)
 
 
+def plan_lines(the_plan: Mapping) -> list[str]:
+    """What a plan allows, before anything runs: the lineup, the launches, and whether a verdict is possible."""
+    power = the_plan["power"]
+    names = ", ".join(e["key"] for e in the_plan["lineup"])
+    out = [f"run {the_plan['run_id']}: {the_plan['rounds']} rounds of {names}, {len(the_plan['launches'])} server "
+           f"starts, {power['family_size']} primary cases of {len(the_plan['cases'])} ({power['plain']})"]
+    if not power["both_twins"]:
+        out.append("note: without a twin for both sides no case can get a verdict (NO VERDICT: no_floor or "
+                   "one_sided_floor)")
+    elif not power["reachable"]:
+        out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
+                   f"verdict; with {the_plan['rounds']} every case gets NO VERDICT (too_few_rounds)")
+    else:
+        out.append(f"a verdict on a primary case needs {power['must_agree']} of the {the_plan['rounds']} rounds to "
+                   f"lean the same way; at most {power['max_primary_cases']} primary cases can get one")
+    if not the_plan["balance"]["balanced"]:
+        out.append(f"note: {the_plan['rounds']} rounds do not balance the run order; multiples of "
+                   f"{the_plan['balance']['step']} do")
+    return out
+
+
 def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping[str, str] | None = None) -> int:
-    """Build the plan, run it, print where the results are. The exit code: 0 when every round finished, 1 for a
-    partial run (so its Job reads Failed), 3 for a run that failed outside a round, 4 when the live server was not
+    """Build the plan, run it, print where the results are. The exit code: 0 when every launch finished, 1 for a
+    partial run (so its Job reads Failed), 3 for a run that failed outside a launch, 4 when the live server was not
     brought back (whatever else happened), 5 when another comparison was running (nothing changed). A config error
     raises PlanError (exit 2)."""
     env = os.environ if env is None else env
@@ -617,12 +641,8 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
     except plans.PlanError as error:
         _finish(summary.not_started(PLAN_INVALID, str(error)), termination_log)
         raise
-    floor = the_plan["floor"]
-    print(f"run {the_plan['run_id']}: {len(the_plan['rounds'])} rounds, {the_plan['pairs']} scored pairs, "
-          f"{floor['family_size']} primary metrics of {len(the_plan['metrics'])}", flush=True)
-    if not floor["reachable"]:
-        print(f"note: with {the_plan['pairs']} pairs the smallest adjusted p-value is {floor['min_adjusted_p']:.3g}; "
-              f"no primary metric can be FASTER or SLOWER below {floor['pairs_needed']} pairs", flush=True)
+    for line in plan_lines(the_plan):
+        print(line, flush=True)
     deadline = env.get("RHVP_COMPARE_DEADLINE_SECONDS")
     runner = Runner(the_plan, backend, Path(results_root), deadline_s=float(deadline) if deadline else None)
     try:
@@ -641,9 +661,9 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
     _finish(results, termination_log)
     run = results["run"]
     print(f"results: {runner.path} (status {run['status']}, code {run.get('error_code')})", flush=True)
-    for row in (results.get("analysis") or {}).get("metrics") or []:
-        print(f"  {row['label']} ({row.get('role', 'primary')}): {row['verdict']} (pairs {row['n_pairs']})",
-              flush=True)
+    for row in (results.get("analysis") or {}).get("comparisons") or []:
+        reason = f", {row['reason']}" if row.get("reason") else ""
+        print(f"  {row['case']} ({row['role']}): {row['verdict']}{reason} (rounds {row['n_rounds']})", flush=True)
     for line in run.get("errors") or []:
         print(f"error: {line}", flush=True)
     for line in run.get("notes") or []:

@@ -56,15 +56,17 @@ def test_a_level_with_errors_stays_out_of_the_comparison():
     report["benchmarks"][1]["metrics"]["request_totals"]["errored"] = 2
     levels = guidellm.levels(report)
     assert not levels[1]["usable"] and "2 requests failed" in levels[1]["note"]
-    flat = guidellm.flat_metrics(levels)
-    assert "c1.itl_ms_median" in flat and not any(k.startswith("c4.") for k in flat)
+    flat = guidellm.flat_values(levels)
+    assert "c1/itl_ms_median" in flat and not any(k.startswith("c4/") for k in flat)
 
 
-def test_flat_metrics_take_tokens_per_joule_from_the_energy_entry():
+def test_flat_values_take_tokens_per_joule_from_the_energy_entry():
     levels = guidellm.levels(REPORT)
     levels[0]["energy"] = {"tokens_per_joule": 2.5}
-    flat = guidellm.flat_metrics(levels)
-    assert flat["c1.tokens_per_joule"] == 2.5 and "c4.tokens_per_joule" not in flat
+    flat = guidellm.flat_values(levels)
+    assert flat["c1/tokens_per_joule[gpu]"] == 2.5 and "c4/tokens_per_joule[gpu]" not in flat
+    ids = {c["id"] for c in _plan()["cases"]}
+    assert set(guidellm.flat_values(guidellm.levels(REPORT))) <= ids  # the ids of the plan's cases
 
 
 @pytest.mark.parametrize("report", [{}, {"benchmarks": []}, {"benchmarks": [{"metrics": {}}]}])
@@ -179,13 +181,13 @@ def test_window_power_prefers_the_energy_counter():
     assert too_few.mean_w is None and "at least 2" in too_few.note
 
 
-def test_flat_metrics_keep_a_zero():
+def test_flat_values_keep_a_zero():
     levels = guidellm.levels(REPORT)
     levels[0]["output_tokens_per_s"] = 0.0
     levels[0]["energy"] = energy.level_energy(levels[0], energy.Power(150.0, 20, "power_mean", None), "nvidia-smi")
-    flat = guidellm.flat_metrics(levels)
+    flat = guidellm.flat_values(levels)
     c = levels[0]["concurrency"]
-    assert flat[f"c{c}.output_tokens_per_s"] == 0.0 and flat[f"c{c}.tokens_per_joule"] == 0.0
+    assert flat[f"c{c}/output_tokens_per_s"] == 0.0 and flat[f"c{c}/tokens_per_joule[gpu]"] == 0.0
     assert levels[0]["energy"]["joules_per_token"] is None
 
 
@@ -308,6 +310,13 @@ def test_image_digest_from_the_pod():
     assert kube.image_digest(pod) == "docker.io/x/a@sha256:abc"
     pod["status"]["containerStatuses"][0]["imageID"] = "docker-pullable://x/a@sha256:def"
     assert kube.image_digest(pod) == "x/a@sha256:def"
+    # A runtime that reports only the image's own id: the image the pod asked for, when it is pinned by digest.
+    pod["status"]["containerStatuses"][0]["imageID"] = "sha256:0123"
+    assert kube.image_digest(pod) is None
+    pod["spec"] = {"containers": [{"name": "server", "image": "quay.io/x/a:1@sha256:feed"}]}
+    assert kube.image_digest(pod) == "quay.io/x/a:1@sha256:feed"
+    pod["spec"]["containers"][0]["image"] = "quay.io/x/a:1"
+    assert kube.image_digest(pod) is None
     assert kube.image_digest({}) is None
 
 
@@ -445,12 +454,12 @@ def test_later_sides_run_on_the_first_sides_node():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    first = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    first = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
     assert "kubernetes.io/hostname" not in first["spec"]["nodeSelector"]
     backend.kube.node = lambda name: {"metadata": {"name": name, "labels": {"kubernetes.io/hostname": "gpu-1"}}}
     backend._pod = lambda handle, fresh=False: {"spec": {"nodeName": "gpu-1.example"}}
     assert backend.facts({"name": "p", "gpu": True})["node_name"] == "gpu-1.example"
-    later = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    later = backend.pod_body(plan, plan["launches"][2], side, plans.side_spec(plan, side))
     assert later["spec"]["nodeSelector"] == {"kubernetes.io/arch": "arm64", "kubernetes.io/hostname": "gpu-1"}
 
 
@@ -500,8 +509,8 @@ def test_a_side_pod_has_its_own_time_limit():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    warm = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
-    scored = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    warm = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
+    scored = backend.pod_body(plan, plan["launches"][2], side, plans.side_spec(plan, side))
     load = 2 * plan["load"]["timeout_s"] + plan["energy"]["settle_s"] + 600
     assert warm["spec"]["activeDeadlineSeconds"] == int(plan["server"]["warmup_timeout_s"] + load)
     assert scored["spec"]["activeDeadlineSeconds"] == int(plan["server"]["ready_timeout_s"] + load)
@@ -514,7 +523,7 @@ def test_guidellm_gets_the_token_only_when_real(secret, passed, monkeypatch, tmp
     backend.prepare(plan)
     seen = {}
     monkeypatch.setattr(guidellm, "run", lambda plan, target, out_dir, env=None: seen.setdefault("env", env))
-    backend.run_load(plan, plan["rounds"][2], "http://side:8000", tmp_path)
+    backend.run_load(plan, plan["launches"][2], "http://side:8000", tmp_path)
     assert seen["env"] == ({"HF_TOKEN": "hf_abc"} if passed else None)
 
 
@@ -523,11 +532,18 @@ def test_side_pod_like_the_patterns_server():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][1]
-    body = backend.pod_body(plan, plan["rounds"][3], side, plans.side_spec(plan, side))
+    twin = plan["launches"][5]  # launch 6: side B's twin in round 1, which launches side B
+    assert (twin["index"], twin["side"], twin["of"], twin["round"]) == (6, "B~same", "B", 1)
+    body = backend.pod_body(plan, twin, side, plans.side_spec(plan, side))
     spec = body["spec"]
     [container] = spec["containers"]
-    assert body["metadata"]["name"].startswith("cmp-") and body["metadata"]["name"].endswith("-r04-b")
-    assert body["metadata"]["labels"][kube.LABEL_RUN] == plan["run_id"]
+    assert body["metadata"]["name"] == f"cmp-{plan['run_id'][-8:]}-06-b-same"
+    labels = body["metadata"]["labels"]
+    assert labels[kube.LABEL_RUN] == plan["run_id"]
+    assert (labels["rhvp-compare/side"], labels["rhvp-compare/launch"], labels["rhvp-compare/round"]) == (
+        "B-same", "6", "1")
+    warm = backend.pod_body(plan, plan["launches"][1], side, plans.side_spec(plan, side))
+    assert warm["metadata"]["name"].endswith("-02-b") and warm["metadata"]["labels"]["rhvp-compare/round"] == "warmup"
     assert spec["restartPolicy"] == "Never" and spec["nodeSelector"] == {"kubernetes.io/arch": "arm64"}
     assert spec["tolerations"] == [{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}]
     assert container["resources"]["requests"]["nvidia.com/gpu"] == container["resources"]["limits"]["nvidia.com/gpu"]
@@ -549,7 +565,7 @@ def test_the_token_goes_in_by_reference_and_only_when_real(secret, referenced):
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    body = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    body = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
     env = {e["name"]: e for e in body["spec"]["containers"][0]["env"]}
     assert ("HF_TOKEN" in env) is referenced
     if referenced:
@@ -565,11 +581,11 @@ def test_a_side_without_a_gpu_and_the_ray_preset():
                        {"name": "b", "image": "x/b:1", "preset": "ray-serve-llm", "gpu": False}]
     plan = plans.build(config, "openshift")
     backend.prepare(plan)
-    mock = backend.pod_body(plan, plan["rounds"][0], plan["sides"][0], plans.side_spec(plan, plan["sides"][0]))
+    mock = backend.pod_body(plan, plan["launches"][0], plan["sides"][0], plans.side_spec(plan, plan["sides"][0]))
     assert mock["spec"]["tolerations"] == []
     assert "nvidia.com/gpu" not in json.dumps(mock["spec"]["containers"][0]["resources"])
     assert mock["spec"]["containers"][0]["command"] == ["guidellm", "mock-server"]
-    ray = backend.pod_body(plan, plan["rounds"][1], plan["sides"][1], plans.side_spec(plan, plan["sides"][1]))
+    ray = backend.pod_body(plan, plan["launches"][1], plan["sides"][1], plans.side_spec(plan, plan["sides"][1]))
     assert {"name": "config", "configMap": {"name": "ray-serve-llm-config"}} in ray["spec"]["volumes"]
     assert plan["energy"]["source"] == "none"
 
@@ -824,7 +840,7 @@ def test_a_signal_before_the_server_stop_leaves_it_running(tmp_path, sig, at):
     assert docker.server_state["Running"]
     run = results["run"]
     assert (run["status"], run["error_code"], run["server_restored"]) == ("partial", runner.STOPPED, None)
-    assert results["rounds"] == [] and run["server_found_down"] is None
+    assert results["launches"] == [] and run["server_found_down"] is None
     assert run["errors"] == ["stopped by SIGTERM"]  # the runner's words for any stop; no cleanup error
     assert signal.getsignal(sig) != the_runner._on_term  # the earlier handler is back
 

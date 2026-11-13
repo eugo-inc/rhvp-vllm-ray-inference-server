@@ -19,11 +19,11 @@ from pathlib import Path
 
 from rhvp_bench import draw
 
-from . import stats, summary, words
+from . import plan as plans, stats, summary, words
 
 GOOD, BAD, NEUTRAL, OPEN = "#1E7B45", "#B3261E", draw.MUTED, draw.AMBER
-VERDICT_COLOUR = {"FASTER": GOOD, "MORE_EFFICIENT": GOOD, "SLOWER": BAD, "LESS_EFFICIENT": BAD, "TIE": NEUTRAL,
-                  "INCONCLUSIVE": OPEN}
+VERDICT_COLOUR = {"FASTER": GOOD, "BETTER": GOOD, "SLOWER": BAD, "WORSE": BAD, "TIE": NEUTRAL, "UNRESOLVED": OPEN,
+                  "NO VERDICT": NEUTRAL}
 
 
 # ---- reading ----
@@ -44,10 +44,16 @@ def load_all() -> tuple[list[dict], list[str]]:
     found, problems = [], []
     for path in paths:
         try:
-            found.append(json.loads(path.read_text(encoding="utf-8")))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             problems.append((words.REPLAY_UNUSABLE if replay else words.UNREADABLE).format(
                 error=type(error).__name__))
+            continue
+        if isinstance(data, dict) and data.get("schema") == plans.SCHEMA:
+            found.append(data)
+        else:
+            schema = data.get("schema") if isinstance(data, dict) else None
+            problems.append(words.OLD_SCHEMA.format(schema=schema or "no schema"))
     found.sort(key=lambda r: (r.get("run") or {}).get("started_at") or "", reverse=True)
     return found, problems
 
@@ -91,8 +97,11 @@ def chip(verdict: str) -> str:
 
 
 def verdict_cell(row: dict) -> str:
-    """The verdict chip, marked "descriptive" for a secondary metric (its p-value is not corrected)."""
-    cell = chip(row.get("verdict", "INCONCLUSIVE"))
+    """The verdict chip with its reason, marked "descriptive" for a secondary case (its p-value is not corrected)."""
+    cell = chip(row.get("verdict", "NO VERDICT"))
+    if row.get("reason"):
+        cell += (f' <span data-rhvp="reason" style="font-size:11px;color:{draw.MUTED}">'
+                 f'{_t(words.REASON_TEXT.get(row["reason"], row["reason"]))}</span>')
     if row.get("role") == "secondary":
         cell += (f' <span data-rhvp="role" style="font-size:11px;color:{draw.MUTED}">'
                  f'{_t(words.SECONDARY_MARK)}</span>')
@@ -132,12 +141,11 @@ def _num(value, unit: str = "") -> str:
 
 
 def _ratio(row: dict) -> str:
-    if row.get("median_ratio") is None:
-        return words.NO_FIGURE
-    ci = row.get("ci") or {}
-    if ci.get("low") is None:
-        return f"{row['median_ratio']:.3f}"
-    return f"{row['median_ratio']:.3f} [{ci['low']:.3f}, {ci['high']:.3f}]"
+    return words.NO_FIGURE if row.get("ratio") is None else f"{row['ratio']:.3f}"
+
+
+def _bar(row: dict) -> str:
+    return words.NO_FIGURE if row.get("bar") is None else f"±{row['bar']:.1%}"
 
 
 def _p(value) -> str:
@@ -156,29 +164,34 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     if not results:
         return parts
     run, plan = results.get("run") or {}, results["plan"]
-    done = sum(1 for r in results.get("rounds") or [] if r.get("status") == "ok")
-    parts.append(line(words.RUN_LINE.format(run=run.get("id"), status=run.get("status"), done=done,
-                                            planned=len(plan["rounds"]), platform=run.get("platform"))))
+    launches = results.get("launches") or []
+    done = sum(1 for r in launches if r.get("status") == "ok")
+    complete, planned = summary.rounds(results)
+    parts.append(line(words.RUN_LINE.format(run=run.get("id"), status=run.get("status"), rounds=complete,
+                                            planned=planned, done=done, launches=len(plan["launches"]),
+                                            platform=run.get("platform"))))
     a, b = plan["sides"]
     parts.append(line(words.SIDE_LINE.format(a=f"{a['name']} ({a['image']})", b=f"{b['name']} ({b['image']})")))
-    failed = [f"{r['index']} ({r['error_code']})" if r.get("error_code") else str(r["index"])
-              for r in results.get("rounds") or [] if r.get("status") != "ok"]
+    failed = [f"{r['index']} ({r['side']}, {r['error_code']})" if r.get("error_code") else str(r["index"])
+              for r in launches if r.get("status") != "ok"]
     if failed:
-        parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
-    retried = [f"{r['index']} (side {r['side']})" for r in results.get("rounds") or [] if r.get("start_retries")]
+        parts.append(line(words.RUN_FAILED_LAUNCHES.format(launches=", ".join(failed))))
+    retried = [f"{r['index']} ({r['side']})" for r in launches if r.get("start_retries")]
     if retried:
-        parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
-    unusable = [f"round {u['index']} side {u['side']} at {u['concurrency']} streams"
+        parts.append(line(words.RUN_RETRIED.format(launches=", ".join(retried))))
+    unusable = [f"launch {u['index']} ({u['side']}) at {u['concurrency']} streams"
                 for u in summary.levels_unusable(results)]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
     if run.get("error_code"):
         parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
-    lost = [f"{row['label']} (A {row['pairs_lost']['A']}, B {row['pairs_lost']['B']})"
-            for row in (results.get("analysis") or {}).get("metrics") or []
-            if (row.get("pairs_lost") or {}).get("A") or (row.get("pairs_lost") or {}).get("B")]
+    analysis = results.get("analysis") or {}
+    lost = [f"{row['case']} (A {row['lost']['A']}, B {row['lost']['B']})"
+            for row in analysis.get("comparisons") or [] if any((row.get("lost") or {}).values())]
     if lost:
         parts.append(line(words.RUN_LOST.format(lost="; ".join(lost))))
+    if analysis.get("notes"):
+        parts.append(draw.notice(words.RUN_NOTES.format(notes="; ".join(analysis["notes"]))))
     if run.get("server_restored") is False:
         parts.append(draw.notice(words.RUN_SERVER))
     return parts
@@ -194,7 +207,11 @@ def _frame(run: str | None):
 
 
 def _rows(results: dict) -> dict[str, dict]:
-    return {row["id"]: row for row in (results.get("analysis") or {}).get("metrics") or []}
+    return {row["case"]: row for row in (results.get("analysis") or {}).get("comparisons") or []}
+
+
+def _labels(results: dict) -> dict[str, dict]:
+    return {case["id"]: case for case in results["plan"]["cases"]}
 
 
 # ---- the cells ----
@@ -213,33 +230,41 @@ def runs() -> None:
 def verdicts(run: str | None = None) -> None:
     results, parts = _frame(run)
     if results:
-        method = results["plan"]["analysis"]
-        floor = results["plan"]["floor"]
-        band = method["tie_band"]
+        plan = results["plan"]
+        power, rule = plan["power"], (results.get("analysis") or {}).get("rule") or {}
+        cases = _labels(results)
         everything = list(_rows(results).values())
-        for role, title, headers, p_key in (("primary", words.PRIMARY_TITLE, words.VERDICT_HEADERS, "p_adjusted"),
-                                            ("secondary", words.SECONDARY_TITLE, words.SECONDARY_HEADERS,
-                                             "p_value")):
-            rows = [[row["label"], _num(row.get("a_median"), row["unit"]), _num(row.get("b_median"), row["unit"]),
-                     _ratio(row), str(row["n_pairs"]), _p(row.get(p_key)), chip(row["verdict"])]
-                    for row in everything if row.get("role", "primary") == role]
+        for role, title, headers, p_key in (
+                ("primary", words.PRIMARY_TITLE.format(plain=rule.get("plain") or power["plain"]),
+                 words.VERDICT_HEADERS, "p_corrected"),
+                ("secondary", words.SECONDARY_TITLE, words.SECONDARY_HEADERS, "p_raw")):
+            rows = []
+            for row in everything:
+                if row.get("role", "primary") != role:
+                    continue
+                unit = cases.get(row["case"], {}).get("unit", "")
+                rows.append([cases.get(row["case"], {}).get("label", row["case"]),
+                             _num(row.get("baseline_median"), unit), _num(row.get("subject_median"), unit),
+                             _ratio(row), _bar(row), str(row["n_rounds"]), _p(row.get(p_key)), verdict_cell(row)])
             if rows:
                 parts.append(line(title))
                 parts.append(table(headers, rows, raw_last=True))
-        parts.append(line(words.METHOD_LINE.format(
-            test=words.TEST_NAMES.get(method["test"], method["test"]),
-            correction=words.CORRECTION_NAMES.get(method["correction"], method["correction"]),
-            family=floor["family_size"], alpha=method["alpha"], band=f"±{band:.0%}", low=1 / (1 + band),
-            high=1 + band)))
-        if not floor["reachable"]:
-            parts.append(draw.notice(words.FLOOR_NOTE.format(
-                pairs=results["plan"]["pairs"], family=floor["family_size"], floor=floor["min_adjusted_p"],
-                alpha=method["alpha"], needed=floor["pairs_needed"])))
+        parts.append(line(words.METHOD_LINE.format(family=power["family_size"],
+                                                   plain=rule.get("plain") or power["plain"],
+                                                   alpha=plan["analysis"]["alpha"])))
+        if not power["both_twins"]:
+            parts.append(draw.notice(words.TWINS_NONE))
+        elif power["must_agree"] is None or not power["reachable"]:
+            parts.append(draw.notice(words.POWER_NONE.format(rounds=plan["rounds"], family=power["family_size"],
+                                                             needed=power["min_rounds"])))
+        else:
+            parts.append(line(words.POWER_NOTE.format(rounds=plan["rounds"], family=power["family_size"],
+                                                      agree=power["must_agree"], most=power["max_primary_cases"])))
     draw.show(*parts)
 
 
 def _scored(results: dict, side: str) -> list[dict]:
-    return [r for r in results.get("rounds") or [] if r.get("kind") == "scored" and r.get("side") == side
+    return [r for r in results.get("launches") or [] if r.get("kind") == "scored" and r.get("side") == side
             and r.get("status") == "ok"]
 
 
@@ -252,13 +277,13 @@ def startup(run: str | None = None) -> None:
     if results:
         rows = _rows(results)
         table_rows = []
-        for metric, label in (("startup.ready_s", words.STARTUP_READY), ("startup.first_answer_s",
-                                                                         words.STARTUP_FIRST)):
-            row = rows.get(metric) or {}
-            table_rows.append([label, _num(row.get("a_median"), "s"), _num(row.get("b_median"), "s"),
+        for case, label in (("startup/ready_s", words.STARTUP_READY), ("startup/first_answer_s",
+                                                                       words.STARTUP_FIRST)):
+            row = rows.get(case) or {}
+            table_rows.append([label, _num(row.get("baseline_median"), "s"), _num(row.get("subject_median"), "s"),
                                _ratio(row) if row else words.NO_FIGURE, verdict_cell(row)])
         parts.append(table(words.STARTUP_HEADERS, table_rows, raw_last=True))
-        if any(rows.get(m, {}).get("role") == "secondary" for m in ("startup.ready_s", "startup.first_answer_s")):
+        if any(rows.get(c, {}).get("role") == "secondary" for c in ("startup/ready_s", "startup/first_answer_s")):
             parts.append(line(words.SECONDARY_NOTE))
         phases: dict[str, dict] = {}
         for side in ("A", "B"):
@@ -287,26 +312,26 @@ def energy(run: str | None = None) -> None:
             rows = _rows(results)
             table_rows, missing = [], []
             for c in plan["load"]["concurrencies"]:
-                row = rows.get(f"c{c}.tokens_per_joule") or {}
+                row = rows.get(f"c{c}/tokens_per_joule[gpu]") or {}
                 power = {}
                 for side in ("A", "B"):
                     values = [lv["energy"]["mean_power_w"] for r in _scored(results, side) for lv in r["levels"]
                               if lv.get("concurrency") == c and isinstance((lv.get("energy") or {}).get(
                                   "mean_power_w"), (int, float))]
                     power[side] = _median(values)
-                if not row.get("n_pairs"):
+                if not row.get("n_rounds"):
                     missing.append(str(c))
-                table_rows.append([str(c), _num(row.get("a_median"), "tokens/J"), _num(row.get("b_median"),
-                                                                                       "tokens/J"),
+                table_rows.append([str(c), _num(row.get("baseline_median"), "tokens/J"),
+                                   _num(row.get("subject_median"), "tokens/J"),
                                    _ratio(row) if row else words.NO_FIGURE, _num(power["A"], "W"),
                                    _num(power["B"], "W"), verdict_cell(row)])
             parts.append(table(words.ENERGY_HEADERS, table_rows, raw_last=True))
-            if any((rows.get(f"c{c}.tokens_per_joule") or {}).get("role") == "secondary"
+            if any((rows.get(f"c{c}/tokens_per_joule[gpu]") or {}).get("role") == "secondary"
                    for c in plan["load"]["concurrencies"]):
                 parts.append(line(words.SECONDARY_NOTE))
             parts.append(line(words.ENERGY_LINE.format(
                 source=words.ENERGY_SOURCE.get(plan["energy"]["source"], plan["energy"]["source"]),
-                label=plan["energy"]["label"])))
+                label=plan["energy"]["label"], samples=plan["energy"]["min_samples"])))
             if missing:
                 parts.append(line(words.ENERGY_MISSING.format(what=", ".join(missing))))
     draw.show(*parts)
@@ -336,14 +361,13 @@ def provenance(run: str | None = None) -> None:
             levels=", ".join(str(c) for c in load["concurrencies"]), seed=load["seed"],
             server_seed=plan["server"]["seed"])))
         parts.append(line(words.PLAN_LINE.format(
-            pairs=plan["pairs"], warmup=words.PLAN_WARMUP if plan.get("warmup") else "",
-            aa=words.PLAN_AA.format(n=plan["aa_pairs"]) if plan.get("aa_pairs") else "")))
-        noise = (results.get("analysis") or {}).get("noise_floor")
-        if noise:
-            labels = {m["id"]: m["label"] for m in plan["metrics"]}
-            parts.append(line(words.NOISE_NOTE))
-            parts.append(table(words.NOISE_HEADERS, [
-                [labels.get(n["id"], n["id"]), str(n["pairs"]),
-                 words.NO_FIGURE if n["median_abs_change"] is None else f"{n['median_abs_change']:.1%}",
-                 words.NO_FIGURE if n["max_abs_change"] is None else f"{n['max_abs_change']:.1%}"] for n in noise]))
+            rounds=plan["rounds"], lineup=", ".join(e["key"] for e in plan["lineup"]),
+            warmup=words.PLAN_WARMUP if plan.get("warmup") else "", launches=len(plan["launches"]))))
+        twins = (results.get("analysis") or {}).get("same_vs_same") or []
+        if twins:
+            labels = _labels(results)
+            parts.append(line(words.TWIN_NOTE))
+            parts.append(table(words.TWIN_HEADERS, [
+                [t["side"], labels.get(t["case"], {}).get("label", t["case"]), f"{t['ratio']:.3f}",
+                 f"{t['floor']:.1%}", str(t["n"]), _p(t.get("p_raw"))] for t in twins]))
     draw.show(*parts)

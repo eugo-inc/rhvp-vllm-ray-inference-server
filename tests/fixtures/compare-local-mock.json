@@ -7,7 +7,6 @@
     {"name": "mock-b", "image": "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081",
      "preset": "guidellm-mock", "args": ["--ttft-ms", "40", "--itl-ms", "10"]}
   ],
-  "rounds": {"pairs": 3, "warmup": false, "aaPairs": 1},
-  "load": {"concurrencies": [1, 4], "promptTokens": 64, "outputTokens": 32, "secondsPerLevel": 8},
-  "analysis": {"correction": "holm"}
+  "rounds": {"count": 2, "warmup": false, "twins": "both"},
+  "load": {"concurrencies": [1, 4], "promptTokens": 64, "outputTokens": 32, "secondsPerLevel": 8}
 }

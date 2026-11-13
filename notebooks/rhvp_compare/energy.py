@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Energy per token from GPU power: tokens per joule for each concurrency level of a round.
+"""Energy per token from GPU power: tokens per joule for each concurrency level of a launch.
 
 What is measured is GPU-only power: the board power the GPU itself reports. CPU, memory, fans and power-supply
 losses are not in it. Every figure carries that label.
@@ -11,7 +11,7 @@ Two sources of power samples, each a list of (time, watts):
   `DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION` (millijoules); 4.9.0 renames them `DCGM_FI_DEV_BOARD_POWER_WATTS` and
   `DCGM_FI_DEV_GPU_ENERGY_JOULES_TOTAL` (joules). Both names are read, the older first. The cluster's monitoring
   scrapes them, and the runner reads the raw samples of a window from the Thanos Querier with a range
-  selector (no interpolation). Which series belongs to the round's pod is found by the exporter's pod labels, or by
+  selector (no interpolation). Which series belongs to the launch's pod is found by the exporter's pod labels, or by
   the node when it has a single GPU series.
 - nvidia-smi, under docker (or anywhere DCGM is not there): `nvidia-smi --query-gpu=power.draw` every 500 ms in a
   container that sees the same GPU, each line timestamped by the container log.

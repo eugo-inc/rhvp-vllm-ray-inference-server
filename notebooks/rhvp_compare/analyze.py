@@ -1,206 +1,238 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The adapter between the results file and the statistics: reads `plan` and `rounds`, writes `analysis`.
+"""The adapter between the results file and the statistics: reads `plan` and `launches`, writes `analysis`.
 
-This is the boundary a replacement tool plugs into. It reads only:
+This is the boundary a replacement tool plugs into, in two steps:
 
-- `plan.analysis` (test, correction, alpha, tie band, minimum pairs, interval level),
-- `plan.metrics` (the declared metrics: id, label, unit, better, kind, role, concurrency),
-- `rounds[]` with `kind`, `pair`, `side`, `status`, `error_code`, `node`, `levels` (each level's `concurrency` and
-  `usable`) and the flat `metrics` map of each round,
+1. `inputs(results)` turns the results file into plain rows: one (round, position, side, case, value) per measured
+   launch and case, which side is whose twin, the cases, the launches that failed through the side's own doing, and
+   the nodes the launches ran on.
+2. `analyse(...)` takes those rows and returns the analysis: one comparison per case (side B against side A), the
+   twin comparisons, the rule and its family. It reads nothing else.
 
-and returns the `analysis` object that results.schema.json describes. The correction runs over the primary metrics
-only (role "primary"); a secondary metric's p-value is left uncorrected and its verdict is descriptive. A results file
-written before roles existed counts every metric as primary. Anything that reads the same fields and writes
-an `analysis` of the same shape can replace this module and stats.py together. Standard library only.
+Anything that takes the same rows and returns an `analysis` of the same shape can replace this module and stats.py
+together. Standard library only.
 
-Two checks run over the verdict stats.verdict gives, and make it INCONCLUSIVE:
+Two checks this pattern adds to the rule, because a failed launch does not stop a run here:
 
-- one side failing. A pair that lost a metric because one side failed in a way that is that side's doing (its round
-  failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at that load level, or its value of the
-  metric is 0, such as no output tokens: a 0 gives no ratio) is evidence against that side, and the pairs that are
-  left would overstate it. So any such pair makes the metric
-  INCONCLUSIVE, whichever side failed. Rounds that failed for other reasons (stopped, the GPU was not free, the
-  platform) and rounds not run leave no such mark. Every row says how many pairs it lost and why (`pairs_lost`).
-- more than one node. Scored rounds that ran on different nodes compare the nodes as much as the images.
+- a launch of side A or B that failed through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY
+  or LOAD_FAILED, or requests failed at the case's load level) leaves the pairs that are left overstating that side,
+  so the case gets NO VERDICT (side_failed), whichever side failed. A launch that failed for another reason (stopped,
+  the GPU not free, the platform) only means one pair fewer;
+- launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
+  (more_than_one_node).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from . import stats
 
-TOOL = {"name": "rhvp_compare.analyze", "version": "3"}
-#: Round failure codes that belong to the side itself (runner.ROUND_CODES; not imported, to keep this module alone).
+TOOL = {"name": "rhvp_compare.analyze", "version": "4"}
+#: Launch failure codes that belong to the side itself (runner.LAUNCH_CODES; not imported, to keep this module alone).
 SIDE_CODES = ("SIDE_FAILED", "SIDE_NEVER_READY", "LOAD_FAILED")
+SUBJECT, BASELINE = "B", "A"
 
 
-def _number(round_: Mapping, metric: str) -> float | None:
-    """The round's value of the metric when it is a finite number of 0 or more, else None (not measured)."""
-    value = (round_.get("metrics") or {}).get(metric)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+def _number(launch: Mapping, case: str) -> float | None:
+    """The launch's figure for the case when it is a finite number, else None (not measured)."""
+    value = (launch.get("values") or {}).get(case)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     return float(value)
 
 
-def _value(round_: Mapping, metric: str) -> float | None:
-    """A value a ratio can use: measured and above 0."""
-    value = _number(round_, metric)
-    return value if value is not None and value > 0 else None
+def _measured(results: Mapping) -> list[Mapping]:
+    return [r for r in results.get("launches") or [] if r.get("kind") == "scored" and isinstance(r.get("round"), int)]
 
 
-def paired(rounds: list[Mapping], kind: str, metric: str) -> list[tuple[float, float]]:
-    """(first, second) values per pair: (A, B) for scored pairs; for A/A pairs, the two A rounds in run order. A pair
-    where either value is missing or 0 gives no ratio; pairs_lost says why for the scored pairs."""
-    by_pair: dict[int, list[Mapping]] = {}
-    for r in rounds:
-        if r.get("kind") == kind and r.get("status") == "ok" and isinstance(r.get("pair"), int):
-            by_pair.setdefault(r["pair"], []).append(r)
-    out = []
-    for pair in sorted(by_pair):
-        members = sorted(by_pair[pair], key=lambda r: r.get("index", 0))
-        if kind == "scored":
-            a = next((r for r in members if r.get("side") == "A"), None)
-            b = next((r for r in members if r.get("side") == "B"), None)
-        else:
-            a, b = (members[0], members[1]) if len(members) >= 2 else (None, None)
-        if a is None or b is None:
-            continue
-        va, vb = _value(a, metric), _value(b, metric)
-        if va is not None and vb is not None:
-            out.append((va, vb))
-    return out
-
-
-def _side_fault(round_: Mapping | None, metric: Mapping) -> bool | None:
-    """Whether this round gives no usable value of the metric through the side's own doing: True (its round failed
-    with a side code, requests failed at the metric's load level, or it measured 0), False (missing for another
-    reason), None (a value a ratio can use)."""
-    if round_ is None:
+def _side_fault(launch: Mapping, case: Mapping) -> bool:
+    """Whether this launch gives no figure for the case through the side's own doing."""
+    if launch.get("status") != "ok":
+        return launch.get("error_code") in SIDE_CODES
+    if _number(launch, case["id"]) is not None:
         return False
-    if round_.get("status") != "ok":
-        return round_.get("error_code") in SIDE_CODES
-    value = _number(round_, metric["id"])
-    if value is not None:
-        return None if value > 0 else True  # 0: the side's own result, such as no output tokens at all
-    level = next((lv for lv in round_.get("levels") or [] if lv.get("concurrency") == metric.get("concurrency")),
+    level = next((lv for lv in launch.get("levels") or [] if lv.get("concurrency") == case.get("concurrency")),
                  None)
-    return bool(metric.get("concurrency") is not None and level is not None and level.get("usable") is False)
+    return case.get("concurrency") is not None and level is not None and level.get("usable") is False
 
 
-def pairs_lost(rounds: list[Mapping], metric: Mapping) -> dict[str, int]:
-    """Scored pairs that ran at least one round but give no ratio for the metric, by cause: "A" or "B" when only
-    that side failed through its own doing (a value of 0 included), "both" when both did, "other" for any other cause
-    (a round stopped, not run yet, the GPU not free, a missing power reading)."""
-    by_pair: dict[int, dict[str, Mapping]] = {}
-    for r in rounds:
-        if r.get("kind") == "scored" and isinstance(r.get("pair"), int) and r.get("side") in ("A", "B"):
-            by_pair.setdefault(r["pair"], {})[r["side"]] = r
-    out = {"A": 0, "B": 0, "both": 0, "other": 0}
-    for members in by_pair.values():
-        fault = {side: _side_fault(members.get(side), metric) for side in ("A", "B")}
-        if fault["A"] is None and fault["B"] is None:
-            continue  # this pair gives a ratio
-        if fault["A"] and fault["B"]:
-            out["both"] += 1
-        elif fault["A"]:
-            out["A"] += 1
-        elif fault["B"]:
-            out["B"] += 1
-        else:
-            out["other"] += 1
-    return out
+def inputs(results: Mapping) -> dict:
+    """The rows analyse() takes, from a results file (complete or partial)."""
+    plan = results["plan"]
+    cases = plan["cases"]
+    rows, faults = [], []
+    for launch in _measured(results):
+        for case in cases:
+            value = _number(launch, case["id"]) if launch.get("status") == "ok" else None
+            if value is not None:
+                rows.append({"round": launch["round"], "pos": launch["pos"], "side": launch["side"],
+                             "case": case["id"], "value": value})
+            elif _side_fault(launch, case):
+                faults.append({"round": launch["round"], "side": launch["side"], "case": case["id"]})
+    positions = {(launch["round"], launch["side"]): launch["pos"] for launch in _measured(results)}
+    nodes = sorted({r["node"] for r in _measured(results) if r.get("status") == "ok"
+                    and isinstance(r.get("node"), str) and r["node"]})
+    return {"rows": rows, "positions": [{"round": r, "side": s, "pos": p} for (r, s), p in sorted(positions.items())],
+            "twins": {e["key"]: e["twin_of"] for e in plan["lineup"] if e["twin_of"]},
+            "cases": cases, "faults": faults, "nodes": nodes, "alpha": plan["analysis"]["alpha"]}
 
 
-def nodes(rounds: list[Mapping]) -> list[str]:
-    """The nodes the scored rounds that finished ran on (none under docker)."""
-    return sorted({r["node"] for r in rounds if r.get("kind") == "scored" and r.get("status") == "ok"
-                   and isinstance(r.get("node"), str) and r["node"]})
+def _by_round(rows: Iterable[Mapping], side: str, case: str) -> dict[int, float]:
+    return {r["round"]: r["value"] for r in rows if r["side"] == side and r["case"] == case}
 
 
-def _side_median(rounds: list[Mapping], side: str, metric: str) -> float | None:
-    """The side's median over its scored rounds that measured the metric, rounds that measured 0 included."""
-    values = [v for r in rounds if r.get("kind") == "scored" and r.get("status") == "ok" and r.get("side") == side
-              and (v := _number(r, metric)) is not None]
-    return stats.median(values) if values else None
+def _paired(first: Mapping[int, float], second: Mapping[int, float]) -> list[int]:
+    return sorted(set(first) & set(second))
 
 
-def _role(metric: Mapping) -> str:
-    return metric.get("role") or "primary"
+def _floor_entry(floor: stats.Floor | None, case: str | None) -> dict | None:
+    if floor is None:
+        return None
+    return {"value": floor.value, "n": floor.n, "provisional": floor.provisional, "spread": floor.spread,
+            "outlier_rounds": list(floor.outlier_rounds), "case": case}
+
+
+def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, str], cases: list[Mapping],
+            alpha: float = 0.05, faults: Iterable[Mapping] = (), nodes: Iterable[str] = (),
+            subject: str = SUBJECT, baseline: str = BASELINE) -> dict:
+    """The analysis from plain rows. `rows`: round, pos, side, case, value. `positions`: round, side, pos of every
+    measured launch. `twins`: twin key -> the side it copies. `cases`: id, better, kind, role, group."""
+    rule = stats.strict(alpha)
+    pos = {(p["round"], p["side"]): p["pos"] for p in positions}
+    twin_of = {side: twin for twin, side in twins.items()}
+    fault_set = {(f["side"], f["case"], f["round"]) for f in faults}
+    nodes = list(nodes)
+    primary_ids = [c["id"] for c in cases if c.get("role", "primary") == "primary"]
+    needed = {"primary": stats.min_rounds(len(primary_ids), alpha), "secondary": stats.min_rounds(1, alpha)}
+
+    # Floors: per side and case, then the largest over each group.
+    case_floor: dict[tuple[str, str], stats.Floor | None] = {}
+    same_vs_same, notes = [], []
+    for side, twin in sorted(twin_of.items()):
+        for case in cases:
+            own, copy_ = _by_round(rows, side, case["id"]), _by_round(rows, twin, case["id"])
+            both = [r for r in _paired(own, copy_) if own[r] > 0 and copy_[r] > 0]
+            ratios = {r: own[r] / copy_[r] for r in both}
+            floor = stats.floor(ratios)
+            case_floor[(side, case["id"])] = floor
+            if floor is None:
+                continue
+            lower, higher = stats.signs(list(ratios.values()))
+            test = stats.sign_test(lower, higher) if floor.n > 1 else None
+            first = sum(1 for r in both if pos.get((r, side), 0) < pos.get((r, twin), 0))
+            same_vs_same.append({"side": side, "twin": twin, "case": case["id"], "n": floor.n, "ratio": floor.ratio,
+                                 "floor": floor.value, "spread": floor.spread,
+                                 "outlier_rounds": list(floor.outlier_rounds), "provisional": floor.provisional,
+                                 "p_raw": test.p if test else None, "order_split": [first, len(both) - first]})
+            if test and test.p < 0.05:
+                notes.append(f"side {side} differs from its twin on {case['id']} more often than chance (p = "
+                             f"{test.p:.3g}, uncorrected): the machine or the run order is biasing the run")
+    groups: dict[str, list[str]] = {}
+    for case in cases:
+        groups.setdefault(case.get("group") or case["id"], []).append(case["id"])
+
+    def group_floor(side: str, case: Mapping) -> tuple[stats.Floor | None, str | None]:
+        found = [(case_floor.get((side, cid)), cid) for cid in groups[case.get("group") or case["id"]]]
+        found = [(f, cid) for f, cid in found if f is not None]
+        if not found:
+            return None, None
+        return max(found, key=lambda pair: pair[0].value)
+
+    comparisons = []
+    for case in cases:
+        cid = case["id"]
+        s, b = _by_round(rows, subject, cid), _by_round(rows, baseline, cid)
+        paired = _paired(s, b)
+        positive = [r for r in paired if s[r] > 0 and b[r] > 0]
+        ratios = [s[r] / b[r] for r in positive]
+        lower, higher = stats.signs(ratios)
+        test = stats.sign_test(lower, higher) if len(positive) > 1 else None
+        ratio = stats.median(ratios) if ratios else None
+        first = sum(1 for r in positive if pos.get((r, subject), 0) < pos.get((r, baseline), 0))
+        fs, fs_case = group_floor(subject, case)
+        fb, fb_case = group_floor(baseline, case)
+        bar = fs.value + fb.value if fs is not None and fb is not None else None
+        role = case.get("role", "primary")
+        # Rounds one side lost through its own doing while the other did not: they would flatter the side that failed.
+        lost = {side: sum(1 for (fs_side, fc, r) in fault_set if fs_side == side and fc == cid
+                          and (other, cid, r) not in fault_set)
+                for side, other in ((subject, baseline), (baseline, subject))}
+        comparisons.append({
+            "case": cid, "subject": subject, "baseline": baseline, "role": role, "kind": case["kind"],
+            "better": case["better"], "group": case.get("group"),
+            "n_rounds": len(paired), "n_unpaired": len(set(s) ^ set(b)), "n_untied": lower + higher,
+            "n_lower": lower, "n_higher": higher,
+            "subject_median": stats.median(list(s.values())) if s else None,
+            "baseline_median": stats.median(list(b.values())) if b else None,
+            "ratio": ratio, "gap": abs(ratio - 1.0) if ratio is not None else None,
+            "ratios": ratios,
+            "floor": {"source": "twins", "subject": _floor_entry(fs, fs_case), "baseline": _floor_entry(fb, fb_case),
+                      "mode": "TWO-SIDED"},
+            "bar": bar, "p_raw": test.p if test else None, "p_raw_fraction": list(test.fraction) if test else None,
+            "p_corrected": None, "order_split": [first, len(positive) - first],
+            "lost": lost,
+            "_nonpositive": len(positive) != len(paired),
+        })
+
+    family = {c["case"]: c["p_raw"] for c in comparisons if c["role"] == "primary" and c["p_raw"] is not None}
+    corrected = stats.holm(family)
+    for c in comparisons:
+        c["p_corrected"] = corrected.get(c["case"])
+        c["outcome"], c["reason"] = _decide(c, rule, needed[c["role"]], twins, subject, baseline, len(nodes) > 1)
+        c["verdict"] = stats.word(c["outcome"], c["kind"])
+        c.pop("_nonpositive")
+
+    outcomes: dict[str, dict[str, int]] = {"primary": {}, "secondary": {}}
+    for c in comparisons:
+        outcomes[c["role"]][c["verdict"]] = outcomes[c["role"]].get(c["verdict"], 0) + 1
+    refusals = []
+    if len(nodes) > 1:
+        refusals.append({"code": "MORE_THAN_ONE_NODE", "scope": "experiment",
+                         "message": f"the measured launches ran on {len(nodes)} nodes"})
+    return {
+        "rule": {"name": rule.name, "fields": rule.fields(), "family_size": len(family),
+                 "plain": stats.plain_family(len(family)), "min_rounds": needed},
+        "comparisons": comparisons,
+        "same_vs_same": same_vs_same,
+        "refusals": refusals,
+        "notes": notes,
+        "outcomes": outcomes,
+    }
+
+
+def _decide(c: Mapping, rule: stats.Rule, needed: int, twins: Mapping[str, str], subject: str, baseline: str,
+            split: bool) -> tuple[str, str | None]:
+    """(outcome, reason) of one comparison: the reasons it cannot be graded first, then the verdict table, then the
+    order check."""
+    if split:
+        return stats.NO_VERDICT, stats.MORE_THAN_ONE_NODE
+    if any(c["lost"].values()):
+        return stats.NO_VERDICT, stats.SIDE_FAILED
+    if c["_nonpositive"]:
+        return stats.NO_VERDICT, stats.NONPOSITIVE_VALUE
+    if c["n_rounds"] == 1:
+        return stats.NO_VERDICT, stats.SINGLE_MEASUREMENT
+    if c["n_rounds"] < needed:
+        return stats.NO_VERDICT, stats.TOO_FEW_ROUNDS
+    fs, fb = c["floor"]["subject"], c["floor"]["baseline"]
+    if fs is None and fb is None:
+        return stats.NO_VERDICT, stats.NO_FLOOR
+    if fs is None or fb is None:
+        return stats.NO_VERDICT, stats.ONE_SIDED_FLOOR
+    if fs["value"] == 0 or fb["value"] == 0:
+        return stats.NO_VERDICT, stats.ZERO_FLOOR
+    p = c["p_corrected"] if c["role"] == "primary" else c["p_raw"]
+    outcome, reason = stats.grade(c["ratio"], p, c["bar"], c["better"], rule.alpha)
+    if outcome in (stats.BETTER, stats.WORSE, stats.TIE) and stats.order_unbalanced(c["order_split"]):
+        return stats.UNRESOLVED, stats.ORDER_UNBALANCED
+    return outcome, reason
 
 
 def analyze(results: Mapping) -> dict:
     """The `analysis` section for a results file (complete or partial)."""
-    plan = results["plan"]
-    method = plan["analysis"]
-    metrics = plan["metrics"]
-    rounds = list(results.get("rounds") or [])
-    family = sum(1 for m in metrics if _role(m) == "primary")
-
-    rows, extra = [], {}
-    split = len(nodes(rounds)) > 1
-    for metric in metrics:
-        pairs = paired(rounds, "scored", metric["id"])
-        ratio_list = stats.ratios(pairs)
-        sign = stats.sign_test(ratio_list)
-        wilcoxon = stats.wilcoxon_test(ratio_list)
-        interval = stats.median_interval(ratio_list, method["ci_level"])
-        test = sign if method["test"] == "sign" else wilcoxon
-        rows.append({
-            "id": metric["id"], "label": metric["label"], "unit": metric["unit"], "better": metric["better"],
-            "kind": metric["kind"], "role": _role(metric), "n_pairs": len(ratio_list),
-            "pairs_lost": pairs_lost(rounds, metric),
-            "a_median": _side_median(rounds, "A", metric["id"]), "b_median": _side_median(rounds, "B", metric["id"]),
-            "ratios": ratio_list,
-            "median_ratio": stats.median_ratio(ratio_list) if ratio_list else None,
-            "ci": {"low": interval.low, "high": interval.high, "level": interval.level},
-            "p_sign": sign.p, "p_wilcoxon": wilcoxon.p,
-            "p_value": test.p,
-        })
-        extra[metric["id"]] = (interval, test.direction)
-
-    primary = [row for row in rows if row["role"] == "primary"]
-    for row, p_adj in zip(primary, stats.adjust([row["p_value"] for row in primary], method["correction"])):
-        row["p_adjusted"] = p_adj
-    primary_floor = dict(zip((row["id"] for row in primary),
-                             stats.floors([row["n_pairs"] for row in primary], method["correction"])))
-    for row in rows:
-        if row["role"] == "primary":
-            p_adj, reachable = row["p_adjusted"], primary_floor[row["id"]] <= method["alpha"]
-        else:  # descriptive: the same rule on the uncorrected p-value
-            p_adj, reachable = row["p_value"], stats.floor_p(row["n_pairs"], 1, "none") <= method["alpha"]
-        interval, direction = extra[row["id"]]
-        decided = stats.verdict(row["median_ratio"], p_adj, row["better"], method["tie_band"], method["alpha"],
-                                row["n_pairs"], method["min_pairs"], reachable, interval, direction)
-        if decided.outcome != stats.INCONCLUSIVE:
-            if split:
-                decided = stats.Verdict(stats.INCONCLUSIVE, stats.REASON_NODES)
-            elif row["pairs_lost"]["A"] or row["pairs_lost"]["B"]:
-                decided = stats.Verdict(stats.INCONCLUSIVE, stats.REASON_ONE_SIDE)
-        words = stats.EFFICIENCY_WORDS if row["kind"] == "efficiency" else stats.SPEED_WORDS
-        row.update({"p_adjusted": p_adj if row["role"] == "primary" else None, "reachable": reachable,
-                    "outcome": decided.outcome, "verdict": words[decided.outcome], "reason": decided.reason})
-
-    noise_rows = []
-    if any(r.get("kind") == "aa" for r in rounds):
-        for metric in metrics:
-            aa = stats.ratios(paired(rounds, "aa", metric["id"]))
-            floor = stats.noise(aa)
-            noise_rows.append({"id": metric["id"], "pairs": floor.pairs, "median_abs_change": floor.median_abs_change,
-                               "max_abs_change": floor.max_abs_change})
-
-    usable = [row["n_pairs"] for row in primary]
-    outcomes: dict[str, dict[str, int]] = {"primary": {}, "secondary": {}}
-    for row in rows:
-        outcomes[row["role"]][row["verdict"]] = outcomes[row["role"]].get(row["verdict"], 0) + 1
-    return {
-        "tool": dict(TOOL),
-        "method": {**method, "family_size": family,
-                   "pairs_planned": plan.get("pairs"),
-                   "pairs_usable_min": min(usable) if usable else 0,
-                   "min_adjusted_p": min(primary_floor.values()) if primary_floor else 1.0},
-        "metrics": rows,
-        "outcomes": outcomes,
-        "noise_floor": noise_rows or None,
-    }
+    given = inputs(results)
+    out = analyse(given["rows"], given["positions"], given["twins"], given["cases"], given["alpha"],
+                  given["faults"], given["nodes"])
+    return {"tool": dict(TOOL), **out, "nodes": given["nodes"]}

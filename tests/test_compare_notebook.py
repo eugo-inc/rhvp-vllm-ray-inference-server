@@ -23,7 +23,7 @@ SYNTHETIC = NOTEBOOKS / "compare-recordings" / "synthetic.json"
 sys.path.insert(0, str(NOTEBOOKS))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from rhvp_compare import cells, example, words  # noqa: E402
+from rhvp_compare import cells, example, show, words  # noqa: E402
 from test_notebook_rules import CAUSE, HARDWARE, VENDOR, _strings, _visible  # noqa: E402
 
 SCHEMA = json.loads((NOTEBOOKS / "rhvp_compare" / "results.schema.json").read_text())
@@ -65,9 +65,11 @@ def test_synthetic_results_are_flagged_and_valid():
     assert data["run"]["synthetic"] is True
     assert all(s["image"].startswith("registry.example/") for s in data["plan"]["sides"])
     assert data == json.loads(example.text(example.synthesize()))
-    verdicts = {row["id"]: row["verdict"] for row in data["analysis"]["metrics"]}
-    assert verdicts["c8.itl_ms_median"] == "FASTER" and verdicts["startup.ready_s"] == "TIE"
-    assert verdicts["c32.tokens_per_joule"] == "MORE_EFFICIENT"
+    verdicts = {row["case"]: row["verdict"] for row in data["analysis"]["comparisons"]}
+    assert verdicts["c8/itl_ms_median"] == "FASTER" and verdicts["c1/ttft_ms_median"] == "TIE"
+    assert verdicts["c32/tokens_per_joule[gpu]"] == "BETTER" and verdicts["c32/output_tokens_per_s"] == "BETTER"
+    assert data["analysis"]["rule"]["plain"] == "corrected for testing 4 cases at once"
+    assert len(data["launches"]) == len(data["plan"]["launches"]) == 34
 
 
 def _execute(tmp_path, env: dict[str, str]):
@@ -109,14 +111,18 @@ def test_replay_run(tmp_path):
         assert not VENDOR.search(text) and not HARDWARE.search(text) and not CAUSE.search(text), cell_id
     verdicts = _visible(shown["s1-show"])
     assert "inter-token latency, median, 8 concurrent" in verdicts and "FASTER" in verdicts and "TIE" in verdicts
-    assert re.search(r"0\.\d{3} \[0\.\d{3}, 0\.\d{3}\]", verdicts)
+    assert "UNRESOLVED" in verdicts and words.REASON_TEXT["not_significant"] in verdicts
+    assert re.search(r"\b[01]\.\d{3}\b", verdicts) and re.search(r"±\d+\.\d%", verdicts)  # B/A and its bar
+    assert "corrected for testing 4 cases at once" in verdicts
     assert "loading the weights" in _visible(shown["s2-show"])
     # Secondary verdicts (time to ready; tokens per joule below the top level) are marked descriptive.
     assert words.SECONDARY_NOTE in _visible(shown["s2-show"]) and words.SECONDARY_NOTE in _visible(shown["s3-show"])
     assert words.SECONDARY_TITLE in verdicts
-    assert "DCGM" in _visible(shown["s3-show"]) and "MORE_EFFICIENT" in _visible(shown["s3-show"])
+    energy = _visible(shown["s3-show"])
+    assert "DCGM" in energy and "BETTER" in energy and "GPU-only power" in energy
     provenance = _visible(shown["s4-show"])
-    assert "registry.example/inference-server@sha256:" in provenance and "A/A pairs" in provenance
+    assert "registry.example/inference-server@sha256:" in provenance and "A~same" in provenance
+    assert words.TWIN_NOTE in provenance
 
 
 def test_run_from_a_results_volume_and_from_an_empty_one(tmp_path):
@@ -130,3 +136,17 @@ def test_run_from_a_results_volume_and_from_an_empty_one(tmp_path):
     empty.mkdir()
     shown = _execute(tmp_path / "b", {"RHVP_COMPARE_RESULTS": str(empty)})
     assert all(words.NO_RESULTS in _visible(markup) for markup in shown.values())
+
+
+def test_a_results_file_of_the_earlier_rule_is_skipped_with_a_notice(tmp_path, monkeypatch):
+    for name, schema in (("old-run", "rhvp-image-compare/1"), ("new-run", None)):
+        (tmp_path / name).mkdir()
+        data = json.loads(SYNTHETIC.read_text())
+        if schema:
+            data["schema"] = schema
+        (tmp_path / name / "results.json").write_text(json.dumps(data))
+    monkeypatch.delenv("RHVP_COMPARE_REPLAY", raising=False)
+    monkeypatch.setenv("RHVP_COMPARE_RESULTS", str(tmp_path))
+    found, problems = show.load_all()
+    assert len(found) == 1 and found[0]["schema"] == "rhvp-image-compare/2"
+    assert problems == [words.OLD_SCHEMA.format(schema="rhvp-image-compare/1")]

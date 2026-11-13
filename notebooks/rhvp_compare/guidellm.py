@@ -1,16 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-"""GuideLLM (https://github.com/vllm-project/guidellm): the command line for one round, and the round's figures out
-of its JSON report. Written against GuideLLM v0.8.1's `guidellm run` and its report (metadata.version 2).
+"""GuideLLM (https://github.com/vllm-project/guidellm): the command line for one launch, and the launch's figures
+out of its JSON report. Written against GuideLLM v0.8.1's `guidellm run` and its report (metadata.version 2).
 
 GuideLLM runs as a child process of the runner: the runner's container is the GuideLLM image, with this package
 added (on OpenShift an init container copies it from the notebook image; under docker it is mounted from the repo).
 So the load comes from the same place on both platforms, and the report lands straight in the results folder.
 
-One run of GuideLLM per round measures every concurrency level in turn (the `concurrent` profile with one
+One run of GuideLLM per launch measures every concurrency level in turn (the `concurrent` profile with one
 `profile.streams` override per level). Each level runs for a fixed time; requests still running when the time is up
 are "incomplete", which is expected. A level with any errored request is kept in the results file but marked not
 usable, and its figures stay out of the comparison: an average over failed requests would compare failures.
-Standard library only.
+
+The figures are GuideLLM's own per-level medians. The report keeps a timing record for every request
+(benchmarks[].requests.successful, .errored and .incomplete, with time to first token, inter-token latency and token
+counts): `--metrics sample_size=0` drops only each request's prompt and output text (GuideLLM v0.8.1 keeps the timing
+of every request whatever the sample size), so per-request statistics can be worked out again from the raw report
+in each launch's folder. Standard library only.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from collections.abc import Mapping
 
 
 def command(plan: Mapping, target: str, output_path: str) -> list[str]:
-    """The arguments after `guidellm` for one round against the server at `target`."""
+    """The arguments after `guidellm` for one launch against the server at `target`."""
     load, model = plan["load"], plan["model"]
     levels = [str(c) for c in load["concurrencies"]]
     tokenizer = f"kind=huggingface_auto,model={load['tokenizer']}"
@@ -166,19 +171,19 @@ def levels(report: Mapping) -> list[dict]:
     return out
 
 
-def flat_metrics(level_list: list[Mapping]) -> dict[str, float]:
-    """The comparison's per-round figures from the usable levels (keys as in plan.metric_family). A figure of 0 is
-    kept (a level whose requests finished without one output token has 0 tokens per second): the analysis counts it
-    as a pair lost to that side instead of leaving the pair out unseen."""
+def flat_values(level_list: list[Mapping]) -> dict[str, float]:
+    """The comparison's per-launch figures from the usable levels (case ids as in plan.case_family). A figure of 0
+    is kept (a level whose requests finished without one output token has 0 tokens per second): the analysis gives
+    that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")
         if c is None or not level.get("usable"):
             continue
-        pairs = {f"c{c}.ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
-                 f"c{c}.itl_ms_median": (level.get("itl_ms") or {}).get("median"),
-                 f"c{c}.output_tokens_per_s": level.get("output_tokens_per_s"),
-                 f"c{c}.tokens_per_joule": (level.get("energy") or {}).get("tokens_per_joule")}
+        pairs = {f"c{c}/ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
+                 f"c{c}/itl_ms_median": (level.get("itl_ms") or {}).get("median"),
+                 f"c{c}/output_tokens_per_s": level.get("output_tokens_per_s"),
+                 f"c{c}/tokens_per_joule[gpu]": (level.get("energy") or {}).get("tokens_per_joule")}
         out.update({k: float(v) for k, v in pairs.items()
                     if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0})
     return out
