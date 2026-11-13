@@ -177,6 +177,16 @@ def test_window_power_prefers_the_energy_counter():
     assert too_few.mean_w is None and "at least 2" in too_few.note
 
 
+def test_flat_metrics_keep_a_zero():
+    levels = guidellm.levels(REPORT)
+    levels[0]["output_tokens_per_s"] = 0.0
+    levels[0]["energy"] = energy.level_energy(levels[0], energy.Power(150.0, 20, "power_mean", None), "nvidia-smi")
+    flat = guidellm.flat_metrics(levels)
+    c = levels[0]["concurrency"]
+    assert flat[f"c{c}.output_tokens_per_s"] == 0.0 and flat[f"c{c}.tokens_per_joule"] == 0.0
+    assert levels[0]["energy"]["joules_per_token"] is None
+
+
 def test_level_energy():
     level = {"output_tokens_per_s": 300.0, "duration_s": 10.0}
     entry = energy.level_energy(level, energy.Power(150.0, 20, "power_mean", None), "nvidia-smi")

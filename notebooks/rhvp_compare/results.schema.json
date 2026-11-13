@@ -1050,10 +1050,10 @@
         },
         "metrics": {
           "type": "object",
-          "description": "The round's figure for each metric id in plan.metrics that it measured (positive numbers only). The analysis reads only this map.",
+          "description": "The round's figure for each metric id in plan.metrics that it measured (0 or more). A 0, such as 0 output tokens per second, gives no ratio: the analysis counts that pair as lost to this side (pairs_lost). The analysis reads only this map.",
           "additionalProperties": {
             "type": "number",
-            "exclusiveMinimum": 0
+            "minimum": 0
           }
         },
         "artifacts": {
@@ -1234,7 +1234,7 @@
             "both",
             "other"
           ],
-          "description": "Scored pairs that ran at least one round but give no ratio for this metric, by cause. A or B: only that side failed on its own account (its round failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at this metric's load level); both: both sides did; other: any other cause (a round stopped, not run yet, the GPU not free, a missing power reading). Any A or B makes the verdict INCONCLUSIVE (reason pairs_lost_to_one_side_failing).",
+          "description": "Scored pairs that ran at least one round but give no ratio for this metric, by cause. A or B: only that side failed on its own account (its round failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at this metric's load level, or its value was 0); both: both sides did; other: any other cause (a round stopped, not run yet, the GPU not free, a missing power reading). Any A or B makes the verdict INCONCLUSIVE (reason pairs_lost_to_one_side_failing).",
           "properties": {
             "A": {
               "type": "integer",

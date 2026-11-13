@@ -188,8 +188,8 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   still runs.
 - The verdict rule (`stats.verdict`, then `analyze.py`): TIE needs the median ratio and its whole interval inside
   the tie band; FASTER or SLOWER needs the corrected p-value at most alpha and the test leaning the same way as the
-  median; a metric that lost a pair to one side failing on its own account, and every metric of a run whose rounds
-  used more than one node, is INCONCLUSIVE.
+  median; a metric that lost a pair to one side failing on its own account (a value of 0, which gives no ratio,
+  counts as such a loss), and every metric of a run whose rounds used more than one node, is INCONCLUSIVE.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: it reads `plan` and `rounds` of the results
   file and writes `analysis`. Another tool that writes the same `analysis` shape can replace `analyze.py` and
   `stats.py`.

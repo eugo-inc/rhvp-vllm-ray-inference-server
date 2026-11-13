@@ -72,10 +72,11 @@ class FakeBackend:
 
     def __init__(self, fail_round: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
                  load_error: bool = False, term_in_round: int | None = None, errored: dict | None = None,
-                 nodes: tuple[str, ...] = ("node-1",)):
+                 nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None):
         self.fail_round, self.hang_once, self.fail_code = fail_round, hang_once, fail_code
         self.load_error, self.term_in_round = load_error, term_in_round
         self.errored = errored or {}  # round index -> the concurrency level where 40 requests fail
+        self.zero = zero or {}  # round index -> the concurrency level whose requests finish with no output token
         self.nodes = nodes  # the node of round i is nodes[i % len(nodes)]
         self.started, self.stopped, self.prepared, self.cleaned = [], [], False, False
         self.events: list = []
@@ -122,6 +123,8 @@ class FakeBackend:
             metrics["inter_token_latency_ms"]["successful"]["median"] *= slower * wobble
             metrics["output_tokens_per_second"]["total"]["mean"] /= slower * wobble
             metrics["time_to_first_token_ms"]["successful"]["median"] *= wobble
+            if bench["config"]["strategy"]["streams"] == self.zero.get(round_["index"]):
+                metrics["output_tokens_per_second"]["total"]["mean"] = 0.0
         path = out_dir / "guidellm.json"
         path.write_text(json.dumps(data))
         return path
@@ -516,6 +519,41 @@ def test_requests_that_fail_on_one_side_make_its_metrics_inconclusive(tmp_path):
     text = (the_runner.dir / "results.md").read_text()
     assert "round 4 (side B, scored), 4 streams: 40 requests failed" in text
     assert "side A 0, side B 2" in text
+
+
+def test_a_zero_from_one_side_is_a_pair_lost_to_it_not_a_pair_left_out(tmp_path):
+    """Side B's requests at 4 streams finish but give no output token in two of its scored rounds: 0 tokens per
+    second and 0 tokens per joule there. A 0 gives no ratio. Those two pairs used to drop out unseen, and the 8 left
+    decided the verdict (SLOWER here); now they are pairs lost to side B, and both metrics are INCONCLUSIVE."""
+    results, _, the_runner = run(tmp_path, FakeBackend(zero={4: 4, 8: 4}),
+                                 rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
+    jsonschema.validate(results, SCHEMA)
+    b4 = next(r for r in results["rounds"] if r["index"] == 4)
+    assert b4["side"] == "B" and b4["metrics"]["c4.output_tokens_per_s"] == 0
+    assert b4["metrics"]["c4.tokens_per_joule"] == 0
+    rows = {row["id"]: row for row in results["analysis"]["metrics"]}
+    for metric in ("c4.output_tokens_per_s", "c4.tokens_per_joule"):
+        assert rows[metric]["n_pairs"] == 8
+        assert rows[metric]["pairs_lost"] == {"A": 0, "B": 2, "both": 0, "other": 0}
+        assert (rows[metric]["verdict"], rows[metric]["reason"]) == ("INCONCLUSIVE", "pairs_lost_to_one_side_failing")
+    assert rows["c4.itl_ms_median"]["pairs_lost"]["B"] == 0 and rows["c4.itl_ms_median"]["n_pairs"] == 10
+    assert "side A 0, side B 2" in (the_runner.dir / "results.md").read_text()
+
+
+def test_a_zero_counts_against_the_side_that_measured_it():
+    metric = {"id": "c4.output_tokens_per_s", "concurrency": 4}
+
+    def scored(pair, side, value):
+        return {"kind": "scored", "pair": pair, "side": side, "status": "ok", "index": 2 * pair + (side == "B"),
+                "metrics": {} if value is None else {metric["id"]: value},
+                "levels": [{"concurrency": 4, "usable": True}]}
+    rounds = [scored(1, "A", 100.0), scored(1, "B", 0.0),   # B measured 0: lost to B
+              scored(2, "A", 0), scored(2, "B", 0.0),       # both measured 0
+              scored(3, "A", 0.0), scored(3, "B", None),    # A measured 0, B's figure is missing: lost to A
+              scored(4, "A", 100.0), scored(4, "B", 120.0)]
+    assert analyze.paired(rounds, "scored", metric["id"]) == [(100.0, 120.0)]
+    assert analyze.pairs_lost(rounds, metric) == {"A": 1, "B": 1, "both": 1, "other": 0}
+    assert analyze._side_median(rounds, "B", metric["id"]) == 0.0  # the zeros are in the side's median
 
 
 def test_a_round_the_side_itself_failed_counts_against_it(tmp_path):
