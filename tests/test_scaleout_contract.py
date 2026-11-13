@@ -1,6 +1,9 @@
 """The scale-out settings contract: the keys and their defaults, the rules both the values check and the charts
 apply, the rhvp-scale log line, the per-start launch record and the comparison's mode. None of them need Ray, a GPU
-or a cluster; the render tests use the one render of tests/conftest.py and are skipped the same way."""
+or a cluster; the render tests use the one render of tests/conftest.py and are skipped the same way.
+
+These tests hold only what stays true once the scale-out work is built: what the comparison refuses until then,
+and whether a round must carry `launches`, are tested in test_compare_runner.py."""
 
 from __future__ import annotations
 
@@ -56,16 +59,18 @@ def chart_values(**over) -> dict:
 
 def test_defaults_change_nothing():
     server = SERVER_VALUES["server"]
-    assert server["autoscaling"] == {"minReplicas": 1, "maxReplicas": 1, "targetOngoingRequests": None}
+    scaling = server["autoscaling"]
+    assert scaling["minReplicas"] == 1 and scaling["maxReplicas"] == 1
+    assert "targetOngoingRequests" in scaling and scaling["targetOngoingRequests"] is None
     assert "minReplicas" not in server and "maxReplicas" not in server
     assert server["gpuPerReplica"] == 1 and server["gpuCount"] == 1
     assert server["metricsPort"] == 8080
-    assert SERVER_VALUES["compileCache"] == {"mode": "none"}
+    assert SERVER_VALUES["compileCache"]["mode"] == "none"
     assert SERVER_VALUES["modelStorage"]["accessMode"] == "ReadWriteOnce"
     assert set(SERVER_VALUES["scaleOut"]) >= {"minPods", "maxPods", "waitingRequestsPerPod", "pollingIntervalSeconds",
                                               "cooldownSeconds", "thanosUrl"}
-    assert SERVER_VALUES["global"]["scaleOut"] == {"mode": "none"}
-    assert GLOBAL["global"]["scaleOut"] == {"mode": "none"}
+    assert SERVER_VALUES["global"]["scaleOut"]["mode"] == "none"
+    assert GLOBAL["global"]["scaleOut"]["mode"] == "none"
     assert GLOBAL["global"]["compare"]["mode"] == "pairs"
     assert pattern_settings.check(chart_values()) == []
 
@@ -255,8 +260,7 @@ def test_launch_record_matches_the_schema():
         validator.validate(item)
     assert set(SCHEMA["$defs"]["launch"]["required"]) <= set(override)
     assert set(SCHEMA["$defs"]["launch"]["properties"]) == set(override)
-    assert "launches" in SCHEMA["$defs"]["round"]["properties"]
-    assert "launches" not in SCHEMA["$defs"]["round"]["required"]
+    assert SCHEMA["$defs"]["round"]["properties"]["launches"]["items"] == {"$ref": "#/$defs/launch"}
     with pytest.raises(ValueError):
         launch.record(0, None, [], None, "none")
     with pytest.raises(ValueError):
@@ -278,14 +282,9 @@ def test_compare_mode_pairs_keeps_the_run_id():
     config = json.loads((REPO / "tests/fixtures/compare-local-mock.json").read_text())
     assert "mode" not in config
     assert plans.build(config, "docker")["run_id"] == plans.build({**config, "mode": "pairs"}, "docker")["run_id"]
-    assert "mode" not in plans.build(config, "docker")
 
 
-@pytest.mark.parametrize("mode, message", [
-    ("scaleout", "mode scaleout (the scale-out benchmark) is designed but not built yet"),
-    ("surge", "mode must be one of pairs, scaleout"),
-])
-def test_compare_mode_refused(mode, message):
+def test_compare_mode_unknown_refused():
     config = json.loads((REPO / "tests/fixtures/compare-local-mock.json").read_text())
-    with pytest.raises(plans.PlanError, match=message.replace("(", r"\(").replace(")", r"\)")):
-        plans.build({**config, "mode": mode}, "docker")
+    with pytest.raises(plans.PlanError, match="mode must be one of pairs, scaleout"):
+        plans.build({**config, "mode": "surge"}, "docker")

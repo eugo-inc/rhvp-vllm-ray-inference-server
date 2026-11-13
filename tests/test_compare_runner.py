@@ -215,6 +215,14 @@ def test_plan_rejects_bad_configs():
         plans.build({**config(), "analysis": {"correction": "sidak"}})
 
 
+def test_plan_refuses_the_scale_out_mode_until_it_is_built():
+    # Lift this when the scale-out benchmark is built; then make launches required if every round writes it.
+    with pytest.raises(plans.PlanError, match=r"mode scaleout \(the scale-out benchmark\) is designed but not built"):
+        plans.build({**config(), "mode": "scaleout"}, "docker")
+    assert "mode" not in plans.build(config(), "docker")
+    assert "launches" not in SCHEMA["$defs"]["round"]["required"]
+
+
 def test_plan_declares_everything_before_the_run():
     plan = plans.build(config(), "openshift")
     assert plan["energy"]["source"] == "dcgm" and plans.build(config(), "docker")["energy"]["source"] == "nvidia-smi"
