@@ -21,6 +21,12 @@ Two checks this pattern adds to the rule, because a failed launch does not stop 
 - launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
   (more_than_one_node).
 
+A figure of 0 or less gives no ratio. In a pair of B and A the case gets NO VERDICT (nonpositive_value). In a side's
+comparison with its twin, that side has no noise floor on the case, and every case whose floor uses it (the case's
+floor group) gets NO VERDICT (nonpositive_value) too. The floor is never taken from the rounds that are left: which
+rounds those are would be chosen after seeing a figure. `nonpositive_twins` names the side, the rounds and the cases,
+and so does a note.
+
 A launch whose GuideLLM timed out runs again from a new start of the side (runner.LOAD_RETRIES), so it can finish
 with figures like any other. Every time-out still counts against its side: `load_timeouts` per side over the whole
 run (twins included) and per comparison over its paired rounds, so a load that stalls on one side only is never
@@ -34,7 +40,7 @@ from collections.abc import Iterable, Mapping
 
 from . import stats
 
-TOOL = {"name": "rhvp_compare.analyze", "version": "4"}
+TOOL = {"name": "rhvp_compare.analyze", "version": "5"}
 #: Launch failure codes that belong to the side itself (runner.LAUNCH_CODES; not imported, to keep this module alone).
 SIDE_CODES = ("SIDE_FAILED", "SIDE_NEVER_READY", "LOAD_FAILED")
 SUBJECT, BASELINE = "B", "A"
@@ -117,17 +123,29 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
     primary_ids = [c["id"] for c in cases if c.get("role", "primary") == "primary"]
     needed = {"primary": stats.min_rounds(len(primary_ids), alpha), "secondary": stats.min_rounds(1, alpha)}
 
-    # Floors: per side and case, then the largest over each group.
+    groups: dict[str, list[str]] = {}
+    for case in cases:
+        groups.setdefault(case.get("group") or case["id"], []).append(case["id"])
+
+    def group_of(case: Mapping) -> list[str]:
+        return groups[case.get("group") or case["id"]]
+
+    # Floors: per side and case, then the largest over each group. A figure of 0 or less on either side of a
+    # comparison with the twin leaves that side without a floor on the case (nonpositive), never with a smaller one.
     case_floor: dict[tuple[str, str], stats.Floor | None] = {}
+    nonpositive: dict[tuple[str, str], dict] = {}
     same_vs_same, notes, differs = [], [], []
     for side, twin in sorted(twin_of.items()):
         for case in cases:
             own, copy_ = _by_round(rows, side, case["id"]), _by_round(rows, twin, case["id"])
-            both = [r for r in _paired(own, copy_) if own[r] > 0 and copy_[r] > 0]
-            zero = [r for r in _paired(own, copy_) if copy_[r] <= 0 < own[r]]  # side A or B at 0: nonpositive_value
-            if zero:
-                notes.append(f"side {side}'s twin had a figure of 0 on {case['id']} in round(s) "
-                             f"{', '.join(map(str, zero))}; those rounds are left out of side {side}'s floor")
+            both = _paired(own, copy_)
+            at_zero = {"side_rounds": [r for r in both if own[r] <= 0],
+                       "twin_rounds": [r for r in both if copy_[r] <= 0]}
+            if at_zero["side_rounds"] or at_zero["twin_rounds"]:
+                nonpositive[(side, case["id"])] = {"side": side, "twin": twin, "case": case["id"], **at_zero,
+                                                   "cases": list(group_of(case))}
+                case_floor[(side, case["id"])] = None
+                continue
             ratios = {r: own[r] / copy_[r] for r in both}
             floor = stats.floor(ratios)
             case_floor[(side, case["id"])] = floor
@@ -139,20 +157,25 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             same_vs_same.append({"side": side, "twin": twin, "case": case["id"], "n": floor.n, "ratio": floor.ratio,
                                  "floor": floor.value, "spread": floor.spread,
                                  "outlier_rounds": list(floor.outlier_rounds), "provisional": floor.provisional,
-                                 "p_raw": test.p if test else None, "order_split": [first, len(both) - first],
-                                 "zero_rounds": zero})
+                                 "p_raw": test.p if test else None, "order_split": [first, len(both) - first]})
             if test and test.p < 0.05:
                 differs.append((side, case["id"], max(lower, higher), lower + higher, test.p))
+    for entry in nonpositive.values():  # the round and the side, then what it costs
+        where = ([f"side {entry['side']} in round(s) {', '.join(map(str, entry['side_rounds']))}"]
+                 if entry["side_rounds"] else [])
+        where += ([f"its twin in round(s) {', '.join(map(str, entry['twin_rounds']))}"] if entry["twin_rounds"] else [])
+        notes.append(f"side {entry['side']}'s comparison with its twin on {entry['case']} has a figure of 0 "
+                     f"({'; '.join(where)}): side {entry['side']} has no noise floor for {', '.join(entry['cases'])}, "
+                     f"and those cases get NO VERDICT (nonpositive_value)")
     tested = sum(1 for row in same_vs_same if row["p_raw"] is not None)
     for side, case_id, most, untied, p in differs:  # what was measured; never a cause
         notes.append(f"side {side} and its twin differed on {case_id} the same way in {most} of {untied} rounds (p = "
                      f"{p:.3g}, not corrected for the {tested} comparisons of a side with its twin)")
-    groups: dict[str, list[str]] = {}
-    for case in cases:
-        groups.setdefault(case.get("group") or case["id"], []).append(case["id"])
 
     def group_floor(side: str, case: Mapping) -> tuple[stats.Floor | None, str | None]:
-        found = [(case_floor.get((side, cid)), cid) for cid in groups[case.get("group") or case["id"]]]
+        if any((side, cid) in nonpositive for cid in group_of(case)):
+            return None, None
+        found = [(case_floor.get((side, cid)), cid) for cid in group_of(case)]
         found = [(f, cid) for f, cid in found if f is not None]
         if not found:
             return None, None
@@ -192,7 +215,8 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             "p_corrected": None, "order_split": [first, len(positive) - first],
             "lost": lost,
             "load_timeouts": {side: sum(1 for r in paired if timed_out.get((r, side))) for side in (subject, baseline)},
-            "_nonpositive": len(positive) != len(paired),
+            "_nonpositive": len(positive) != len(paired) or any(
+                (side, other) in nonpositive for side in (subject, baseline) for other in group_of(case)),
         })
 
     family = {c["case"]: c["p_raw"] for c in comparisons if c["role"] == "primary" and c["p_raw"] is not None}
@@ -220,6 +244,7 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
                  "plain": stats.plain_family(len(family)), "min_rounds": needed},
         "comparisons": comparisons,
         "same_vs_same": same_vs_same,
+        "nonpositive_twins": list(nonpositive.values()),
         "refusals": refusals,
         "notes": notes,
         "outcomes": outcomes,

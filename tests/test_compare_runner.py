@@ -832,13 +832,29 @@ def test_a_stop_while_the_sampler_stops_after_a_time_out_still_counts_it(tmp_pat
     assert results["analysis"]["load_timeouts"]["A"] == 1
 
 
-def test_a_twins_zero_is_shown_in_the_notebook(tmp_path):
+def test_a_twins_zero_gives_its_floor_group_no_verdict_and_is_shown_in_the_notebook(tmp_path):
     # Launch 7 is B~same in round 2: its 4-stream level finishes with no output token.
-    results, _, _ = run(tmp_path, FakeBackend(zero={7: 4}), rounds={"count": 2, "warmup": False})
-    rows = [t for t in results["analysis"]["same_vs_same"] if t["zero_rounds"]]
-    assert rows and {t["side"] for t in rows} == {"B"} and all(t["zero_rounds"] == [2] for t in rows)
+    results, _, the_runner = run(tmp_path, FakeBackend(zero={7: 4}), rounds={"count": 2, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    analysis = results["analysis"]
+    zeros = {t["case"]: t for t in analysis["nonpositive_twins"]}
+    assert set(zeros) == {"c4/output_tokens_per_s", "c4/tokens_per_joule[gpu]"}
+    assert all((t["side"], t["side_rounds"], t["twin_rounds"]) == ("B", [], [2]) for t in zeros.values())
+    assert not {(t["side"], t["case"]) for t in analysis["same_vs_same"]} & {("B", case) for case in zeros}
+    cases = results["plan"]["cases"]
+    groups = {t["case"]: {c["id"] for c in cases if c["group"] == next(x for x in cases if x["id"] == t["case"])["group"]}
+              for t in zeros.values()}
+    assert all(set(zeros[case]["cases"]) == group for case, group in groups.items())
+    rows = rows_of(results)
+    for case in set().union(*groups.values()):
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
+        assert rows[case]["floor"]["subject"] is None and rows[case]["bar"] is None
+    assert any(n.startswith("side B's comparison with its twin on c4/output_tokens_per_s has a figure of 0 (its twin "
+                            "in round(s) 2)") for n in analysis["notes"])
+    assert "has a figure of 0 (its twin in round(s) 2)" in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
-    assert "figure was 0 where its side" in head and "on c4/output_tokens_per_s, round 2" in head
+    assert "comparison with its twin gives no ratio" in head
+    assert "twin on c4/output_tokens_per_s in round 2 (no verdict for c" in head
 
 
 def test_the_plan_note_below_the_secondary_minimum_says_the_secondary_cases_get_none_either():
@@ -1028,6 +1044,12 @@ def test_a_zero_from_one_side_gives_no_verdict(tmp_path):
         assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
     assert rows["c4/itl_ms_median"]["verdict"] == "SLOWER" and rows["c4/itl_ms_median"]["n_rounds"] == 8
     assert "NO VERDICT (nonpositive_value)" in (the_runner.dir / "results.md").read_text()
+    # B's 0 also sits in B's comparison with its twin: B has no floor on those cases' groups, named with the rounds.
+    zeros = {t["case"]: t for t in results["analysis"]["nonpositive_twins"]}
+    assert set(zeros) == {"c4/output_tokens_per_s", "c4/tokens_per_joule[gpu]"}
+    assert all((t["side"], t["side_rounds"], t["twin_rounds"]) == ("B", [1, 2], []) for t in zeros.values())
+    for case in {c for t in zeros.values() for c in t["cases"]}:
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value")
 
 
 def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):

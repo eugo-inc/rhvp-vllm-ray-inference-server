@@ -89,9 +89,11 @@ TWIN_DIFFERS = ("A side leaned the same way against its twin in more rounds than
                 "These p-values are not corrected for the {tested} comparisons of a side with its twin in this run; "
                 "with that many, one this low can turn up by chance.")
 TWIN_DIFFERS_CASE = "side {side} on {case} (p = {p})"
-TWIN_ZERO = ("A twin's figure was 0 where its side's was not, so those rounds are left out of that side's noise "
-             "floor: {cases}.")
-TWIN_ZERO_CASE = "side {side}'s twin on {case}, round {rounds}"
+TWIN_ZERO = ("A figure of 0 in a side's comparison with its twin gives no ratio: that side has no noise floor there, "
+             "and every case whose floor uses it has NO VERDICT (a figure of 0): {cases}.")
+TWIN_ZERO_CASE = "{who} on {case} in round {rounds} (no verdict for {affected})"
+TWIN_ZERO_SIDE = "side {side}"
+TWIN_ZERO_TWIN = "side {side}'s twin"
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----

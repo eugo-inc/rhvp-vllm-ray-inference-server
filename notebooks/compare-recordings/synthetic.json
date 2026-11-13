@@ -7673,7 +7673,7 @@
  "analysis": {
   "tool": {
    "name": "rhvp_compare.analyze",
-   "version": "4"
+   "version": "5"
   },
   "rule": {
    "name": "strict",
@@ -8707,8 +8707,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8724,8 +8723,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8741,8 +8739,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8758,8 +8755,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8775,8 +8771,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8795,8 +8790,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8814,8 +8808,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8831,8 +8824,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8848,8 +8840,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8865,8 +8856,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8882,8 +8872,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8899,8 +8888,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8916,8 +8904,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "A",
@@ -8933,8 +8920,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -8950,8 +8936,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -8967,8 +8952,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -8984,8 +8968,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9001,8 +8984,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9018,8 +9000,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9035,8 +9016,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9052,8 +9032,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9069,8 +9048,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9086,8 +9064,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9103,8 +9080,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9122,8 +9098,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9139,8 +9114,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9156,8 +9130,7 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    },
    {
     "side": "B",
@@ -9173,10 +9146,10 @@
     "order_split": [
      4,
      4
-    ],
-    "zero_rounds": []
+    ]
    }
   ],
+  "nonpositive_twins": [],
   "refusals": [],
   "notes": [],
   "outcomes": {

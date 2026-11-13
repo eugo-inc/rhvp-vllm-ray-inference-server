@@ -200,12 +200,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`inside_noise`, `not_significant`, or `order_unbalanced` when one side ran first more than 3 times as often).
   `no_verdict` comes first when a case cannot be graded, checked in this order: `more_than_one_node`, `side_failed`
   (a launch of A or B failed on its own account where the other did not; pattern-only, like the node check),
-  `nonpositive_value`, `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary family, or of one
+  `nonpositive_value` (a 0 in a pair of B and A, or in a side's pair with its twin, which takes the side's floor on
+  that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary family, or of one
   case for a secondary), `no_floor`, `one_sided_floor`, `zero_floor`. There is no fixed tie band.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
-  `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `refusals`, `notes`,
-  `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can replace `analyze.py`
+  `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
+  `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can replace `analyze.py`
   and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a file of another
   version with a notice.
 - Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, an estimate of about 4 to

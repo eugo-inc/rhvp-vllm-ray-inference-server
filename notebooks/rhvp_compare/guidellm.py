@@ -187,8 +187,8 @@ def levels(report: Mapping) -> list[dict]:
 def flat_values(level_list: list[Mapping]) -> dict[str, float]:
     """The comparison's per-launch figures from the usable levels (case ids as in plan.case_family). A figure of 0
     is kept (a level whose requests finished without one output token has 0 tokens per second): on side A or B the
-    analysis gives that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen; on a twin, that
-    round is left out of its side's floor, with a note."""
+    analysis gives that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen; in a side's
+    comparison with its twin, every case whose floor uses that comparison gets it too, with a note."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")

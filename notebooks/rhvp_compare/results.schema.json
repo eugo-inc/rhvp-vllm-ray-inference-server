@@ -1211,7 +1211,7 @@
         },
         "values": {
           "type": "object",
-          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio: that case gets NO VERDICT (nonpositive_value). The analysis reads only this map.",
+          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio: that case gets NO VERDICT (nonpositive_value), and on a side or its twin so does every case whose floor uses that comparison (analysis.nonpositive_twins). The analysis reads only this map.",
           "additionalProperties": {
             "type": "number",
             "minimum": 0
@@ -1584,6 +1584,7 @@
         "rule",
         "comparisons",
         "same_vs_same",
+        "nonpositive_twins",
         "refusals",
         "notes",
         "outcomes",
@@ -1653,20 +1654,57 @@
               "outlier_rounds",
               "provisional",
               "p_raw",
-              "order_split",
-              "zero_rounds"
+              "order_split"
+            ]
+          },
+          "description": "Each side against its twin, per case: the median of side / twin, the floor it gives, and the uncorrected sign test (outside the family). A side and case whose comparison with the twin has a figure of 0 has no row here: see nonpositive_twins."
+        },
+        "nonpositive_twins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "side",
+              "twin",
+              "case",
+              "side_rounds",
+              "twin_rounds",
+              "cases"
             ],
             "properties": {
-              "zero_rounds": {
+              "side": {
+                "type": "string"
+              },
+              "twin": {
+                "type": "string"
+              },
+              "case": {
+                "type": "string"
+              },
+              "side_rounds": {
                 "type": "array",
                 "items": {
                   "type": "integer"
                 },
-                "description": "Rounds in which the twin's figure was 0 while the side's was not: left out of this floor, and named in analysis.notes."
+                "description": "Rounds in which the side's own figure was 0 or less."
+              },
+              "twin_rounds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Rounds in which the twin's figure was 0 or less."
+              },
+              "cases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The cases whose floor uses this comparison (the case's floor group): each gets NO VERDICT (nonpositive_value)."
               }
             }
           },
-          "description": "Each side against its twin, per case: the median of side / twin, the floor it gives, and the uncorrected sign test (outside the family)."
+          "description": "Each side and case whose comparison with the twin has a figure of 0 or less in some paired round. That gives no ratio, so the side has no noise floor on the case's floor group, and every case in the group gets NO VERDICT (nonpositive_value); the floor is never taken from the rounds that are left. Also named in analysis.notes."
         },
         "refusals": {
           "type": "array",

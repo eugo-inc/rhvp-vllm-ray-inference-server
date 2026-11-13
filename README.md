@@ -517,8 +517,10 @@ The rule is fixed before the first launch and written into the results (`plan.an
   (`more_than_one_node`); a launch of side A or B that failed on its own account, in a round where the other side
   did not (`side_failed`: its launch failed with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests
   failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
-  a figure of 0 on side A or B, such as no output tokens (`nonpositive_value`; a twin's 0 leaves that round out of
-  its side's floor, and the results and the notebook say so); one paired round (`single_measurement`); fewer
+  a figure of 0, such as no output tokens, on side A or B or on a twin (`nonpositive_value`: a 0 gives no ratio; in
+  a side's comparison with its twin it leaves the side with no noise floor, so every case of that floor group gets
+  no verdict, and the results and the notebook name the side and the round); one paired round
+  (`single_measurement`); fewer
   rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side only, or a floor of exactly 0
   (`no_floor`, `one_sided_floor`, `zero_floor`).
 

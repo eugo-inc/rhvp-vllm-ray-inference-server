@@ -262,14 +262,51 @@ def test_an_order_that_never_changes_is_unresolved():
     assert (got["outcome"], got["reason"]) == ("unresolved", "order_unbalanced") and got["order_split"] == [0, 8]
 
 
-def test_a_twins_zero_leaves_its_round_out_of_the_floor_with_a_note():
-    per_round = _noisy(10.0, 10.0)
-    per_round["B~same"][1] = 0.0
-    rows, positions = _rows(per_round)
-    got = analyze.analyse(rows, positions, TWINS, CASES)
-    assert got["comparisons"][0]["floor"]["subject"]["n"] == 7
-    assert got["notes"] == ["side B's twin had a figure of 0 on t in round(s) 2; those rounds are left out of side "
-                            "B's floor"]
+GROUP = [{"id": i, "better": "lower", "kind": "time", "role": "secondary", "group": "secondary:t"}
+         for i in ("c1/t", "c8/t")] + [{"id": "c8/n", "better": "higher", "kind": "rate", "role": "secondary",
+                                        "group": "secondary:n"}]
+
+
+def _group_rows(per_case: dict[str, dict[str, list[float]]]) -> tuple[list[dict], list[dict]]:
+    rows, positions = [], []
+    for case, per_round in per_case.items():
+        r, positions = _rows(per_round, case)
+        rows += r
+    return rows, positions
+
+
+def test_a_twins_zero_gives_every_case_of_its_floor_group_no_verdict_with_a_note():
+    """The floor is never taken from the rounds that are left: the twin's 0 on c1/t takes side B's floor on the whole
+    group (c1/t and c8/t), and a case of another group (c8/n) keeps its verdict."""
+    base = _noisy(10.0, 5.0)
+    zeroed = {**base, "B~same": [base["B~same"][0], 0.0] + base["B~same"][2:]}
+    got = analyze.analyse(*_group_rows({"c1/t": zeroed, "c8/t": base, "c8/n": base}), TWINS, GROUP)
+    rows = {c["case"]: c for c in got["comparisons"]}
+    for case in ("c1/t", "c8/t"):
+        assert (rows[case]["outcome"], rows[case]["reason"]) == ("no_verdict", "nonpositive_value")
+        assert rows[case]["floor"]["subject"] is None and rows[case]["bar"] is None
+        assert rows[case]["floor"]["baseline"] is not None
+    assert rows["c8/n"]["outcome"] == "worse"
+    assert got["nonpositive_twins"] == [{"side": "B", "twin": "B~same", "case": "c1/t", "side_rounds": [],
+                                         "twin_rounds": [2], "cases": ["c1/t", "c8/t"]}]
+    assert {(t["side"], t["case"]) for t in got["same_vs_same"]} == {
+        ("A", "c1/t"), ("A", "c8/t"), ("A", "c8/n"), ("B", "c8/t"), ("B", "c8/n")}
+    assert got["notes"] == ["side B's comparison with its twin on c1/t has a figure of 0 (its twin in round(s) 2): "
+                            "side B has no noise floor for c1/t, c8/t, and those cases get NO VERDICT "
+                            "(nonpositive_value)"]
+
+
+def test_a_sides_own_zero_beside_its_twin_counts_even_without_the_other_side():
+    """Side A's 0 in round 3, where side B has no figure (its launch failed for another reason): no pair of B and
+    A carries it, but A's comparison with its twin does, so A has no floor and the case has no verdict."""
+    base = _noisy(10.0, 5.0)
+    rows, positions = _rows({**base, "A": base["A"][:2] + [0.0] + base["A"][3:]})
+    rows = [r for r in rows if not (r["side"] == "B" and r["round"] == 3)]
+    got = analyze.analyse(rows, positions, TWINS, SECONDARY)
+    row = got["comparisons"][0]
+    assert (row["outcome"], row["reason"], row["n_rounds"]) == ("no_verdict", "nonpositive_value", 7)
+    assert got["nonpositive_twins"][0]["side_rounds"] == [3] and got["nonpositive_twins"][0]["twin_rounds"] == []
+    assert got["notes"][0].startswith("side A's comparison with its twin on t has a figure of 0 (side A in round(s) 3)")
 
 
 def test_the_floor_is_the_largest_over_its_group_and_a_twin_that_differs_is_loud():
