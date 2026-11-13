@@ -36,8 +36,8 @@ brings it back, and the run records that in run.server_found_down, a note, resul
 
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
 table), and launches/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
-is already complete is not run again (so a Job that Argo CD creates a second time does nothing). See summary.py for
-the short views a reader gets without the results volume.
+is already complete, under this schema, is not run again (so a Job that Argo CD creates a second time does
+nothing). See summary.py for the short views a reader gets without the results volume.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from collections.abc import Callable, Mapping
 
 import httpx
 
-from . import analyze, energy, guidellm, logs, plan as plans, probe, report, summary
+from . import analyze, energy, guidellm, logs, plan as plans, probe, report, stats, summary
 
 HARNESS = {"name": "rhvp_compare", "version": "1"}
 
@@ -466,8 +466,10 @@ class Runner:
                 tries += 1
                 self._discard_try(record, out_dir, rel, held, error, tries, first_note)
                 continue
-            except BaseException as error:  # such as a stop while GuideLLM was taken down after a time-out
-                if getattr(error, "load_timed_out", False):
+            except BaseException as error:  # a stop after a time-out: while GuideLLM or the sampler was stopped
+                cause = error.__context__
+                if getattr(error, "load_timed_out", False) or (
+                        isinstance(cause, guidellm.LoadError) and cause.timed_out):
                     record["load_timeouts"] += 1
                 raise
             record["values"].update(guidellm.flat_values(record["levels"]))
@@ -718,9 +720,12 @@ def plan_lines(the_plan: Mapping) -> list[str]:
         out.append("note: without a twin for both sides no case can get a verdict (NO VERDICT: no_floor or "
                    "one_sided_floor)")
     elif not power["reachable"]:
+        secondary = stats.min_rounds(1, the_plan["analysis"]["alpha"])
+        graded = ("the secondary cases are graded on their own" if the_plan["rounds"] >= secondary else
+                  f"so does every secondary case, which needs {secondary}")
         out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
                    f"verdict; with {the_plan['rounds']} every primary case gets NO VERDICT (too_few_rounds), and "
-                   f"the secondary cases are graded on their own")
+                   f"{graded}")
     else:
         out.append(f"a verdict on a primary case needs {power['must_agree']} of the {the_plan['rounds']} rounds to "
                    f"lean the same way; at most {min(power['max_primary_cases'], power['family_size'])} primary "

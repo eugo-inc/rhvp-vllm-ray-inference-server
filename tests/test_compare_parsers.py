@@ -215,8 +215,11 @@ def test_window_power_prefers_the_energy_counter():
     refused = energy.window_power(slow_power, 0, 60, 10, slow_counter)
     assert refused.mean_w is None and refused.method is None and "at least 10 are needed" in refused.note
     ten = [energy.Sample(6 * i, 200.0) for i in range(10)]
-    by_counter = energy.window_power(ten, 0, 60, 10, slow_counter)  # enough power samples: the counter gives the mean
-    assert by_counter.method == "energy_counter" and by_counter.mean_w == pytest.approx(200.0)
+    stale = energy.window_power(ten, 0, 60, 10, slow_counter)  # 2 counter readings: the power samples give the mean
+    assert stale.method == "power_mean" and stale.mean_w == pytest.approx(200.0) and stale.samples == 10
+    counter = [energy.Sample(6 * i, 6 * i * 150_000) for i in range(10)]  # ten distinct readings: 150 W
+    by_counter = energy.window_power(ten, 0, 60, 10, counter)
+    assert by_counter.method == "energy_counter" and by_counter.mean_w == pytest.approx(150.0)
 
 
 def test_flat_values_keep_a_zero():

@@ -19,10 +19,10 @@ Two sources of power samples, each a list of (time, watts):
 For a level's window [start, end] (from GuideLLM's report):
 
 - no figure unless the window holds at least `min_samples` power samples, also when the energy counter is there;
-- with two or more distinct energy-counter readings inside the window: mean power = (E_last - E_first) /
-  (t_last - t_first), after dropping repeats of an unchanged counter value (a scrape faster than the exporter's own
-  update repeats the last value, and a repeat at either end would stretch or shrink the time the energy is divided
-  by);
+- with at least `min_samples` (and two or more) distinct energy-counter readings inside the window: mean power =
+  (E_last - E_first) / (t_last - t_first), after dropping repeats of an unchanged counter value (a scrape faster
+  than the exporter's own update repeats the last value, and a repeat at either end would stretch or shrink the
+  time the energy is divided by);
 - otherwise the mean of the power samples inside the window;
 - tokens per joule = the level's output tokens per second / mean power (W = J/s), and joules per token its inverse.
 
@@ -120,14 +120,14 @@ def collapse(samples: list[Sample]) -> list[Sample]:
 def window_power(power: Iterable[Sample], start: float, end: float, min_samples: int = 2,
                  counter: Iterable[Sample] = ()) -> Power:
     """Mean GPU power over [start, end], given at least `min_samples` power samples in the window: from the energy
-    counter when it has two distinct readings there, else the mean of the power samples."""
+    counter when it has as many distinct readings there (and at least two), else the mean of the power samples."""
     in_counter = collapse(inside(counter, start, end))
     in_power = inside(power, start, end)
     needed = max(min_samples, 1)
     if len(in_power) < needed:
         return Power(None, len(in_power), None, f"{len(in_power)} power samples in the window; at least {needed} are "
                      f"needed")
-    if len(in_counter) >= 2 and in_counter[-1].t > in_counter[0].t:
+    if len(in_counter) >= max(needed, 2) and in_counter[-1].t > in_counter[0].t:
         joules = (in_counter[-1].value - in_counter[0].value) / 1000.0
         if joules >= 0:
             return Power(joules / (in_counter[-1].t - in_counter[0].t), len(in_power), "energy_counter", None)

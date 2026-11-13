@@ -1653,8 +1653,18 @@
               "outlier_rounds",
               "provisional",
               "p_raw",
-              "order_split"
-            ]
+              "order_split",
+              "zero_rounds"
+            ],
+            "properties": {
+              "zero_rounds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Rounds in which the twin's figure was 0 while the side's was not: left out of this floor, and named in analysis.notes."
+              }
+            }
           },
           "description": "Each side against its twin, per case: the median of side / twin, the floor it gives, and the uncorrected sign test (outside the family)."
         },

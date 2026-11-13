@@ -85,10 +85,13 @@ RUN_SERVER = "The live server was not brought back after the run; the results' r
 RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
             "(side_failed).")
 RUN_OTHERS = "Other runs in the results volume: {runs}."
-TWIN_DIFFERS = ("Differed from its twin in more rounds than chance would usually give: {cases}. These p-values are not "
-                "corrected for the {tested} comparisons of a side with its twin in this run; with that many, one this "
-                "low can turn up by chance.")
+TWIN_DIFFERS = ("A side leaned the same way against its twin in more rounds than chance would usually give: {cases}. "
+                "These p-values are not corrected for the {tested} comparisons of a side with its twin in this run; "
+                "with that many, one this low can turn up by chance.")
 TWIN_DIFFERS_CASE = "side {side} on {case} (p = {p})"
+TWIN_ZERO = ("A twin's figure was 0 where its side's was not, so those rounds are left out of that side's noise "
+             "floor: {cases}.")
+TWIN_ZERO_CASE = "side {side}'s twin on {case}, round {rounds}"
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----

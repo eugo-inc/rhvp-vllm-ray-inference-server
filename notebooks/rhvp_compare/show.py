@@ -201,6 +201,10 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                for t in twins if t["p_raw"] < 0.05]
     if differs:
         parts.append(draw.notice(words.TWIN_DIFFERS.format(cases="; ".join(differs), tested=len(twins))))
+    zero = [words.TWIN_ZERO_CASE.format(side=t["side"], case=t["case"], rounds=", ".join(map(str, t["zero_rounds"])))
+            for t in analysis.get("same_vs_same") or [] if t.get("zero_rounds")]
+    if zero:
+        parts.append(draw.notice(words.TWIN_ZERO.format(cases="; ".join(zero))))
     if run.get("server_restored") is False:
         parts.append(draw.notice(words.RUN_SERVER))
     return parts

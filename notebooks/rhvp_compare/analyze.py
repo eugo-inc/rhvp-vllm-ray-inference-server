@@ -139,7 +139,8 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             same_vs_same.append({"side": side, "twin": twin, "case": case["id"], "n": floor.n, "ratio": floor.ratio,
                                  "floor": floor.value, "spread": floor.spread,
                                  "outlier_rounds": list(floor.outlier_rounds), "provisional": floor.provisional,
-                                 "p_raw": test.p if test else None, "order_split": [first, len(both) - first]})
+                                 "p_raw": test.p if test else None, "order_split": [first, len(both) - first],
+                                 "zero_rounds": zero})
             if test and test.p < 0.05:
                 differs.append((side, case["id"], max(lower, higher), lower + higher, test.p))
     tested = sum(1 for row in same_vs_same if row["p_raw"] is not None)

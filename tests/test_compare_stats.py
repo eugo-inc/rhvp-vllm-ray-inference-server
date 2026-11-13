@@ -57,7 +57,7 @@ def test_holm_known_answers(raw, adjusted):
 
 
 def test_holm_wording():
-    assert stats.plain_family(0) == "no case tested yet"
+    assert stats.plain_family(0) == "no case tested"
     assert stats.plain_family(1) == "one case tested"
     assert stats.plain_family(4) == "corrected for testing 4 cases at once"
 

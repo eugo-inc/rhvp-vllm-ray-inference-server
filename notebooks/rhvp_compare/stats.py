@@ -170,7 +170,7 @@ def holm(pvalues: Mapping[str, float]) -> dict[str, float]:
 
 def plain_family(m: int) -> str:
     if m == 0:
-        return "no case tested yet"
+        return "no case tested"
     return "one case tested" if m == 1 else f"corrected for testing {m} cases at once"
 
 

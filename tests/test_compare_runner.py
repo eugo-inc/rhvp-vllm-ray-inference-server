@@ -811,6 +811,42 @@ def test_load_retries_counts_only_once_the_second_load_begins(tmp_path):
         the_runner.dir / "results.md").read_text()
 
 
+class TermInFirstSamplerStop(FakeBackend):
+    """SIGTERM lands while the power sampler is stopped after the first load timed out."""
+
+    def sampler(self, plan, handle):
+        backend = self
+
+        class Stops(FakeSampler):
+            def stop(self):
+                if not backend.stopped:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+        return Stops()
+
+
+def test_a_stop_while_the_sampler_stops_after_a_time_out_still_counts_it(tmp_path):
+    results, _, _ = run(tmp_path, TermInFirstSamplerStop(hang_once=True), rounds=ONE_ROUND)
+    failed = results["launches"][0]
+    assert (failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == ("STOPPED", 1, 0)
+    assert results["analysis"]["load_timeouts"]["A"] == 1
+
+
+def test_a_twins_zero_is_shown_in_the_notebook(tmp_path):
+    # Launch 7 is B~same in round 2: its 4-stream level finishes with no output token.
+    results, _, _ = run(tmp_path, FakeBackend(zero={7: 4}), rounds={"count": 2, "warmup": False})
+    rows = [t for t in results["analysis"]["same_vs_same"] if t["zero_rounds"]]
+    assert rows and {t["side"] for t in rows} == {"B"} and all(t["zero_rounds"] == [2] for t in rows)
+    head = "".join(show._head(results, [], []))
+    assert "figure was 0 where its side" in head and "on c4/output_tokens_per_s, round 2" in head
+
+
+def test_the_plan_note_below_the_secondary_minimum_says_the_secondary_cases_get_none_either():
+    [note] = [line for line in runner.plan_lines(plans.build(config(rounds={"count": 4, "warmup": False}), "docker"))
+              if "need at least 8 rounds" in line]
+    assert "so does every secondary case, which needs 6" in note
+
+
 def test_a_finished_results_file_of_the_earlier_schema_is_kept_and_the_run_runs(tmp_path):
     plan = plans.build(config(rounds=ONE_ROUND), "docker")
     folder = tmp_path / plan["run_id"]

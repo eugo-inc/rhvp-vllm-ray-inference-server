@@ -518,7 +518,7 @@ The rule is fixed before the first launch and written into the results (`plan.an
   did not (`side_failed`: its launch failed with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests
   failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
   a figure of 0 on side A or B, such as no output tokens (`nonpositive_value`; a twin's 0 leaves that round out of
-  its side's floor, with a note in `analysis.notes`); one paired round (`single_measurement`); fewer
+  its side's floor, and the results and the notebook say so); one paired round (`single_measurement`); fewer
   rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side only, or a floor of exactly 0
   (`no_floor`, `one_sided_floor`, `zero_floor`).
 
