@@ -56,6 +56,10 @@ VERSION = (
     re.compile(r"\[startup\.py:\d+\].*\bversion (?P<v>[0-9][\w.+-]*)"),
 )
 
+#: vLLM's start-up check that the free GPU memory did not grow while it measured (vllm/v1/worker/gpu_worker.py). On a
+#: GPU whose memory is the machine's own, another program that frees memory in those seconds fails it.
+MEMORY_PROFILING_ERROR = "Error in memory profiling"
+
 _STAMP = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s?(?P<text>.*)$")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -93,6 +97,11 @@ def server_version(text_lines: Iterable[tuple[float | None, str]]) -> str | None
             if match:
                 return match.group("v")
     return None
+
+
+def memory_profiling_failed(log: str) -> bool:
+    """Whether the server's log shows vLLM's start-up memory-profiling check failing."""
+    return MEMORY_PROFILING_ERROR in log
 
 
 def breakdown(log: str, started_epoch: float) -> list[dict]:

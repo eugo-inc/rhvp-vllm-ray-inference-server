@@ -37,6 +37,14 @@ def _p(value) -> str:
     return "-" if value is None else (f"{value:.3g}" if value >= 0.001 else f"{value:.1e}")
 
 
+def _starts(round_: Mapping) -> str:
+    """How often a retried round started its server: per replica when a replica a scale-out round added was one."""
+    again = [item for item in round_.get("launches") or [] if item.get("start_retries")]
+    if any(item.get("replica") != 1 for item in again):
+        return ", ".join(f"replica {item.get('replica')} started {item['start_retries'] + 1} times" for item in again)
+    return f"started {round_['start_retries'] + 1} times"
+
+
 def markdown(results: Mapping) -> str:
     """The run's summary: what was compared, on what, how, and one row per metric."""
     plan = results["plan"]
@@ -127,6 +135,13 @@ def markdown(results: Mapping) -> str:
         lines += ["", "Rounds that did not finish:"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {r.get('error_code') or 'failed'}: "
                   f"{r.get('error') or r.get('status')}" for r in failed]
+    retried = [r for r in results.get("rounds") or [] if r.get("start_retries")]
+    if retried:
+        lines += ["", "Rounds whose side was started again after vLLM's start-up memory check failed (a round's "
+                  "first replica timed from its last start, a replica a scale-out round adds from when it was first "
+                  "asked for):"]
+        lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): {_starts(r)}, "
+                  f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]

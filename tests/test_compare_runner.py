@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
 from rhvp_compare import (  # noqa: E402
-    __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, summary)
+    __main__ as cli, analyze, energy, guidellm, plan as plans, report, runner, show, summary)
 
 FIXTURES = ROOT / "tests" / "fixtures"
 SCHEMA = json.loads((ROOT / "notebooks" / "rhvp_compare" / "results.schema.json").read_text())
@@ -41,8 +41,16 @@ def config(**extra) -> dict:
     return out
 
 
+#: The end of a vLLM log whose start stopped at the start-up memory check (as seen on a GPU whose memory is the
+#: machine's own).
+PROFILING_LOG = ("2026-01-01T00:00:00Z (EngineCore pid=1) ERROR [core.py:1510] AssertionError: Error in memory "
+                 "profiling. Initial free memory 78.16 GiB, current free memory 78.49 GiB.\n")
+
+
 def server(model: str = "m") -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "dead.test":  # a server that exited: nothing answers
+            return httpx.Response(503)
         if request.url.path == "/v1/models":
             return httpx.Response(200, json={"data": [{"id": model}]})
         if request.url.path == "/version":
@@ -72,11 +80,14 @@ class FakeBackend:
 
     def __init__(self, fail_round: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
                  load_error: bool = False, term_in_round: int | None = None, errored: dict | None = None,
-                 nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None):
+                 nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None, dies: dict | None = None,
+                 dies_log: str = PROFILING_LOG):
         self.fail_round, self.hang_once, self.fail_code = fail_round, hang_once, fail_code
         self.load_error, self.term_in_round = load_error, term_in_round
         self.errored = errored or {}  # round index -> the concurrency level where 40 requests fail
         self.zero = zero or {}  # round index -> the concurrency level whose requests finish with no output token
+        self.dies, self.dies_log = dies or {}, dies_log  # round index -> how many of its starts exit, with that log
+        self.attempts: dict[int, int] = {}
         self.nodes = nodes  # the node of round i is nodes[i % len(nodes)]
         self.started, self.stopped, self.prepared, self.cleaned = [], [], False, False
         self.events: list = []
@@ -95,13 +106,14 @@ class FakeBackend:
         if round_["index"] == self.fail_round:
             raise runner.RoundError("the side never got a node", self.fail_code)
         self.started.append((round_["index"], round_["side"]))
-        return {"round": round_, "side": side["key"]}
+        tries = self.attempts[round_["index"]] = self.attempts.get(round_["index"], 0) + 1
+        return {"round": round_, "side": side["key"], "dies": tries <= self.dies.get(round_["index"], 0)}
 
     def endpoint(self, handle, deadline):
-        return "http://side.test:8000"
+        return "http://dead.test:8000" if handle.get("dies") else "http://side.test:8000"
 
     def alive(self, handle):
-        return None
+        return "the server exited with code 1" if handle.get("dies") else None
 
     def run_load(self, plan, round_, target, out_dir):
         if round_["index"] == self.term_in_round:  # as if the Job were deleted mid-load
@@ -133,7 +145,7 @@ class FakeBackend:
         return FakeSampler()
 
     def logs(self, handle):
-        return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
+        return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n" + (self.dies_log if handle.get("dies") else "")
 
     def facts(self, handle):
         node = self.nodes[handle["round"]["index"] % len(self.nodes)]
@@ -646,6 +658,44 @@ def test_a_zero_counts_against_the_side_that_measured_it():
     assert analyze._side_median(rounds, "B", metric["id"]) == 0.0  # the zeros are in the side's median
 
 
+def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):
+    backend = FakeBackend(dies={3: 1})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    r3 = next(r for r in results["rounds"] if r["index"] == 3)
+    assert (r3["side"], r3["kind"], r3["status"], r3["start_retries"]) == ("A", "scored", "ok", 1)
+    assert [(l["replica"], l["start_retries"]) for l in r3["launches"]] == [(1, 1)]  # one record, of the last start
+    assert backend.started.count((3, "A")) == 2 and backend.stopped.count(3) == 2  # the first try, then the round
+    first_try = the_runner.dir / r3["artifacts"]["server_log_attempt_1"]
+    assert "Error in memory profiling" in first_try.read_text()
+    assert "Error in memory profiling" not in (the_runner.dir / r3["artifacts"]["server_log"]).read_text()
+    assert any("started once more" in note for note in r3["notes"])
+    assert all(r["start_retries"] == 0 for r in results["rounds"] if r["index"] != 3)
+    assert results["run"]["status"] == "complete" and runner.exit_code(results) == runner.EXIT_COMPLETE
+    assert "- round 3 (side A, scored): started 2 times, then finished" in (the_runner.dir / "results.md").read_text()
+    head = "".join(show._head(results, [], []))
+    assert "started once more" in head and "3 (side A)" in head
+
+
+def test_a_second_memory_check_failure_fails_the_round(tmp_path):
+    backend = FakeBackend(dies={3: 2})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    r3 = next(r for r in results["rounds"] if r["index"] == 3)
+    assert (r3["status"], r3["error_code"], r3["start_retries"]) == ("failed", "SIDE_FAILED", 1)
+    assert r3["error"] == "the server exited with code 1"
+    assert backend.started.count((3, "A")) == 2
+    assert "started 2 times, then SIDE_FAILED" in (the_runner.dir / "results.md").read_text()
+
+
+def test_a_server_that_exits_for_another_reason_is_not_started_again(tmp_path):
+    backend = FakeBackend(dies={3: 1}, dies_log="2026-01-01T00:00:01Z torch.OutOfMemoryError: CUDA out of memory\n")
+    results, _, _ = run(tmp_path, backend)
+    r3 = next(r for r in results["rounds"] if r["index"] == 3)
+    assert (r3["status"], r3["error_code"], r3["start_retries"]) == ("failed", "SIDE_FAILED", 0)
+    assert backend.started.count((3, "A")) == 1 and "server_log_attempt_1" not in r3["artifacts"]
+
+
 def test_a_round_the_side_itself_failed_counts_against_it(tmp_path):
     results, _, _ = run(tmp_path, FakeBackend(fail_round=5), rounds={"pairs": 10, "warmup": True, "aaPairs": 0})
     row = {r["id"]: r for r in results["analysis"]["metrics"]}["c1.itl_ms_median"]
@@ -833,10 +883,12 @@ class ScaleBackend(FakeBackend):
     """Two replicas per scored round, a router and a background surge. Side B meets the goals more often. `empty`:
     round index -> a surge in which no request finished; `late`: the surge has ended before replica 2 answers;
     `never_ready`: replica 2 never lists the model, and the runner's clock jumps back once the surge starts, so its
-    time limit has passed at once."""
+    time limit has passed at once. `dies`: (round index, replica) -> how many of that replica's starts exit at vLLM's
+    start-up memory check."""
 
-    def __init__(self, clock: FakeClock, empty: tuple = (), late: bool = False, never_ready: int | None = None):
-        super().__init__()
+    def __init__(self, clock: FakeClock, empty: tuple = (), late: bool = False, never_ready: int | None = None,
+                 dies: dict | None = None):
+        super().__init__(dies=dies)
         self.clock, self.empty, self.late, self.never_ready = clock, empty, late, never_ready
         self.routers, self.loads, self.replica2_started = [], [], False
         self.rewind = False
@@ -844,10 +896,12 @@ class ScaleBackend(FakeBackend):
     def start(self, plan, round_, side, spec, replica=1):
         self.started.append((round_["index"], round_["side"], replica))
         self.replica2_started = replica == 2
-        return {"round": round_, "side": side["key"], "replica": replica}
+        key = (round_["index"], replica)
+        tries = self.attempts[key] = self.attempts.get(key, 0) + 1
+        return {"round": round_, "side": side["key"], "replica": replica, "dies": tries <= self.dies.get(key, 0)}
 
     def endpoint(self, handle, deadline):
-        return f"http://side-{handle['replica']}.test:8000"
+        return "http://dead.test:8000" if handle["dies"] else f"http://side-{handle['replica']}.test:8000"
 
     def router(self, plan, targets, out_dir):
         self.routers.append(FakeRouter(targets, self.clock, 0.25 if not self.late else 0.0))
@@ -870,6 +924,8 @@ class ScaleBackend(FakeBackend):
                 "image_entrypoint": ["/usr/bin/tini", "--"], "image_cmd": None}
 
     def logs(self, handle):
+        if handle["dies"]:
+            return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n" + PROFILING_LOG
         if handle["replica"] == 1 and handle["round"]["kind"] == "scored":
             ts = self.routers[-1].first_at + 12.5
             return ("2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
@@ -971,3 +1027,53 @@ def test_a_new_replica_that_never_answers_fails_the_round(tmp_path):
     assert backend.loads[0].stopped and backend.routers[0].stopped  # the surge and the router were stopped
     assert sorted(backend.stopped)[:2] == [(1, 1), (1, 2)]  # both replicas taken down
     assert [l["replica"] for l in failed["launches"]] == [1, 2]
+
+
+def test_a_scale_round_starts_its_new_replica_once_more_after_vllms_memory_check(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 2): 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["index"], r3["status"], r3["start_retries"]) == (3, "ok", 1)
+    assert [(l["replica"], l["start_retries"]) for l in r3["launches"]] == [(1, 0), (2, 1)]
+    assert backend.started.count((3, "A", 2)) == 2 and backend.stopped.count((3, 2)) == 2
+    assert backend.stopped.count((3, 1)) == 1  # the first replica kept serving the surge
+    assert 5 <= r3["scale"]["step_at_s"] < 5.5  # the first ask, not the second start
+    assert "Error in memory profiling" in (the_runner.dir / r3["artifacts"]["server_log_2_attempt_1"]).read_text()
+    assert "Error in memory profiling" not in (the_runner.dir / r3["artifacts"]["server_log_2"]).read_text()
+    assert "server_log_attempt_1" not in r3["artifacts"]
+    assert any("replica 2 was started once more" in note and "first asked for" in note for note in r3["notes"])
+    assert "scale.first_answer_s" in r3["metrics"]
+    assert all(r["start_retries"] == 0 for r in results["rounds"] if r["index"] != 3)
+    assert results["run"]["status"] == "complete"
+    assert ("- round 3 (side A, scored): replica 2 started 2 times, then finished"
+            in (the_runner.dir / "results.md").read_text())
+    head = "".join(show._head(results, [], []))
+    assert "started once more" in head and "3 (side A, replica 2)" in head
+
+
+def test_a_scale_round_starts_its_first_replica_once_more_after_vllms_memory_check(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 1): 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["status"], r3["start_retries"]) == ("ok", 1)
+    assert [(l["replica"], l["start_retries"]) for l in r3["launches"]] == [(1, 1), (2, 0)]
+    assert backend.stopped.count((3, 1)) == 2 and backend.stopped.count((3, 2)) == 1  # nothing stopped twice
+    assert "Error in memory profiling" in (the_runner.dir / r3["artifacts"]["server_log_attempt_1"]).read_text()
+    assert "- round 3 (side A, scored): started 2 times, then finished" in (the_runner.dir / "results.md").read_text()
+
+
+def test_a_second_memory_check_failure_of_the_new_replica_fails_the_round(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(1, 2): 2})
+    results, _ = scale_run(tmp_path, backend, clock, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    failed = results["rounds"][0]
+    assert (failed["status"], failed["error_code"], failed["start_retries"]) == ("failed", "SIDE_FAILED", 1)
+    assert backend.started.count((1, "A", 2)) == 2
+    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 2), (1, 2)]  # both tries, and replica 1
+    assert backend.loads[0].stopped and backend.routers[0].stopped
+    assert [(l["replica"], l["start_retries"]) for l in failed["launches"]] == [(1, 0), (2, 1)]

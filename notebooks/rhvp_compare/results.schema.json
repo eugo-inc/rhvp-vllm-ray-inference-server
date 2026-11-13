@@ -1033,7 +1033,8 @@
         "levels",
         "metrics",
         "artifacts",
-        "launches"
+        "launches",
+        "start_retries"
       ],
       "properties": {
         "index": {
@@ -1171,6 +1172,14 @@
             },
             "server_log_2": {
               "type": "string"
+            },
+            "server_log_attempt_1": {
+              "type": "string",
+              "description": "The server log of the start that stopped at vLLM's start-up memory check, when the side was started again."
+            },
+            "server_log_2_attempt_1": {
+              "type": "string",
+              "description": "Mode scaleout: the same for the second replica, when it was started again."
             }
           }
         },
@@ -1179,6 +1188,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "start_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). Each replica is started again at most once (its launch record's start_retries); a second such failure of the same replica fails the round (SIDE_FAILED). This is the sum over the round's replicas. The first replica's start-up figures are timed from its last start; a replica that a scale-out round adds is timed from when it was first asked for, so its first try's time counts."
         },
         "scale": {
           "type": [
@@ -1344,7 +1358,8 @@
         "args",
         "env",
         "env_source",
-        "env_dropped"
+        "env_dropped",
+        "start_retries"
       ],
       "properties": {
         "replica": {
@@ -1424,6 +1439,12 @@
             "type": "string"
           },
           "description": "Allowed names left out because they look like secrets (HF_TOKEN, VLLM_API_KEY, ...); names only, never values."
+        },
+        "start_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How many times this replica was started again in the round after its server stopped at vLLM's start-up memory check (at most once); the record describes the last start."
         }
       }
     },

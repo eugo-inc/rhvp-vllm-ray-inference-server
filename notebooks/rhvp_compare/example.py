@@ -169,6 +169,7 @@ def _synthesize(config: dict, platform: str) -> dict:
             "levels": [], "metrics": {"startup.ready_s": ready, "startup.first_answer_s": first},
             "artifacts": {"server_log": f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/server.log"},
             "launches": [_launch(plan, side, 1, _iso(started))],
+            "start_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
         if planned["kind"] != plans.WARMUP and scale_mode:

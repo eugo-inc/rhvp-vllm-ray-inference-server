@@ -564,9 +564,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 2,
@@ -672,9 +674,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 3,
@@ -917,9 +921,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 4,
@@ -1162,9 +1168,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 5,
@@ -1407,9 +1415,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 6,
@@ -1652,9 +1662,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 7,
@@ -1897,9 +1909,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 8,
@@ -2142,9 +2156,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 9,
@@ -2387,9 +2403,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 10,
@@ -2632,9 +2650,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 11,
@@ -2877,9 +2897,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 12,
@@ -3122,9 +3144,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 13,
@@ -3367,9 +3391,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 14,
@@ -3612,9 +3638,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 15,
@@ -3857,9 +3885,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 16,
@@ -4102,9 +4132,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 17,
@@ -4347,9 +4379,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 18,
@@ -4592,9 +4626,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 19,
@@ -4837,9 +4873,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 20,
@@ -5082,9 +5120,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 21,
@@ -5327,9 +5367,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 22,
@@ -5572,9 +5614,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 23,
@@ -5817,9 +5861,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 24,
@@ -6062,9 +6108,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 25,
@@ -6307,9 +6355,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   },
   {
    "index": 26,
@@ -6552,9 +6602,11 @@
       "VLLM_NO_USAGE_STATS": "1"
      },
      "env_source": "process",
-     "env_dropped": []
+     "env_dropped": [],
+     "start_retries": 0
     }
-   ]
+   ],
+   "start_retries": 0
   }
  ],
  "analysis": {

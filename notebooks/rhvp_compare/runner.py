@@ -69,6 +69,10 @@ LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the round
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
+#: How many more times a replica of a side is started in one round when its server stopped at vLLM's start-up memory
+#: check (logs.memory_profiling_failed); recorded in that replica's launch record and summed in the round's
+#: start_retries. A second such failure of the same replica is SIDE_FAILED.
+START_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
@@ -375,7 +379,7 @@ class Runner:
                         "pair": round_["pair"], "status": "failed", "error": None, "error_code": None,
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
                         "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
-                        "launches": []}
+                        "launches": [], "start_retries": 0}
         held: dict = {"handle": None, "replicas": [], "load": None, "router": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
@@ -440,33 +444,47 @@ class Runner:
         record["launches"].append(launch.record(
             replica["replica"], spec.get("command"), spec.get("args") or [], facts.get("env"), source,
             started_at=replica["started_at"], image_entrypoint=facts.get("image_entrypoint"),
-            image_cmd=facts.get("image_cmd")))
+            image_cmd=facts.get("image_cmd"), start_retries=replica.get("start_retries", 0)))
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
         """Wait for the GPU, start the side, time its start, load it; any failure raises."""
-        handle, target = self._first_replica(round_, side, spec, record, held)
+        handle, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
         if round_["kind"] != plans.WARMUP:
             record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
             record["metrics"].update(guidellm.flat_metrics(record["levels"]))
 
-    def _first_replica(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, held: dict):
-        """Wait for the GPU, start the round's first replica and time it to its first answer: (handle, target)."""
-        self.backend.gpu_free(self.plan, side)
+    def _first_replica(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+                       held: dict):
+        """Wait for the GPU, start the round's first replica and time it to its first answer: (handle, target). A
+        server that stopped at vLLM's start-up memory check is started once more (START_RETRIES), and its start is
+        timed from that start."""
         timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
-        record["_started_epoch"] = self.wall()
-        t0 = self.clock()
-        handle = self._start(round_, side, spec, held)
-        deadline = t0 + timeout
-        target = self.backend.endpoint(handle, deadline)
-        alive = lambda: self.backend.alive(handle)  # noqa: E731
         model = self.plan["model"]["id"]
-        with self.client(target) as client:
-            ready_s = probe.wait_ready(client, model, t0, deadline, alive)
-            first_s = probe.first_answer(client, model, t0, deadline, alive,
-                                         self.plan["server"]["first_answer_tokens"],
-                                         self.plan["load"]["request_format"])
-            record["_reported_version"] = probe.reported_version(client)
+        retries = 0
+        while True:
+            self.backend.gpu_free(self.plan, side)
+            record["_started_epoch"] = self.wall()
+            t0 = self.clock()
+            handle = self._start(round_, side, spec, held)
+            replica = held["replicas"][-1]
+            replica["start_retries"] = retries
+            deadline = t0 + timeout
+            target = self.backend.endpoint(handle, deadline)
+            alive = lambda: self.backend.alive(handle)  # noqa: E731
+            try:
+                with self.client(target) as client:
+                    ready_s = probe.wait_ready(client, model, t0, deadline, alive)
+                    first_s = probe.first_answer(client, model, t0, deadline, alive,
+                                                 self.plan["server"]["first_answer_tokens"],
+                                                 self.plan["load"]["request_format"])
+                    record["_reported_version"] = probe.reported_version(client)
+                break
+            except probe.StartFailed as error:
+                if (error.never_ready or retries >= START_RETRIES
+                        or not self._start_again(replica, record, out_dir, rel, error, held)):
+                    raise
+                retries += 1
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["metrics"].update({"startup.ready_s": ready_s, "startup.first_answer_s": first_s})
@@ -479,7 +497,7 @@ class Runner:
         """The first replica as in any round; the surge through the router; the second replica at the forced step;
         the surge's figures, and how the router shared it out."""
         scale = self.plan["scale_out"]
-        _, target = self._first_replica(round_, side, spec, record, held)
+        _, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
         router = held["router"] = self.backend.router(self.plan, [target], out_dir)
         running = held["load"] = self.backend.start_load(self.plan, round_, router.url, out_dir)
         load_deadline = self.clock() + self.plan["load"]["timeout_s"]
@@ -504,17 +522,30 @@ class Runner:
                            "events": [], "load_triggered_s": None}
         timeout = self.plan["server"]["ready_timeout_s"]
         t0 = self.clock()
-        handle2 = self._start(round_, side, spec, held, replica=2)
-        record["scale"]["step_at_s"] = round(held["replicas"][-1]["epoch"] - surge_at, 3)
         deadline = t0 + timeout
-        target2 = self.backend.endpoint(handle2, deadline)
-        alive2 = lambda: self.backend.alive(handle2)  # noqa: E731
         model = self.plan["model"]["id"]
-        with self.client(target2) as client:
-            ready_s = probe.wait_ready(client, model, t0, deadline, alive2)
-            first_s = probe.first_answer(client, model, t0, deadline, alive2,
-                                         self.plan["server"]["first_answer_tokens"],
-                                         self.plan["load"]["request_format"])
+        retries, asked_epoch = 0, None
+        while True:  # a start that stops at vLLM's memory check is tried once more, and its time counts
+            handle2 = self._start(round_, side, spec, held, replica=2)
+            replica2 = held["replicas"][-1]
+            if asked_epoch is None:
+                asked_epoch = replica2["epoch"]
+                record["scale"]["step_at_s"] = round(asked_epoch - surge_at, 3)
+            replica2["epoch"], replica2["start_retries"] = asked_epoch, retries  # its log's phases: from the first ask
+            target2 = self.backend.endpoint(handle2, deadline)
+            alive2 = lambda: self.backend.alive(handle2)  # noqa: E731
+            try:
+                with self.client(target2) as client:
+                    ready_s = probe.wait_ready(client, model, t0, deadline, alive2)
+                    first_s = probe.first_answer(client, model, t0, deadline, alive2,
+                                                 self.plan["server"]["first_answer_tokens"],
+                                                 self.plan["load"]["request_format"])
+                break
+            except probe.StartFailed as error:
+                if (error.never_ready or retries >= START_RETRIES
+                        or not self._start_again(replica2, record, out_dir, rel, error, held)):
+                    raise
+                retries += 1
         surge_over = running.poll() is not None
         joined = router.add(target2) or {}
         joined_at = joined.get("joined_at") if isinstance(joined.get("joined_at"), (int, float)) else self.wall()
@@ -585,6 +616,39 @@ class Runner:
             self.backend.stop(handle)
         except Exception as error:
             record.setdefault("notes", []).append(f"teardown of replica {n}: {type(error).__name__}: {error}")
+
+    def _start_again(self, replica: dict, record: dict, out_dir: Path, rel: str, error: Exception,
+                     held: dict) -> bool:
+        """When the replica's server log shows vLLM's memory-profiling check failing: keep that log as
+        server.attempt-N.log (server-<replica>.attempt-N.log for a replica the scale round added), take that start
+        down, drop it from `held` and return True (the round starts the replica again). Anything else: False, and
+        the round fails."""
+        handle, n = replica["handle"], replica["replica"]
+        try:
+            text = self.backend.logs(handle)
+        except Exception:
+            return False
+        if not logs.memory_profiling_failed(text):
+            return False
+        tries = replica.get("start_retries", 0) + 1
+        record["start_retries"] += 1
+        stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
+        name = f"{stem}.attempt-{tries}.log"
+        (out_dir / name).write_text(text, encoding="utf-8")
+        record["artifacts"][f"{key}_attempt_{tries}"] = f"{rel}/{name}"
+        if n == 1:
+            what = "the side was started once more, and its start is timed from then"
+        else:
+            what = (f"replica {n} was started once more, and its time to first answer still counts from when it was "
+                    "first asked for")
+        record.setdefault("notes", []).append(
+            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); {what} ({name} is the first "
+            "try's log)")
+        self.backend.stop(handle)
+        held["replicas"].remove(replica)  # torn down; the next start adds it again
+        if n == 1:
+            held["handle"] = None
+        return True
 
     def _load(self, round_: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict) -> list[dict]:
         sampler = None

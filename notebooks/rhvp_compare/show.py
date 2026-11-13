@@ -148,6 +148,14 @@ def _p(value) -> str:
 
 # ---- the frame around every result ----
 
+def _retried(round_: dict) -> str:
+    """A round that started a replica again: "3 (side A)", or with the replicas when a scale-out round added one."""
+    again = [str(item.get("replica")) for item in round_.get("launches") or [] if item.get("start_retries")]
+    if any(n != "1" for n in again):
+        return words.RETRIED_REPLICAS.format(index=round_["index"], side=round_["side"], replicas=", ".join(again))
+    return words.RETRIED_ROUND.format(index=round_["index"], side=round_["side"])
+
+
 def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[str]:
     parts = []
     if _replay_path():
@@ -167,6 +175,9 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
               for r in results.get("rounds") or [] if r.get("status") != "ok"]
     if failed:
         parts.append(line(words.RUN_FAILED_ROUNDS.format(rounds=", ".join(failed))))
+    retried = [_retried(r) for r in results.get("rounds") or [] if r.get("start_retries")]
+    if retried:
+        parts.append(line(words.RUN_RETRIED.format(rounds=", ".join(retried))))
     unusable = [(words.LEVEL_SURGE if u["concurrency"] is None else words.LEVEL_AT).format(**u)
                 for u in summary.levels_unusable(results)]
     if unusable:

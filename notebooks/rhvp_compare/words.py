@@ -69,6 +69,11 @@ REPLAY_UNUSABLE = "REPLAY is on, but its results file could not be read ({error}
 RUN_LINE = "Run {run} · {status} · {done} of {planned} rounds measured · {platform}"
 RUN_FAILED_ROUNDS = "Rounds that failed: {rounds}."
 RUN_CODE = "Why the run did not finish: {code}."
+RUN_RETRIED = ("Rounds whose side was started once more after vLLM's start-up memory check failed: {rounds}. A "
+               "round's first replica is timed from its last start; a replica that a scale-out round adds is timed "
+               "from when it was first asked for.")
+RETRIED_ROUND = "{index} (side {side})"
+RETRIED_REPLICAS = "{index} (side {side}, replica {replicas})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 LEVEL_AT = "round {index} side {side} at {concurrency} streams"
 LEVEL_SURGE = "round {index} side {side}, the surge"

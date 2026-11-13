@@ -525,7 +525,7 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | Code | Meaning |
 |---|---|
 | `GPU_NOT_FREE` | another pod still held the GPU after 15 minutes |
-| `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited |
+| `SIDE_FAILED` | the side failed: a bad image, an image that could not be pulled, no node, or the server exited (a server that exits at vLLM's start-up memory check is started once more first) |
 | `SIDE_NEVER_READY` | the side did not list the model, or gave no answer, before its time limit |
 | `LOAD_FAILED` | GuideLLM failed, or timed out twice, or its report could not be read |
 | `STOPPED` | the runner was stopped during the round |
@@ -552,6 +552,14 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the round short and saves the run as partial.
 - Before each round the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
   namespace).
+- On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
+  (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
+  starts that side once more in the same round and times its start from the new start; the round's
+  `start_retries`, `results.md` and the notebook say so. A second such exit fails the round (`SIDE_FAILED`). The
+  same measurement sets the size of the server's KV cache, so memory that other programs take in those seconds
+  shrinks it: in one round of a smoke run a server got a small fraction of the KV cache the same image got in the
+  other rounds. Each round's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as quiet as you can
+  during a run.
 
 ### Comparing with this pattern's own server
 
@@ -564,20 +572,31 @@ under the same tag is not a new run: change the digest, or `runName`.
 
 ### What has not been checked
 
-- No round has started a real inference server yet: every end-to-end run used GuideLLM's mock server, without a
-  GPU. The example config (two vLLM releases) has not been run; the `vllm-openai` preset's arguments, the start as
-  an arbitrary UID, the log phases and `GET /version` are covered by unit tests only.
-- Tokens per joule has not been computed from real power samples, from DCGM or from nvidia-smi. Both power readers
-  are tested only against hand-written answers in the documented formats (a Prometheus `query_range` matrix, and
-  nvidia-smi CSV lines); the DCGM label names the reader matches on (`exported_pod`, `exported_namespace`, `pod`,
-  `Hostname`) have not been checked against a real DCGM exporter.
+- Real inference servers have run in two smoke runs only, with docker on one machine with one GPU
+  (`scripts/compare-local.sh`): the example's two images (vLLM v0.32.0 and v0.33.0) and model, one warm-up round
+  per side and 2 scored pairs, but not the example's settings (30 s per level instead of 60, `gpuMemoryUtilization`
+  0.1, `maxModelLen` 2048). The second run finished all 6 rounds: each server started as an arbitrary UID, listed
+  the model and answered; the runner read the start-up phases from its log and its version from `GET /version`;
+  GuideLLM measured both sides at all three levels with no failed request; a stand-in container playing the live
+  server was stopped before the first round and started again after; and one side, stopped by vLLM's start-up
+  memory check, was started once more and finished its round (see "On one machine"). The first run, from before
+  that second start existed, lost one of its four scored rounds to the same check and ended partial. With 2 pairs
+  every verdict is INCONCLUSIVE by design; the runs checked the harness, and their figures say nothing about the
+  two releases. No run with the example's own settings or its 10 pairs has been made, and the Kubernetes backend
+  has never started a real server.
+- Tokens per joule has been computed from real power samples in those two runs only, from nvidia-smi (2 samples a
+  second). It has never been computed from DCGM: that reader is tested only against hand-written answers in the
+  documented format (a Prometheus `query_range` matrix), and the DCGM label names it matches on (`exported_pod`,
+  `exported_namespace`, `pod`, `Hostname`) have not been checked against a real DCGM exporter.
 - No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
   a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote
   the status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
   `STOPPED`, deleted the side and brought the server back within seconds. That run came before the refusal of a
-  second run, the scale read-back and the early restore on a stop; those are covered by unit tests only. None of it
-  says anything about OpenShift's restricted security context, the internal registry, the cluster's monitoring or
-  Argo CD. The whole run has also been tried with docker (`scripts/compare-local.sh`), against the same mock server.
+  second run, the scale read-back and the early restore on a stop; on Kubernetes those are covered by unit tests
+  only. None of it says anything about OpenShift's restricted security context, the internal registry, the
+  cluster's monitoring or Argo CD. Under docker (`scripts/compare-local.sh`), against the same mock server, a
+  second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-round saved the run
+  as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - The length of a run, and so of the server's outage, is an estimate.
 
@@ -722,7 +741,10 @@ Each round:
    the same image, whatever the load. The second replica joins the router once it answers. Both images get their
    second replica at the same point, so an image that queues less, and would ask for a replica later, is still timed
    on the same schedule;
-5. times the second replica to its first answer, with the phases from its log, and counts its share of the requests;
+5. times the second replica to its first answer, with the phases from its log, and counts its share of the requests.
+   A second replica that exits at vLLM's start-up memory check is started once more, as a side is (see "On one
+   machine"), and its time to first answer still counts from when it was first asked for, as an operator would see
+   it; its launch record's `start_retries` says so;
 6. reads GuideLLM's share of the requests that met the latency goals (`scaleOut.ttftMs` for the first token,
    `scaleOut.tpotMs` between tokens).
 

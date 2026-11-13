@@ -210,7 +210,10 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
   older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each round creates a side
   pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs GuideLLM
-  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. When
+  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. A
+  side whose server exits at vLLM's start-up memory check (`Error in memory profiling` in its log) is started once
+  more in the same round (`runner.START_RETRIES`, the round's `start_retries`, and the launch record's own
+  `start_retries`); in mode `scaleout` the second replica gets the same one retry, timed from its first ask. When
   the run ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the
   scale back, and records `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
@@ -234,12 +237,16 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
 to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). That run
-came before the refusal of a second run, the scale read-back and the early restore on a stop, which are covered by
-unit tests only. Not checked yet: any round against a real inference server (every end-to-end run used GuideLLM's
-mock server, without a GPU); tokens per joule from real power samples (both power readers are tested only against
-hand-written answers in the documented formats, and the DCGM label names the reader matches on have not been
-checked against a real DCGM exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry,
-Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
+came before the refusal of a second run, the scale read-back and the early restore on a stop, which on Kubernetes
+are covered by unit tests only (under docker, the refusal and the stop path have run against the mock server).
+Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`): two 2-pair smoke runs of the
+example's two vLLM images with smaller settings. The second finished all 6 rounds, measured by GuideLLM, with tokens
+per joule from nvidia-smi, one of them after a second start past vLLM's start-up memory check (README, "On one
+machine"); the first, from before that second start, lost a round to that check.
+Not checked yet: the Kubernetes backend with a real server; tokens per joule from DCGM (its reader is tested only
+against hand-written answers, and the DCGM label names it matches on have not been checked against a real DCGM
+exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the
+Job); the example's own settings; and the length of a run (an estimate of 2 to 3 hours with the defaults).
 
 ### How scale out works
 
