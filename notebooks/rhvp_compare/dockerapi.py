@@ -365,13 +365,11 @@ class DockerBackend:
     def prepare(self, plan: Mapping) -> None:
         self.run_id = plan["run_id"]
         self.docker.network(self.network)
-        if self.server_container:
+        state = None
+        if self.server_container:  # checked first, so a wrong name fails before minutes of pulls
             state = (self.docker.inspect(self.server_container) or {}).get("State")
             if state is None:
                 raise runner.RoundError(f"RHVP_COMPARE_SERVER_CONTAINER names no container: {self.server_container}")
-            if state.get("Running"):
-                self._server_stopped = True  # set first: a stop that fails half-way is still undone
-                self.docker.stop(self.server_container, grace_s=30)
         self.docker.volume(self.models_volume)
         for ref in [s["image"] for s in plan["sides"]]:
             self.docker.pull(ref)
@@ -403,6 +401,11 @@ class DockerBackend:
 
             llm.parent.mkdir(parents=True, exist_ok=True)
             llm.write_text(plans.llm_yaml(plan), encoding="utf-8")
+        # The live server stops last. The pulls above can take minutes and cannot be interrupted; a stop (or a
+        # SIGKILL after the stop timeout) that lands during them then leaves the server running, not down.
+        if state is not None and state.get("Running"):
+            self._server_stopped = True  # set first: a stop that fails half-way is still undone
+            self.docker.stop(self.server_container, grace_s=30)
 
     def describe(self) -> dict:
         info = self.docker.info()
