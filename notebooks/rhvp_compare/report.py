@@ -41,8 +41,8 @@ def _starts(round_: Mapping) -> str:
     """How often a retried round started its servers: per replica (and try) unless only the first replica of the
     round's kept try was started again; from the round's count for a file without launch records."""
     again = [item for item in round_.get("launches") or [] if item.get("start_retries")]
-    if not again:
-        return f"started {round_['start_retries'] + 1} times"
+    if not again:  # a file without launch records: a round whose load ran again also started its side once more
+        return f"started {round_['start_retries'] + (round_.get('load_retries') or 0) + 1} times"
     if len(again) == 1 and again[0].get("replica") == 1 and not again[0].get("discarded"):
         return f"started {again[0]['start_retries'] + 1} times"
     return ", ".join(f"replica {item.get('replica')}{' of the discarded try' if item.get('discarded') else ''} "
@@ -162,8 +162,9 @@ def markdown(results: Mapping) -> str:
         how = ("the whole round ran once more from a new first replica, with the same requests, and every figure of "
                "the round comes from that second try; the first try's files are the round's *.try-1.* files"
                if plan.get("mode") == "scaleout" else
-               "GuideLLM ran once more against the same server, with the same requests, and the round's figures "
-               "come from that second run")
+               "the side was taken down and started again, timed from that new start, and GuideLLM ran once more "
+               "with the same requests; every figure of the round comes from that second try, and the first try's "
+               "files are the round's *.try-1.* files")
         lines += ["", f"Rounds whose load ran again after GuideLLM timed out ({how}):"]
         lines += [f"- round {r['index']} (side {r['side']}, {r['kind']}): ran again, then "
                   f"{'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in reloaded]

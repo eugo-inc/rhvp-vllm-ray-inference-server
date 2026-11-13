@@ -81,8 +81,10 @@ class FakeBackend:
     def __init__(self, fail_round: int | None = None, hang_once: bool = False, fail_code: str = runner.SIDE_FAILED,
                  load_error: bool = False, term_in_round: int | None = None, errored: dict | None = None,
                  nodes: tuple[str, ...] = ("node-1",), zero: dict | None = None, dies: dict | None = None,
-                 dies_log: str = PROFILING_LOG):
+                 dies_log: str = PROFILING_LOG, hangs: dict | None = None):
         self.fail_round, self.hang_once, self.fail_code = fail_round, hang_once, fail_code
+        self.hangs = dict(hangs or {})  # round index -> how many of its loads time out
+        self.loads: list = []  # (round index, the start of the round's side that each load ran against)
         self.load_error, self.term_in_round = load_error, term_in_round
         self.errored = errored or {}  # round index -> the concurrency level where 40 requests fail
         self.zero = zero or {}  # round index -> the concurrency level whose requests finish with no output token
@@ -122,9 +124,15 @@ class FakeBackend:
             raise AssertionError("SIGTERM did not cut the round short")
         if self.load_error:
             raise guidellm.LoadError("GuideLLM exited with code 2; see guidellm.log")
-        if self.hang_once:
-            self.hang_once = False
+        self.loads.append((round_["index"], self.attempts.get(round_["index"])))
+        if self.hang_once or self.hangs.get(round_["index"]):
+            if self.hang_once:
+                self.hang_once = False
+            else:
+                self.hangs[round_["index"]] -= 1
+            (out_dir / "guidellm.log").write_text("stalled\n")
             raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped", timed_out=True)
+        (out_dir / "guidellm.log").write_text("finished\n")
         data = json.loads(json.dumps(REPORT))
         slower = 1.2 if round_["side"] == "B" and round_["kind"] == "scored" else 1.0
         wobble = 1.0 + 0.001 * round_["index"]
@@ -529,19 +537,98 @@ def test_the_termination_message_never_passes_4_kib():
     assert len(text.encode()) <= 4096 and "primary" not in json.loads(text)
 
 
-def test_a_hung_load_is_tried_once_more(tmp_path):
-    results, _, the_runner = run(tmp_path, FakeBackend(hang_once=True), rounds={"pairs": 2, "warmup": False})
+def test_a_hung_load_runs_the_round_once_more_from_a_new_start(tmp_path):
+    # Round 1: GuideLLM stalls. Its retry sends the same requests (the same seed), so it runs against a new start of
+    # the side, not against the server that has just served them, and the round's figures come from that try.
+    backend = FakeBackend(hang_once=True)
+    results, _, the_runner = run(tmp_path, backend, rounds={"pairs": 2, "warmup": False})
     jsonschema.validate(results, SCHEMA)
     first = results["rounds"][0]
-    assert first["status"] == "ok" and "run once more" in first["notes"][0]
+    assert (first["status"], first["error_code"], first["load_retries"], first["start_retries"]) == ("ok", None, 1, 0)
     assert [r["load_retries"] for r in results["rounds"]] == [1, 0, 0, 0]
+    assert backend.started.count((1, "A")) == 2 and backend.stopped.count(1) == 2
+    assert [load for load in backend.loads if load[0] == 1] == [(1, 1), (1, 2)]  # the second load: the second start
+    assert any("run once more from a new start of the side, with the same requests" in n for n in first["notes"])
+    assert [(l["replica"], l["discarded"]) for l in first["launches"]] == [(1, True), (1, False)]
+    folder = the_runner.dir / "rounds/01-A-scored"
+    assert first["artifacts"]["guidellm_try_1"] == "rounds/01-A-scored/guidellm.try-1.log"
+    assert first["artifacts"]["server_log_try_1"] == "rounds/01-A-scored/server.try-1.log"
+    assert (folder / "guidellm.try-1.log").read_text() == "stalled\n"
+    assert (folder / "guidellm.log").read_text() == "finished\n"
+    for key in ("server_log_try_1", "server_log", "load_report"):
+        assert (the_runner.dir / first["artifacts"][key]).is_file(), key
+    assert first["startup"]["ready_s"] >= 0 and {"startup.ready_s", "c1.ttft_ms_median"} <= set(first["metrics"])
+    assert results["run"]["status"] == "complete"
     text = (the_runner.dir / "results.md").read_text()
-    assert ("Rounds whose load ran again after GuideLLM timed out (GuideLLM ran once more against the same "
-            "server") in text
+    assert "Rounds whose load ran again after GuideLLM timed out (the side was taken down and started again" in text
     assert "- round 1 (side A, scored): ran again, then finished" in text
+    assert "started again after vLLM" not in text
     head = "".join(show._head(results, [], []))
     assert "Rounds whose load ran again after GuideLLM timed out: 1 (side A)." in head
-    assert "against the same server" in head
+    assert "The side was taken down and started again" in head
+
+
+def test_a_load_that_times_out_in_both_tries_is_load_failed(tmp_path):
+    backend = FakeBackend(hangs={1: 2})
+    results, _, the_runner = run(tmp_path, backend, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    failed = results["rounds"][0]
+    assert (failed["status"], failed["error_code"], failed["load_retries"]) == ("failed", "LOAD_FAILED", 1)
+    assert backend.started.count((1, "A")) == 2 and backend.stopped.count(1) == 2
+    assert backend.loads.count((1, 1)) == 1 and backend.loads.count((1, 2)) == 1  # one load per start, no third
+    assert failed["startup"] is not None  # the second start's figures; the round's other figures are gone
+    assert "- round 1 (side A, scored): ran again, then LOAD_FAILED" in (the_runner.dir / "results.md").read_text()
+
+
+class DiesInEachTry(FakeBackend):
+    """Round 3's side stops at vLLM's memory check on its 1st and 3rd starts: once in each try of the round."""
+
+    def start(self, plan, round_, side, spec):
+        handle = super().start(plan, round_, side, spec)
+        handle["dies"] = round_["index"] == 3 and self.attempts[3] in (1, 3)
+        return handle
+
+
+def test_each_try_of_a_retried_round_gets_its_own_memory_check_retry(tmp_path):
+    backend = DiesInEachTry(hangs={3: 1})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    r3 = next(r for r in results["rounds"] if r["index"] == 3)
+    assert (r3["status"], r3["start_retries"], r3["load_retries"]) == ("ok", 2, 1)
+    assert backend.started.count((3, "A")) == 4 and backend.stopped.count(3) == 4
+    assert [load for load in backend.loads if load[0] == 3] == [(3, 2), (3, 4)]
+    first, second = r3["artifacts"]["server_log_attempt_1_try_1"], r3["artifacts"]["server_log_attempt_1"]
+    assert first == "rounds/03-A-scored/server.attempt-1.try-1.log"
+    assert second == "rounds/03-A-scored/server.attempt-1.log"
+    assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
+    assert "Error in memory profiling" not in (the_runner.dir / r3["artifacts"]["server_log_try_1"]).read_text()
+    assert [(l["replica"], l["discarded"], l["start_retries"]) for l in r3["launches"]] == [(1, True, 1), (1, False, 1)]
+    retried = next(n for n in r3["notes"] if "server.attempt-1.try-1.log" in n)
+    assert "replica 1 of the discarded try was started once more" in retried and "timed from then" not in retried
+    text = (the_runner.dir / "results.md").read_text()
+    assert ("- round 3 (side A, scored): replica 1 of the discarded try started 2 times, replica 1 started 2 times, "
+            "then finished") in text
+    assert "- round 3 (side A, scored): ran again, then finished" in text
+
+
+class StopFailsOnce(FakeBackend):
+    """The first teardown of round 1's side fails, as an API error would."""
+
+    def stop(self, handle):
+        super().stop(handle)
+        if self.stopped.count(1) == 1 and handle["round"]["index"] == 1:
+            raise runner.RoundError("could not delete the side's pod (HTTP 500)")
+
+
+def test_a_teardown_that_fails_between_the_tries_still_records_the_retry(tmp_path):
+    backend = StopFailsOnce(hang_once=True)
+    results, _, _ = run(tmp_path, backend, rounds={"pairs": 1, "warmup": False})
+    jsonschema.validate(results, SCHEMA)
+    failed = results["rounds"][0]
+    assert (failed["status"], failed["error_code"], failed["load_retries"]) == ("failed", "RUNNER_ERROR", 1)
+    assert any("did not finish within 1 s" in note for note in failed["notes"])  # the time-out is on record
+    assert backend.started.count((1, "A")) == 1 and backend.stopped.count(1) == 2  # the round's end tore it down
+    assert [(l["replica"], l["discarded"]) for l in failed["launches"]] == [(1, True)]  # one record for one start
 
 
 def test_a_complete_run_is_not_run_again(tmp_path):
@@ -1096,8 +1183,8 @@ def test_a_surge_whose_guidellm_timed_out_runs_the_round_once_more_and_the_round
     assert {"startup.ready_s", "scale.first_answer_s", "surge.slo_attainment"} <= set(r3["metrics"])
     assert r3["startup"]["ready_s"] >= 0 and 5 <= r3["scale"]["step_at_s"] < 5.5
     assert r3["scale"]["new_replica_share"] == 0.25
-    assert any("that try was discarded, to run the round once more from a new first replica, with the same requests"
-               in note for note in r3["notes"])
+    assert any("that try was discarded, so that the round could run once more from a new first replica, with the "
+               "same requests" in note for note in r3["notes"])
     assert "stalled" in (the_runner.dir / r3["artifacts"]["guidellm_try_1"]).read_text()
     assert "finished" in (the_runner.dir / "rounds/03-A-scored/guidellm.log").read_text()
     for key in ("server_log_try_1", "server_log_2_try_1", "server_log", "server_log_2", "load_report"):

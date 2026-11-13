@@ -75,8 +75,8 @@ RUN_RETRIED = ("Rounds whose side was started once more after vLLM's start-up me
                "round's first replica is timed from its last start; a replica that a scale-out round adds is timed "
                "from when it was first asked for.")
 RUN_LOAD_RETRIED = "Rounds whose load ran again after GuideLLM timed out: {rounds}. {how}"
-LOAD_RETRIED_PAIRS = ("GuideLLM ran once more against the same server, with the same requests, and the round's "
-                      "figures come from that second run.")
+LOAD_RETRIED_PAIRS = ("The side was taken down and started again, timed from that new start, and GuideLLM ran once "
+                      "more with the same requests; every figure of the round comes from that second try.")
 LOAD_RETRIED_SCALE = ("The whole round ran once more from a new first replica, with the same requests, and every "
                       "figure of the round comes from that second try.")
 RETRIED_ROUND = "{index} (side {side})"

@@ -6,6 +6,14 @@ The loop knows nothing about Kubernetes or docker: a Backend does the platform w
 fake one in the tests). A round that fails is recorded with its reason and a fixed failure code (ROUND_CODES), and
 the run goes on; the comparison then has one pair fewer for the metrics that round would have given.
 
+GuideLLM now and then stops making progress at the end of a level (seen once in about twenty runs against a stand-in
+server). A round whose GuideLLM timed out runs once more (LOAD_RETRIES): the side is taken down, started again from
+the GPU check and timed from that new start, and GuideLLM runs with the same requests (the same load seed). Sent
+again to the same server, those requests could find their prompts in its prefix cache, which no other round has.
+Every figure of the round then comes from that second try; the first try's files are kept as *.try-1.*, its launch
+records are marked discarded, and the round's `load_retries` says it ran again (`_discard_try`; the round's teardown
+finishes a discard that a failed stop or a SIGTERM cut short). A second time-out is LOAD_FAILED.
+
 SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the round: the round
 is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is saved as
 partial, all within the runner pod's grace period. On OpenShift the pattern's server is asked back first, before the
@@ -28,12 +36,9 @@ scale_out.step_after_s after the router saw the surge's first request (the force
 second replica of the same side, times it from its start to its first answer, and adds it to the router. The
 round keeps how many requests each replica got (`scale.router`), so the new replica's share of the surge is on
 record. A second replica that never answers fails the round (SIDE_NEVER_READY); one that answers only after the surge
-has ended is still timed, with a share of 0. When GuideLLM times out (the stall mode pairs also tries once more,
-SURGE_RETRIES), the whole round runs once more: GuideLLM, the router and both replicas are taken down, and a new first
-replica is started and timed, then the surge runs with the same requests (the same load seed) and a new second
-replica. A surge sent again to the first replica would find the first surge's prompts in its prefix cache, which no
-other round has. Every figure of the round then comes from that second try; the first try's files are kept as
-*.try-1.*, and the round's `load_retries` says it ran again. A second time-out is LOAD_FAILED, as in mode pairs.
+has ended is still timed, with a share of 0. When GuideLLM times out, the round runs once more as any round does
+(LOAD_RETRIES): GuideLLM, the router and both replicas are taken down, and a new first replica is started and timed,
+then the surge runs with the same requests (the same load seed) and a new second replica.
 
 Every server start is recorded in the round's `launches` (launch.py): what the runner ran, and the environment the
 server process saw when the backend can read it (`launch_facts`).
@@ -72,19 +77,21 @@ def utc_now() -> str:
 GPU_NOT_FREE = "GPU_NOT_FREE"          # another pod or program still held the GPU when the round was to start
 SIDE_FAILED = "SIDE_FAILED"            # the side failed: bad image, pull failure, no node, or the server exited
 SIDE_NEVER_READY = "SIDE_NEVER_READY"  # the side did not list the model, or gave no answer, before its time limit
-LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed or timed out (after its one retry), or its report is unusable
+LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed, or timed out in both tries of the round, or its report is
+#                                        unusable
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the round
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 ROUND_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
 #: How many more times a replica of a side is started in one round when its server stopped at vLLM's start-up memory
 #: check (logs.memory_profiling_failed); recorded in that replica's launch record and summed in the round's
-#: start_retries. A second such failure of the same replica is SIDE_FAILED.
+#: start_retries. A second such failure of the same start is SIDE_FAILED. A round whose load runs again
+#: (LOAD_RETRIES) starts its replicas anew, and each new start gets its own retry.
 START_RETRIES = 1
-#: How many more times a scale round runs after its surge's GuideLLM timed out (LoadError.timed_out): the same one
-#: retry mode pairs gives a GuideLLM time-out, so one stall of the load tool is not a failure of the side. The retry
-#: starts the round again from a new first replica (see the module's docstring), and the round's load_retries counts
-#: it; a second time-out is LOAD_FAILED.
-SURGE_RETRIES = 1
+#: How many more times a round runs after its GuideLLM timed out (LoadError.timed_out), so one stall of the load tool
+#: is not a failure of the side. The retry takes the side down (in mode scaleout both replicas) and starts the round
+#: again from the GPU check (see the module's docstring), and the round's load_retries counts it; a second time-out is
+#: LOAD_FAILED.
+LOAD_RETRIES = 1
 #: The run's `error_code`, null when every planned round finished:
 ROUNDS_FAILED = "ROUNDS_FAILED"  # every round ran and some failed (status partial)
 REQUESTS_FAILED = "REQUESTS_FAILED"  # every round ran, but at some load level of some round requests failed (or none
@@ -506,17 +513,30 @@ class Runner:
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
-        """Wait for the GPU, start the side, time its start, load it; any failure raises."""
-        handle, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
-        if round_["kind"] != plans.WARMUP:
-            record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
+        """Wait for the GPU, start the side, time its start, load it; any failure raises. A load whose GuideLLM timed
+        out runs the round once more (LOAD_RETRIES) from a new start of the side, so the second try meets the same
+        conditions as every other round: a server that has served no load, and the same requests."""
+        tries = 0
+        while True:
+            handle, target = self._first_replica(round_, side, spec, record, out_dir, rel, held)
+            if round_["kind"] == plans.WARMUP:
+                return
+            try:
+                record["levels"] = self._load(round_, handle, target, out_dir, rel, record)
+            except guidellm.LoadError as error:
+                if not error.timed_out or tries >= LOAD_RETRIES:
+                    raise
+                tries += 1
+                self._discard_try(spec, record, out_dir, rel, held, error, tries)
+                continue
             record["metrics"].update(guidellm.flat_metrics(record["levels"]))
+            return
 
     def _first_replica(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                        held: dict):
-        """Wait for the GPU, start the round's first replica and time it to its first answer: (handle, target). A
-        server that stopped at vLLM's start-up memory check is started once more (START_RETRIES), and its start is
-        timed from that start."""
+        """Wait for the GPU, start the round's first replica (in mode pairs, the side) and time it to its first
+        answer: (handle, target). A server that stopped at vLLM's start-up memory check is started once more
+        (START_RETRIES), and its start is timed from that start."""
         timeout = self.plan["server"]["warmup_timeout_s" if round_["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
         retries = 0
@@ -553,7 +573,7 @@ class Runner:
     def _scale_round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                      held: dict) -> None:
         """The first replica as in any round, then the surge (`_surge`). A surge whose GuideLLM timed out runs the
-        round once more (SURGE_RETRIES) from a new first replica, so the second try meets the same conditions as
+        round once more (LOAD_RETRIES) from a new first replica, so the second try meets the same conditions as
         every other round: a first replica that has served no surge, and the same requests."""
         tries = 0
         while True:
@@ -562,19 +582,19 @@ class Runner:
                 self._surge(round_, side, spec, record, out_dir, rel, held, target)
                 return
             except guidellm.LoadError as error:
-                if not error.timed_out or tries >= SURGE_RETRIES:
+                if not error.timed_out or tries >= LOAD_RETRIES:
                     raise
                 tries += 1
                 self._discard_try(spec, record, out_dir, rel, held, error, tries)
 
     def _discard_try(self, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict, error: Exception,
                      tries: int) -> None:
-        """After a surge whose GuideLLM timed out: record that the try is discarded (the round's load_retries and a
-        note, first, so a round whose discard fails or is stopped partway still says why its launch records are
-        marked discarded), clear what the try had recorded, stop GuideLLM and the router, keep every file of that try
-        as *.try-N.* (artifact keys *_try_N), and take both replicas down with their launch records marked discarded
-        (their memory-check retries stay in them and in the round's start_retries). The round then starts again from
-        the GPU check.
+        """After a load (mode pairs) or a surge (mode scaleout) whose GuideLLM timed out: record that the try is
+        discarded (the round's load_retries and a note, first, so a round whose discard fails or is stopped partway
+        still says why its launch records are marked discarded), clear what the try had recorded, stop GuideLLM and
+        the router (mode scaleout), keep every file of that try as *.try-N.* (artifact keys *_try_N), and take its
+        replicas down with their launch records marked discarded (their memory-check retries stay in them and in the
+        round's start_retries). The round then starts again from the GPU check.
 
         While `held["discarding"]` is set, every replica in `held` belongs to the discarded try, and the round's
         teardown (measure) finishes a discard that a failed stop or a SIGTERM cut short (`_discard_replica`): each
@@ -583,8 +603,10 @@ class Runner:
         record["load_retries"] = tries
         notes = record.setdefault("notes", [])
         note_at = len(notes)
-        notes.append(f"{error}; that try was discarded, to run the round once more from a new first replica, with the "
-                     f"same requests (its files are the *.try-{tries}.* files, its launch records are marked "
+        scale = self.plan.get("mode") == plans.SCALEOUT
+        notes.append(f"{error}; that try was discarded, so that the round could run once more from "
+                     f"{'a new first replica' if scale else 'a new start of the side'}, with the same requests (its "
+                     f"files are the *.try-{tries}.* files, its launch record{'s are' if scale else ' is'} marked "
                      "discarded)")
         held["discarding"] = tries
         record.pop("scale", None)
@@ -609,6 +631,7 @@ class Runner:
                 del record["artifacts"][key]
                 keep(path.rpartition("/")[2], key)
         keep("guidellm.log", "guidellm")
+        keep("guidellm.json", "load_report")  # a report the stopped GuideLLM may have left
         keep("router.log", "router")
         # The try's notes name its files by their new names, and its memory-check retries as the discarded try's.
         notes[note_at] = _renamed(notes[note_at], renamed)
@@ -809,19 +832,7 @@ class Runner:
                 record.setdefault("notes", []).append(f"power sampling did not start: {type(error).__name__}")
                 sampler = None
         try:
-            try:
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
-            except guidellm.LoadError as error:
-                if not error.timed_out:
-                    raise
-                # GuideLLM v0.8.1 now and then stops making progress at the end of a level (seen once in about
-                # twenty runs against a stand-in server). One more try, against the same server, is recorded on the
-                # round.
-                record.setdefault("notes", []).append(f"{error}; GuideLLM was run once more against the same server")
-                record["load_retries"] = 1
-                if (out_dir / "guidellm.log").exists():
-                    (out_dir / "guidellm.log").replace(out_dir / "guidellm.attempt-1.log")
-                report_path = self.backend.run_load(self.plan, round_, target, out_dir)
+            report_path = self.backend.run_load(self.plan, round_, target, out_dir)
         finally:
             if sampler is not None:
                 try:
