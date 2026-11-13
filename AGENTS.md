@@ -54,7 +54,7 @@ one, change it everywhere and run the tests.
 | Notebook ServiceAccount | `notebook`, with a Role and RoleBinding `notebook-read-pods` in `vllm-inference` that allow get/list/watch on pods |
 | Rebuild permission | Role and RoleBinding `rebuild-on-commit` in both namespaces, for ServiceAccount `imperative/imperative-sa`; the namespaces and BuildConfig names are also listed in `ansible/rebuild-on-commit.yaml` |
 | Image comparison runner | Job `compare-<runName>-<hash of the pod template>` in `vllm-notebook` (pod label `app.kubernetes.io/name=image-compare`), ServiceAccount `image-compare`, config ConfigMap `image-compare-config-<hash of the config>` (key `compare.json`) |
-| Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`) |
+| Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`) |
 | Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
 | Image comparison sides | Pods `cmp-<last 8 characters of the run id>-r<NN>-<a or b>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side` and `rhvp-compare/run=<run id>` |
 | DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`) |
@@ -164,15 +164,27 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 - The Job's pod runs on the pinned GuideLLM image (`ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b...`); an init
   container copies `notebooks/rhvp_compare` into it from the notebook image. It runs on the notebook pod's node,
   because the results PVC is ReadWriteOnce and the notebook mounts it too.
-- The runner (`python -m rhvp_compare run --backend kube`) scales Deployment `ray-serve-llm` to 0, then for each
-  round creates a side pod in `vllm-inference`, times its start, runs GuideLLM as its own child process, reads GPU
-  power from the Thanos Querier, deletes the pod and saves `results.json`. When the run ends it scales the server
-  back to `compare.serverReplicas` (1). The ray-serve-llm app ignores the Deployment's `/spec/replicas`.
-- SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current round short; the pod's
-  `terminationGracePeriodSeconds` (300) leaves time to delete the side, scale the server back and save.
-- A Job's pod template cannot change, so the Job's name carries a hash of everything in it
-  (`notebook.compareJobHash`). The run id carries a hash of the config only, so a new Job with the same config finds
-  its run complete and exits at once.
+- The runner (`python -m rhvp_compare run --backend kube`) first lists the runner pods in `vllm-notebook`
+  (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
+  older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each round creates a side
+  pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs GuideLLM
+  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. When
+  the run ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the
+  scale back, and records `run.server_restored`; a server that did not come back is exit 4.
+- The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
+  sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
+- SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current round short and asks the server back at once,
+  before the side is taken down (its pod waits for the GPU); every API call then gets a 10 s timeout. The pod's
+  `terminationGracePeriodSeconds` (300) is above the worst case of that path (`kube.stop_budget_seconds()`, checked
+  by `tests/test_charts.py`).
+- A Job's pod template cannot change, so the Job's name carries a hash of the whole rendered pod template
+  (`notebook.comparePodTemplate`, hashed by `notebook.compareJobHash`). The run id carries a hash of the config
+  only, so a new Job with the same config finds its run complete and exits at once, or refuses while the first
+  still runs.
+- The verdict rule (`stats.verdict`, then `analyze.py`): TIE needs the median ratio and its whole interval inside
+  the tie band; FASTER or SLOWER needs the corrected p-value at most alpha and the test leaning the same way as the
+  median; a metric that lost a pair to one side failing on its own account, and every metric of a run whose rounds
+  used more than one node, is INCONCLUSIVE.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: it reads `plan` and `rounds` of the results
   file and writes `analysis`. Another tool that writes the same `analysis` shape can replace `analyze.py` and
   `stats.py`.
@@ -180,9 +192,10 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
 to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). Not checked
-yet: any round against a real inference server (every end-to-end run used GuideLLM's mock server, without a GPU);
-tokens per joule from real power samples (DCGM or nvidia-smi); a run on OpenShift (restricted SCC, internal
-registry, Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
+yet: tokens per joule from DCGM (both power readers are tested only against hand-written answers in the documented
+formats, and the DCGM label names the reader matches on have not been checked against a real DCGM exporter); a run
+on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); and the length of
+a run (an estimate of 2 to 3 hours with the defaults).
 
 ## How to deploy
 

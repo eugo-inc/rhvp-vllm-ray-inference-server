@@ -374,14 +374,23 @@ v0.33.0 (side B), both pinned by digest. Every ratio it reports is B/A.
 
 A run takes the pattern's own server down for its whole length. The comparison needs the server's GPU and its model
 volume, so the runner scales Deployment `ray-serve-llm` to 0 before the first round and back to 1 when the run ends,
-whether it finished, failed or was stopped. Argo CD ignores the Deployment's `replicas`, so a sync during the run
-does not bring the server back early. With the default settings a run is 22 rounds; we estimate 2 to 3 hours on one
-GPU, but we have not timed it on a cluster.
+whether it finished, failed or was stopped. When it is stopped, it asks the server back first, before it takes the
+round's side down; the server's pod then waits for the GPU. It tries the scale for about a minute and reads it back
+to check. With the default settings a run is 22 rounds; we estimate 2 to 3 hours on one GPU, but we have not timed
+it on a cluster.
 
-If the runner's pod is killed outright (its node is lost, or it is force-deleted), it cannot scale the server back.
-Bring it back yourself:
+The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
+never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
+it also means a server at 0 replicas stays at 0 until someone scales it.
+
+If the server did not come back, the run says so: its Job exits 4, `run.server_restored` is `false` in the results,
+the status ConfigMap and the termination message, and the log's last lines give the commands below. If the runner's
+pod was killed outright (its node is lost, or it is force-deleted), nothing says so; check the server. Either way,
+delete any side pod left behind first (it holds the GPU and the model volume until its own time limit, up to about
+an hour and a half), then scale the server back:
 
 ```sh
+oc delete pod -n vllm-inference -l app.kubernetes.io/name=image-compare-side
 oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
 ```
 
@@ -403,11 +412,14 @@ oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
 To run again, change `runName` or any other value under `global.compare`. A changed config is a new run. A run whose
 results are complete is never run again.
 
-Run one comparison at a time. Before you push a new run, wait for the current one to finish, or delete its Job:
-two runs at once share the GPU, and the first to end scales the live server back up while the other is still
-measuring.
+One comparison runs at a time. A runner that finds an older runner pod still Pending or Running in `vllm-notebook`
+refuses to start: it changes nothing (no results file, no status, the server left alone) and exits 5, so its Job
+reads `Failed`. This also covers a changed value in the notebook chart's `compare` settings, `image.override` or
+`arch`, which makes a new Job for the same run while the first is still going. Push a new run after the current one
+has finished, or delete the running Job first.
 
-A run that ends partial (some rounds failed, or it was stopped) exits 1, so its Job reads `Failed`, and we expect
+A run that ends partial (some rounds failed, requests failed at some load level, or it was stopped) exits 1, so its
+Job reads `Failed`, and we expect
 Argo CD to show the `notebook` app as Degraded until that Job is gone (not tried on a cluster). The results of the
 rounds that finished are kept. Do not just delete the Job: it is still in Git, so the next sync (after any later
 commit) would create it again, and a run that is not complete runs again from the start and takes the server down
@@ -427,7 +439,8 @@ need them.
    apart.
 
 In each round the runner starts the side as a pod in `vllm-inference`. The pod runs like the pattern's own server:
-one GPU, the model volume, fresh caches. The runner then measures:
+one GPU, the model volume, fresh caches. Every side pod after the first runs on the first one's node, so all rounds
+use the same GPU. The runner then measures:
 
 - **Start-up.** Time to ready (until `GET /v1/models` lists the model), time to first answer (until the first
   generated text of a streamed request comes back), and the phases each server writes to its own log, such as
@@ -452,13 +465,23 @@ The rule is fixed in the config before the first round and written into the resu
   multiple comparisons, so only their verdicts are findings. `analysis.primary` lists other metric ids.
 - **Secondary metrics.** Every other metric gets the same test, interval and tie band, but an uncorrected p-value.
   Its verdict describes the run; it is not a finding.
-- **Tie band.** A median ratio between 1/1.05 and 1.05 (`analysis.tieBand: 0.05`) is TIE, whatever its p-value.
-  Outside the band, B is FASTER or SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) when the p-value is
-  at most alpha (0.05), and INCONCLUSIVE otherwise.
+- **Tie band.** TIE needs the median ratio and its whole confidence interval between 1/1.05 and 1.05
+  (`analysis.tieBand: 0.05`), whatever the p-value. A median inside the band with an interval that reaches outside
+  it, or with too few pairs for an interval (fewer than 6 at the default 95%), is INCONCLUSIVE: it does not show the
+  two images are within 5%.
+- **Outside the band**, B is FASTER or SLOWER (MORE_EFFICIENT or LESS_EFFICIENT for tokens per joule) when the
+  p-value is at most alpha (0.05) and the test leans the same way as the median ratio, and INCONCLUSIVE otherwise.
+- **A side that fails.** When a pair lost a metric because one side failed on its own account (its round failed
+  with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests failed at that load level), the metric is
+  INCONCLUSIVE, whichever side failed: the pairs that are left would flatter the side that failed. Each metric
+  lists the pairs it lost and why (`pairs_lost`).
+- **One node.** When the scored rounds ran on more than one node, every verdict is INCONCLUSIVE.
 
 With n pairs no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
 metrics. With the 4 default primary metrics, at least 8 pairs are needed for any FASTER or SLOWER verdict; the
-default is 10. The runner prints a warning when the plan cannot reach alpha.
+default is 10. The runner prints a warning when the plan cannot reach alpha. When failed rounds leave the metrics
+with different numbers of pairs, each metric's `reachable` flag uses the smallest corrected p-value its own pairs
+allow.
 
 ### Where the results are
 
@@ -474,15 +497,24 @@ The runner writes to the PVC `image-compare-results` (5Gi, ReadWriteOnce, mounte
 The run id is `runName` plus the first 8 hex digits of the config's sha256. Without access to the PVC:
 
 - ConfigMap `compare-<run id>` in `vllm-notebook` holds `status.json` (phase, pairs done, an estimate of the time
-  left, failure codes, the primary verdicts), rewritten after every round, and `result.json`, the whole results
-  file while it is smaller than about 900 kB.
-- The runner container's termination message holds a summary of at most 4 KB: the status, the failure code, the
-  pairs and the verdict counts.
+  left, failure codes, the load levels left out because requests failed, whether the server is back, the primary
+  verdicts), rewritten after every round, and `result.json`, the whole results file while it is smaller than about
+  900 kB.
+- The runner container's termination message holds a summary of at most 4 KB: the status, the failure code, whether
+  the server is back, the pairs and the verdict counts.
 - At the end of its log, the runner prints the whole results file as one line between
   `===== rhvp-compare results begin =====` and `===== rhvp-compare results end =====`.
 
-The Job's exit code: 0 when every round finished; 1 for a partial run, so its Job reads `Failed` even though the
-results of the rounds that finished are kept; 2 when the config cannot be run.
+The Job's exit code:
+
+| Exit | Meaning |
+|---|---|
+| 0 | every round finished, and the server is back |
+| 1 | a partial run; its Job reads `Failed`, and the results of the rounds that finished are kept |
+| 2 | the config cannot be run (`PLAN_INVALID`) |
+| 3 | the run failed outside a round (`RUNNER_FAILED`), for example on a Kubernetes API error before the first round |
+| 4 | the server could not be scaled back, whatever else happened (`run.server_restored` is `false`) |
+| 5 | another comparison was running, so this one did not start and changed nothing (`RUN_ACTIVE`) |
 
 Each failed round carries one of these codes in `rounds[].error_code`:
 
@@ -496,9 +528,11 @@ Each failed round carries one of these codes in `rounds[].error_code`:
 | `RUNNER_ERROR` | anything else, such as an error from the Kubernetes API |
 
 The run's own `run.error_code` is null when every round finished, `ROUNDS_FAILED` when some rounds failed,
+`REQUESTS_FAILED` when every round ran but requests failed at some load level (that level is left out),
 `STOPPED` when the Job was deleted, `RUN_TIMEOUT` when it reached its time limit (48 hours by default), and
-`RUNNER_FAILED` when the run failed outside a round. A config that cannot be run writes no results file;
-`PLAN_INVALID` then appears only in the log and the termination message.
+`RUNNER_FAILED` when the run failed outside a round. A config that cannot be run, or a run that found another one
+going, writes no results file; `PLAN_INVALID` or `RUN_ACTIVE` then appears only in the log and the termination
+message.
 
 ### On one machine, without a cluster
 
@@ -510,18 +544,22 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
 
 Ray decides the vLLM version: the `ray[llm]` release pins exactly one vLLM. The comparison therefore works on whole
 images, not on vLLM versions inside one image. To compare this pattern's server with an upstream vLLM image, use the
-`ray-serve-llm` preset for one side, with the image from the internal registry
-(`image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest`).
+`ray-serve-llm` preset for one side, with the image from the internal registry pinned by digest
+(`image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm@sha256:<digest>`; `oc get istag
+ray-serve-llm:latest -n vllm-inference` shows the digest). The run id comes from the config only, so an image rebuilt
+under the same tag is not a new run: change the digest, or `runName`.
 
 ### What has not been checked
 
 - No round has started a real inference server yet: every end-to-end run used GuideLLM's mock server, without a
   GPU. The example config (two vLLM releases) has not been run; the `vllm-openai` preset's arguments, the start as
   an arbitrary UID, the log phases and `GET /version` are covered by unit tests only.
-- Tokens per joule has not been computed from real power samples, from DCGM or from nvidia-smi; both readers are
-  tested against recorded answer shapes only.
-- No comparison has run on OpenShift with a GPU yet. The runner's Job, with the chart's RBAC, has run on a plain
-  Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the
+- Tokens per joule has not been computed from DCGM samples. Both power readers are tested only against hand-written
+  answers in the documented formats (a Prometheus `query_range` matrix, and nvidia-smi CSV lines); the DCGM label
+  names the reader matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) have not been checked
+  against a real DCGM exporter.
+- No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
+  a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the
   status ConfigMap and the termination message, and, when its Job was deleted mid-round, recorded the round as
   `STOPPED`, deleted the side and brought the server back within seconds. That says nothing about OpenShift's
   restricted security context, the internal registry, the cluster's monitoring or Argo CD. The whole run has also
