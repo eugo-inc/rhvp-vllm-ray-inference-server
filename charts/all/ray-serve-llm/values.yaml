@@ -67,8 +67,9 @@ server:
   # gpuPerReplica (checked), such as 0.4 for 0.5.
   gpuPerReplica: 1
   # Ray's Prometheus metrics (vLLM's gauges among them, as ray_vllm_*). The
-  # server always exports them on this port; the container port and the Service
-  # port, both named "metrics", are rendered only in keda mode.
+  # server always exports them on this port, on every address of the pod, so
+  # other pods can read them at the pod's IP in every mode; the container port
+  # and the Service port, both named "metrics", are rendered only in keda mode.
   metricsPort: 8080
   objectStoreMemoryGb: 2
   httpHost: 0.0.0.0
@@ -158,8 +159,9 @@ scaleOut:
   waitingRequestsPerPod: 4
   # Only how often KEDA refreshes the ScaledObject's status. Between minPods and
   # maxPods the HPA that KEDA creates reads the metric on its own sync period
-  # (15 s by default), so a pod is added at the earliest about 15 s after the
-  # waiting requests rise.
+  # (15 s by default). With Ray's export (every 10 s) and the scrape (every
+  # 15 s) before it, a pod is asked for from a few seconds up to about 40 s
+  # after the waiting requests rise.
   pollingIntervalSeconds: 15
   # How long the HPA waits, after the waiting requests drop, before it removes a
   # pod (its scale-down stabilization window).

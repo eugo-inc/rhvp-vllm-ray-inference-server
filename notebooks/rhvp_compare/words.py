@@ -162,7 +162,8 @@ SCALE_SURGE_RULE = ("A failed request counts as one that missed the goals, and r
                     "surge ends are left out. A surge in which no request finished counts as 0 attainment and 0 "
                     "goodput: a pair lost to that side.")
 SCALE_EVENTS = ("Scale-ups the servers logged themselves (the pattern's rhvp-scale lines): side A in {a} of {na} "
-                "rounds, side B in {b} of {nb}.")
+                "rounds, side B in {b} of {nb}. The runner's llm.yaml for this pattern's server allows one replica, "
+                "and a side on it logs none.")
 SCALE_PHASE_HEADERS = ("Second replica's phase, from its log", "A median", "B median", "Rounds (A, B)")
 SCALE_NONE = "No scored round of this run reached the forced step."
 #: summary.surge_rate_fit: the surge rate did not separate the sides.

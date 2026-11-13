@@ -8,7 +8,10 @@
 # installs it) request that token. Bound tokens need the operator at 2.17 or
 # newer. Upstream KEDA from 2.21 also refuses a bound token unless the operator
 # maps this ServiceAccount to a token audience (KEDA's 2.21 migration notes);
-# upstream 2.19, the line of Red Hat's current operator, needs no mapping.
+# upstream 2.19, the line of Red Hat's current operator, needs no mapping. The
+# Thanos Querier's proxy does not accept a token for such an audience, so on
+# 2.21 this needs a long-lived token Secret instead (or KEDA's insecure legacy
+# token mode), not a mapping.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

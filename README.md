@@ -398,6 +398,13 @@ oc delete pod -n vllm-inference -l app.kubernetes.io/name=image-compare-side
 oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
 ```
 
+In keda mode (`global.scaleOut.mode: keda`) the runner also paused the autoscaler, and Argo CD leaves that pause in
+place, so remove it too, or the server stays at one pod and may be set back to 0:
+
+```sh
+oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/paused-replicas-
+```
+
 ### Run a comparison
 
 1. Wait until the first install has finished and the notebook image has been built: the runner takes its code from
@@ -662,8 +669,10 @@ What you can see:
 - `oc exec -n vllm-inference deploy/ray-serve-llm -c server -- python rhvp_status.py` prints the app's state, then
   one line per deployment, such as `LLMServer:qwen2_5-0_5b-instruct: running 2, target 2`.
 - The pod stays Ready while a replica is added or removed.
-- Ray's Prometheus metrics, vLLM's among them as `ray_vllm_*`, are served on port 8080 inside the container in every
-  install (`server.metricsPort`). Only keda mode opens that port on the pod and the Service.
+- Ray's Prometheus metrics, vLLM's among them as `ray_vllm_*`, are served on port 8080 in every install
+  (`server.metricsPort`), on all of the pod's addresses: any pod in the cluster can read them at the pod's IP, without
+  authentication, as it can reach the API on port 8000. Only keda mode declares the port on the pod, adds it to the
+  Service and scrapes it with a ServiceMonitor.
 
 A server image built before scale out existed ignores the new settings (it logs a warning for each), so its replica
 count never grows and it writes no `rhvp-scale` lines. After the push, the rebuild job builds a new image.
@@ -692,12 +701,16 @@ Before you turn it on:
   (`timeSlicing.enabled: true` in `charts/all/nvidia-gpu-config/values.yaml`, which offers each GPU as two). Time-
   slicing has the same limit as half a GPU per replica: no extra compute. Each pod still sees the whole GPU memory,
   so set `server.engineKwargs.gpu_memory_utilization` to 0.4 with two shares. Nothing checks that setting in this
-  mode; with more, the second pod fails to start.
+  mode; with more, the second pod fails to start. Time-slicing applies to every GPU node and every namespace, and the
+  image comparison checks only `vllm-inference` for other GPU pods: while it is on, a GPU pod from another namespace
+  can share the GPU during a timed round, and nothing refuses or flags the run (the GPU's product label, which the
+  results record, ends in `-SHARED`). Turn it off before a comparison.
 - **Pods on more than one node** need the model volume as ReadWriteMany (`modelStorage.accessMode`), and a StorageClass
   that offers it. A volume's access mode cannot change after it is created: on a running install, delete PVC
   `ray-serve-llm-models` first, and the model downloads again. Use `compileCache.mode: shared`, not `node`, there.
-- **How soon.** The autoscaler reads the metric every 15 seconds, so a pod is asked for at the earliest about 15
-  seconds after requests start to wait. The new pod then starts like any server pod: it downloads nothing new, but it
+- **How soon.** Three clocks run one after another: Ray exports vLLM's gauge every 10 seconds, cluster monitoring
+  scrapes it every 15 seconds, and the autoscaler reads it every 15 seconds. A pod is asked for from a few seconds up
+  to about 40 seconds after requests start to wait. The new pod then starts like any server pod: it downloads nothing new, but it
   loads the model and compiles its kernels. `compileCache.mode: node` or `shared` keeps the compiled kernels on a
   volume (PVC `ray-serve-llm-compile-cache`), so a later pod finds them.
 - **Clients with open connections.** A Service spreads connections, not requests. A client that keeps its
@@ -706,7 +719,10 @@ Before you turn it on:
 - **Operator updates.** The Subscription follows `stable` with automatic updates. Upstream KEDA 2.21 refuses the kind
   of token this pattern's TriggerAuthentication uses (a bound ServiceAccount token) unless the operator maps it to a
   token audience. If a Red Hat release based on it does the same, the server stops scaling while the operator still
-  looks healthy. Red Hat's current release is based on KEDA 2.19, which needs no mapping.
+  looks healthy. Red Hat's current release is based on KEDA 2.19, which needs no mapping. A mapping alone does not
+  fix it for this pattern: KEDA then mints the token for that audience, and the Thanos Querier's proxy, whose
+  settings belong to the cluster's monitoring, does not accept it. What works is a long-lived token Secret for
+  ServiceAccount `thanos` in the TriggerAuthentication, or KEDA's legacy token mode, which KEDA calls insecure.
 
 Turning it off: set `global.scaleOut.mode: none` and push. The apps sync without pruning, so the operator, its
 namespace, the `keda-config` app and the objects in `vllm-inference` stay, and the ScaledObject keeps scaling the
@@ -760,8 +776,11 @@ surge's logs stay in the round's folder as `*.surge-1.*`. A second time-out fail
 The two primary metrics are the second replica's time to first answer and that share of requests within the goals.
 With Holm's correction over two metrics, at least 7 pairs are needed for any FASTER or SLOWER verdict. For the share
 within the goals, FASTER means side B met the goals for more of the requests. The other metrics are secondary,
-among them when the server's own `rhvp-scale` lines show a load-triggered scale-up, for a side that runs this
-pattern's server with autoscaling on. Energy is not measured in this mode.
+among them when a server's own `rhvp-scale` lines show a load-triggered scale-up. The `llm.yaml` the runner writes for
+this pattern's server fixes one replica (`min_replicas` and `max_replicas` 1), so a side with preset `ray-serve-llm`
+logs no scale-up and that metric stays empty for it, which says nothing about the server's autoscaling. Only a side
+that brings its own config with more replicas allowed (its `env` setting `RHVP_CONFIG` to such a file in its image)
+can fill it. Energy is not measured in this mode.
 
 With `scaleOut.sharedGpu: true` (the default) both replicas of a side share one GPU: `server.gpuMemoryUtilization`
 defaults to 0.4 then, and the plan refuses more than 0.475. The setting does not place the replicas; `REPLICA_GPUS`

@@ -269,11 +269,15 @@ Three parts, each off by default. With every default, the local charts render ex
   ports (see the names table). The trigger sums `ray_vllm_num_requests_waiting` over the server pods in
   `vllm-inference`, read from the Thanos Querier on port 9092 (namespace-scoped), and the HPA that KEDA creates
   divides it by the pod count. Between `minPods` and `maxPods` the HPA reads the metric on its own 15-second sync
-  period: `pollingIntervalSeconds` only sets how often KEDA refreshes the ScaledObject's status, so a pod is added
-  at the earliest about 15 seconds after requests start to wait. `cooldownSeconds` is the HPA's scale-down
+  period: `pollingIntervalSeconds` only sets how often KEDA refreshes the ScaledObject's status. With Ray's metrics
+  export (10 s) and the ServiceMonitor's scrape (15 s) before that read, a pod is asked for from a few seconds up to
+  about 40 seconds after requests start to wait. `cooldownSeconds` is the HPA's scale-down
   stabilization window. Prerequisites: monitoring for user-defined projects enabled on the cluster, and a second
   GPU (another GPU node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, with
-  `gpu_memory_utilization` lowered to leave room for the other pod; nothing checks that). Server pods on more than
+  `gpu_memory_utilization` lowered to leave room for the other pod; nothing checks that). Time-slicing covers every
+  GPU node and namespace, while the comparison's `kube.gpu_free` looks only at `vllm-inference`: a GPU pod from
+  another namespace can then share a timed GPU unseen, so the docs say to turn it off before a comparison. Server
+  pods on more than
   one node need `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode
   cannot change after it is created.
 - **The comparison's mode `scaleout`** (`global.compare.mode`): docker only for now (`kube.py` refuses it with
@@ -286,7 +290,9 @@ Three parts, each off by default. With every default, the local charts render ex
   or failed requests. In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
   (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that one ScaledObject),
   and removes the pause when it brings the server back; the by-hand restore command it prints includes the
-  `oc annotate` step. `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace period.
+  `oc annotate` step, and so does the README's recovery for a runner killed outright (Argo CD ignores the
+  annotation, so nothing else removes it). `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace
+  period.
 - **`kuberay`** is a third value of `global.scaleOut.mode`, designed but not built. `scripts/pattern_settings.py`
   (through `scripts/validate-values.sh`) and `charts/all/ray-serve-llm/templates/_settings.tpl` refuse it, and
   any unknown mode, with the same message; keep the two in step (`tests/test_scaleout_contract.py`).
@@ -299,8 +305,10 @@ The Subscription follows `stable` with automatic updates. Upstream KEDA 2.21 ref
 the kind `keda-trigger-auth-prometheus` uses, unless the operator maps that ServiceAccount to a token audience
 (KEDA's 2.21 migration notes); the ScaledObject then never turns Ready and the server stops scaling while the
 operator looks healthy. Red Hat's current operator is on the 2.19 line, which needs no mapping. If a Red Hat
-release adds the rule, map the audience in the KedaController or move the TriggerAuthentication to a long-lived
-token Secret.
+release adds the rule, a mapping alone does not help here: KEDA then mints the token for a dedicated audience, and
+the Thanos Querier's kube-rbac-proxy, which cluster monitoring manages, cannot be told to accept it (and mapping the
+API server's own audience reopens what 2.21 closes). Move the TriggerAuthentication to a long-lived token Secret for
+ServiceAccount `thanos`, or, as a stopgap, use KEDA's legacy token mode, which KEDA calls insecure.
 
 Checked: unit tests and chart renders for all three parts. On CPU, in the server image, a stand-in Ray Serve app
 with replicas that take 20 seconds to start scaled from 1 to 2 under `serve_app.serve_and_watch`: the `rhvp-scale`
