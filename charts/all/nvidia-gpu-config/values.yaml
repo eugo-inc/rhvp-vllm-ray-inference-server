@@ -1,1 +1,6 @@
-{}
+# global.compare comes from values-global.yaml; this stub keeps it off. While it is
+# on (and its energy source is not none), the ClusterPolicy reads GPU power every
+# 2 s for the comparison's tokens per joule.
+global:
+  compare:
+    enabled: false

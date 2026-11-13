@@ -555,6 +555,14 @@ def test_gpu_operator_config(render):
     policy = one(docs(render / "charts/nvidia-gpu-config.yaml"), "ClusterPolicy")
     assert {"effect": "NoSchedule", "key": "nvidia.com/gpu", "value": "true"} in policy["spec"]["daemonsets"]["tolerations"]
     assert policy["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
+    exporter = policy["spec"]["dcgmExporter"]
+    assert exporter["serviceMonitor"] == {"enabled": True} and "env" not in exporter  # the defaults, compare off
+    # While the comparison is on, GPU power every 2 s: at least 10 samples in a 60 s load level (energy.minSamples).
+    on = one(docs(render / "charts/nvidia-gpu-config-compare.yaml"), "ClusterPolicy")["spec"]["dcgmExporter"]
+    assert on["env"] == [{"name": "DCGM_EXPORTER_INTERVAL", "value": "2000"}]
+    assert on["serviceMonitor"] == {"enabled": True, "interval": "2s"}
+    off = one(docs(render / "charts/nvidia-gpu-config-compare-noenergy.yaml"), "ClusterPolicy")["spec"]
+    assert off["dcgmExporter"] == exporter
     nfd = one(docs(render / "charts/nfd-config.yaml"), "NodeFeatureDiscovery", "nfd-instance")
     assert nfd["spec"]["operand"]["image"] == "registry.redhat.io/openshift4/ose-node-feature-discovery-rhel9:v4.20"
     assert nfd["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
