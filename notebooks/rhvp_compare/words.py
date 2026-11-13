@@ -81,6 +81,7 @@ LOAD_RETRIED_SCALE = ("The whole round ran once more from a new first replica, w
                       "figure of the round comes from that second try.")
 RETRIED_ROUND = "{index} (side {side})"
 RETRIED_REPLICAS = "{index} (side {side}, replica {replicas})"
+RETRIED_DISCARDED = " of the discarded try"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 LEVEL_AT = "round {index} side {side} at {concurrency} streams"
 RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "

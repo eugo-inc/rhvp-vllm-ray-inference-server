@@ -149,10 +149,13 @@ def _p(value) -> str:
 # ---- the frame around every result ----
 
 def _retried(round_: dict) -> str:
-    """A round that started a replica again: "3 (side A)", or with the replicas when a scale-out round added one."""
-    again = [str(item.get("replica")) for item in round_.get("launches") or [] if item.get("start_retries")]
-    if any(n != "1" for n in again):
-        return words.RETRIED_REPLICAS.format(index=round_["index"], side=round_["side"], replicas=", ".join(again))
+    """A round that started a replica again: "3 (side A)" when only the first replica of the round's kept try was,
+    else with the replicas ("3 (side A, replica 2 of the discarded try)")."""
+    again = [item for item in round_.get("launches") or [] if item.get("start_retries")]
+    if len(again) > 1 or (again and (again[0].get("replica") != 1 or again[0].get("discarded"))):
+        replicas = ", ".join(str(item.get("replica")) + (words.RETRIED_DISCARDED if item.get("discarded") else "")
+                             for item in again)
+        return words.RETRIED_REPLICAS.format(index=round_["index"], side=round_["side"], replicas=replicas)
     return words.RETRIED_ROUND.format(index=round_["index"], side=round_["side"])
 
 

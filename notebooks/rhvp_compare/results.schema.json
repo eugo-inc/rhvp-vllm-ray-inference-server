@@ -1209,7 +1209,7 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). Each replica is started again at most once (its launch record's start_retries); a second such failure of the same replica fails the round (SIDE_FAILED). This is the sum over the round's replicas. The first replica's start-up figures are timed from its last start; a replica that a scale-out round adds is timed from when it was first asked for, so its first try's time counts."
+          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). Each start of a replica is tried again at most once (its launch record's start_retries); a second such failure of the same replica fails the round (SIDE_FAILED). This is the sum over the round's launch records, those of a discarded try (mode scaleout, load_retries) included; each record's start_retries and discarded say which replica it was. The first replica's start-up figures are timed from its last start; a replica that a scale-out round adds is timed from when it was first asked for, so its first try's time counts."
         },
         "load_retries": {
           "type": "integer",
@@ -1388,7 +1388,7 @@
         "replica": {
           "type": "integer",
           "minimum": 1,
-          "description": "1 for the round's first server start; 2 and up for each replica a scale-out round adds, in start order."
+          "description": "1 for the round's first server start; 2 and up for each replica a scale-out round adds, in start order. A round that ran again (load_retries) lists its discarded try's records first."
         },
         "started_at": {
           "type": [
@@ -1485,6 +1485,10 @@
             "type": "string"
           },
           "description": "The UUIDs of the GPUs that request reached, as nvidia-smi listed them before the first round (mode scaleout). null: not read."
+        },
+        "discarded": {
+          "type": "boolean",
+          "description": "true for a replica of a scale-out round's first try, taken down when its surge's GuideLLM timed out and the round ran again from a new first replica (the round's load_retries): none of the round's figures come from it. Absent in files from before this field."
         }
       }
     },

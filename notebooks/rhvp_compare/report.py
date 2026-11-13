@@ -38,11 +38,15 @@ def _p(value) -> str:
 
 
 def _starts(round_: Mapping) -> str:
-    """How often a retried round started its server: per replica when a replica a scale-out round added was one."""
+    """How often a retried round started its servers: per replica (and try) unless only the first replica of the
+    round's kept try was started again; from the round's count for a file without launch records."""
     again = [item for item in round_.get("launches") or [] if item.get("start_retries")]
-    if any(item.get("replica") != 1 for item in again):
-        return ", ".join(f"replica {item.get('replica')} started {item['start_retries'] + 1} times" for item in again)
-    return f"started {round_['start_retries'] + 1} times"
+    if not again:
+        return f"started {round_['start_retries'] + 1} times"
+    if len(again) == 1 and again[0].get("replica") == 1 and not again[0].get("discarded"):
+        return f"started {again[0]['start_retries'] + 1} times"
+    return ", ".join(f"replica {item.get('replica')}{' of the discarded try' if item.get('discarded') else ''} "
+                     f"started {item['start_retries'] + 1} times" for item in again)
 
 
 def markdown(results: Mapping) -> str:

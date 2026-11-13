@@ -772,8 +772,10 @@ When GuideLLM times out, the round tries once more, as mode pairs does with a Gu
 GuideLLM, the router and both replicas are taken down, a new first replica is started and timed, and the surge runs
 with the same requests and a new second replica. Sent again to the first replica, the surge would find its own
 requests in that replica's prefix cache, which no other round has. Every figure of the round then comes from that
-second try; the first try's files stay in the round's folder as `*.try-1.*`, the round's `load_retries` is 1, and
-`results.md` and the notebook list the round. A second time-out fails the round with `LOAD_FAILED`.
+second try; the first try's files stay in the round's folder as `*.try-1.*` and its launch records stay in the round,
+marked `discarded` (a memory-check retry of a discarded replica is counted there, and `results.md` names that
+replica), the round's `load_retries` is 1, and `results.md` and the notebook list the round. A second time-out fails
+the round with `LOAD_FAILED`.
 
 The two primary metrics are the second replica's time to first answer and that share of requests within the goals.
 With Holm's correction over two metrics, at least 7 pairs are needed for any FASTER or SLOWER verdict. For the share

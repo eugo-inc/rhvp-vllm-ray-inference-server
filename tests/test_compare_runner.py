@@ -1072,6 +1072,8 @@ def test_a_surge_whose_guidellm_timed_out_runs_the_round_once_more_and_the_round
     for key in ("server_log_try_1", "server_log_2_try_1", "server_log", "server_log_2", "load_report"):
         assert (the_runner.dir / r3["artifacts"][key]).is_file(), key
     assert r3["artifacts"]["server_log_try_1"] == "rounds/03-A-scored/server.try-1.log"
+    assert [(l["replica"], l["discarded"]) for l in r3["launches"]] == [(1, True), (2, True), (1, False), (2, False)]
+    assert r3["start_retries"] == 0 and "started again after vLLM" not in (the_runner.dir / "results.md").read_text()
     rows = {row["id"]: row for row in results["analysis"]["metrics"]}
     assert rows["surge.slo_attainment"]["verdict"] == "FASTER" and rows["surge.slo_attainment"]["n_pairs"] == 7
     assert all(row["pairs_lost"] == {"A": 0, "B": 0, "both": 0, "other": 0} for row in rows.values())
@@ -1082,6 +1084,51 @@ def test_a_surge_whose_guidellm_timed_out_runs_the_round_once_more_and_the_round
     head = "".join(show._head(results, [], []))
     assert "Rounds whose load ran again after GuideLLM timed out: 3 (side A)." in head
     assert "from a new first replica" in head
+
+
+def test_a_memory_check_retry_of_a_discarded_try_is_named_as_that_replica(tmp_path):
+    # Round 3: replica 2's first start stops at vLLM's memory check, its second start works, then GuideLLM stalls and
+    # the round runs again. Only the discarded replica 2 was started again, and the reports say so.
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 2): 1}, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["status"], r3["start_retries"], r3["load_retries"]) == ("ok", 1, 1)
+    assert [(l["replica"], l["discarded"], l["start_retries"]) for l in r3["launches"]] == [
+        (1, True, 0), (2, True, 1), (1, False, 0), (2, False, 0)]
+    assert all(l["gpus"] is None and l["env"] == {"VLLM_X": "1"} for l in r3["launches"])
+    assert "Error in memory profiling" in (the_runner.dir / r3["artifacts"]["server_log_2_attempt_1_try_1"]).read_text()
+    assert "server_log_2_attempt_1" not in r3["artifacts"]
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- round 3 (side A, scored): replica 2 of the discarded try started 2 times, then finished" in text
+    assert "3 (side A, replica 2 of the discarded try)" in "".join(show._head(results, [], []))
+
+
+class DiesTwice(ScaleBackend):
+    """Replica 2 of round 3 stops at vLLM's memory check on its 1st and 3rd starts (one in each try)."""
+
+    def start(self, plan, round_, side, spec, replica=1):
+        handle = super().start(plan, round_, side, spec, replica)
+        handle["dies"] = (round_["index"], replica) == (3, 2) and self.attempts[(3, 2)] in (1, 3)
+        return handle
+
+
+def test_each_tries_memory_check_log_is_kept(tmp_path):
+    clock = FakeClock()
+    backend = DiesTwice(clock, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    r3 = results["rounds"][2]
+    assert (r3["status"], r3["start_retries"]) == ("ok", 2)
+    assert [(l["replica"], l["discarded"], l["start_retries"]) for l in r3["launches"]] == [
+        (1, True, 0), (2, True, 1), (1, False, 0), (2, False, 1)]
+    first, second = r3["artifacts"]["server_log_2_attempt_1_try_1"], r3["artifacts"]["server_log_2_attempt_1"]
+    assert first == "rounds/03-A-scored/server-2.attempt-1.try-1.log" and second == "rounds/03-A-scored/server-2.attempt-1.log"
+    assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
+    text = (the_runner.dir / "results.md").read_text()
+    assert ("- round 3 (side A, scored): replica 2 of the discarded try started 2 times, replica 2 started 2 times, "
+            "then finished") in text
 
 
 def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):

@@ -426,7 +426,7 @@ class Runner:
             if held["handle"] is not None:
                 self._launch(held["replicas"][0], spec, record)
                 self._after(held["handle"], record, out_dir, rel)
-            record["launches"].sort(key=lambda item: item["replica"])
+            record["launches"].sort(key=lambda item: (not item.get("discarded"), item["replica"]))  # tries in order
             record["finished_at"] = utc_now()
         record.pop("_reported_version", None)
         record.pop("_started_epoch", None)
@@ -443,8 +443,9 @@ class Runner:
         held["replicas"].append({"replica": replica, "handle": handle, "started_at": started_at, "epoch": epoch})
         return handle
 
-    def _launch(self, replica: Mapping, spec: Mapping, record: dict) -> None:
-        """The replica's launch record: what the runner ran, and what the backend can read of what the server saw."""
+    def _launch(self, replica: Mapping, spec: Mapping, record: dict, discarded: bool = False) -> None:
+        """The replica's launch record: what the runner ran, and what the backend can read of what the server saw.
+        `discarded`: a replica of a scale round's try that was run again (`_discard_try`)."""
         facts: dict = {}
         read = getattr(self.backend, "launch_facts", None)
         if read is not None:
@@ -459,7 +460,8 @@ class Runner:
             started_at=replica["started_at"], image_entrypoint=facts.get("image_entrypoint"),
             image_cmd=facts.get("image_cmd"), start_retries=replica.get("start_retries", 0),
             gpus=facts.get("gpus") if isinstance(facts.get("gpus"), str) else None,
-            gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None))
+            gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None,
+            discarded=discarded))
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
@@ -522,12 +524,14 @@ class Runner:
                 if not error.timed_out or tries >= SURGE_RETRIES:
                     raise
                 tries += 1
-                self._discard_try(record, out_dir, rel, held, error, tries)
+                self._discard_try(spec, record, out_dir, rel, held, error, tries)
 
-    def _discard_try(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int) -> None:
-        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, take both replicas down, keep every
-        file of that try as *.try-N.* (artifact keys *_try_N), and clear what the try had recorded, so the round
-        starts again from the GPU check."""
+    def _discard_try(self, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict, error: Exception,
+                     tries: int) -> None:
+        """After a surge whose GuideLLM timed out: stop GuideLLM and the router, take both replicas down with their
+        launch records marked discarded (their memory-check retries stay in them and in the round's start_retries),
+        keep every file of that try as *.try-N.* (artifact keys *_try_N), and clear what the try had recorded, so the
+        round starts again from the GPU check."""
         self._stop_scale_helpers(held, record)
         held["load"] = held["router"] = None
 
@@ -547,6 +551,7 @@ class Runner:
         keep("router.log", "router")
         for replica in list(reversed(held["replicas"])):  # the added replica first, the first replica last
             n = replica["replica"]
+            self._launch(replica, spec, record, discarded=True)
             stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
             try:
                 (out_dir / f"{stem}.try-{tries}.log").write_text(self.backend.logs(replica["handle"]),
@@ -563,7 +568,7 @@ class Runner:
         record["load_retries"] = tries
         record.setdefault("notes", []).append(
             f"{error}; the round was run once more from a new first replica, with the same requests (that try's "
-            f"files are the *.try-{tries}.* files)")
+            f"files are the *.try-{tries}.* files, its launch records are marked discarded)")
 
     def _surge(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict, target: str) -> None:
