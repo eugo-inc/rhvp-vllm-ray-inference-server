@@ -1,8 +1,9 @@
 """Rendered charts, the clustergroup app of apps, and the rebuild-on-commit job.
 
-The chart tests run scripts/render-charts.sh once (helm inside the Validated Patterns
-utility container) and check the rendered YAML. They are skipped when neither docker nor
-podman is available, or when charts.validatedpatterns.io cannot be reached.
+The chart tests check the YAML that scripts/render-charts.sh renders once per test session
+(tests/conftest.py: helm inside the Validated Patterns utility container). They are skipped
+when neither docker nor podman is available, or when charts.validatedpatterns.io cannot be
+reached. The server chart's own tests are in test_server_chart.py.
 """
 
 from __future__ import annotations
@@ -14,257 +15,15 @@ import re
 import shutil
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 import yaml
 
-REPO = Path(__file__).resolve().parents[1]
-# Same pin as scripts/render-charts.sh: the v1.0.5 release digest (a latest digest is deleted on rebuild).
-UTILITY_IMAGE = (
-    "quay.io/validatedpatterns/utility-container@sha256:"
-    "556083f92b08642868ca64ade6cf9553295bd394f7a54d5e10ca12d143907214"
-)
-GLOBAL = yaml.safe_load((REPO / "values-global.yaml").read_text())
-READY_FILE = ["test", "-f", "/tmp/r/rhvp-ready"]
+from chart_helpers import GLOBAL, REPO, UTILITY_IMAGE, container, container_engine, docs, env_map, kinds, one
 
 
-def container_engine() -> str | None:
-    for engine in ("podman", "docker"):
-        if shutil.which(engine):
-            probe = subprocess.run([engine, "info"], capture_output=True, timeout=60)
-            if probe.returncode == 0:
-                return engine
-    return None
-
-
-@pytest.fixture(scope="module")
-def render(tmp_path_factory) -> Path:
-    if container_engine() is None:
-        pytest.skip("needs docker or podman")
-    try:
-        urllib.request.urlopen("https://charts.validatedpatterns.io/index.yaml", timeout=30).close()
-    except (urllib.error.URLError, TimeoutError) as err:
-        pytest.skip(f"charts.validatedpatterns.io unreachable: {err}")
-    out = tmp_path_factory.mktemp("render")
-    proc = subprocess.run(
-        [str(REPO / "scripts/render-charts.sh")],
-        env={**os.environ, "RENDER_DIR": str(out)},
-        capture_output=True, text=True, timeout=900,
-    )
-    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
-    return out
-
-
-def docs(path: Path) -> list[dict]:
-    return [d for d in yaml.safe_load_all(path.read_text()) if d]
-
-
-def one(items: list[dict], kind: str, name: str | None = None) -> dict:
-    found = [d for d in items if d["kind"] == kind and (name is None or d["metadata"]["name"] == name)]
-    assert len(found) == 1, f"expected one {kind} {name or ''}, found {len(found)}"
-    return found[0]
-
-
-def kinds(items: list[dict]) -> set[str]:
-    return {d["kind"] for d in items}
-
-
-def container(deploy: dict, name: str) -> dict:
-    [c] = [c for c in deploy["spec"]["template"]["spec"]["containers"] if c["name"] == name]
-    return c
-
-
-def env_map(c: dict) -> dict:
-    return {e["name"]: e.get("value", e.get("valueFrom")) for e in c.get("env", [])}
-
-
-def quantity(value: str) -> float:
-    units = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "k": 1e3, "M": 1e6, "G": 1e9}
-    match = re.fullmatch(r"([0-9.]+)([A-Za-z]*)", str(value))
-    assert match, value
-    return float(match.group(1)) * units.get(match.group(2), 1)
-
-
-# ---- ray-serve-llm ---------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def server(render) -> list[dict]:
-    return docs(render / "charts/ray-serve-llm.yaml")
-
-
-@pytest.fixture(scope="module")
-def server_variant(render) -> list[dict]:
-    return docs(render / "charts/ray-serve-llm-variant.yaml")
-
-
-def test_server_deployment_rollout(server):
-    deploy = one(server, "Deployment", "ray-serve-llm")
-    assert deploy["spec"]["strategy"] == {"type": "Recreate"}
-    assert deploy["spec"]["progressDeadlineSeconds"] == 7200
-    assert deploy["spec"]["replicas"] == 1
-    pod = deploy["spec"]["template"]
-    assert re.fullmatch(r"[0-9a-f]{64}", pod["metadata"]["annotations"]["checksum/config"])
-    assert pod["metadata"]["labels"]["app.kubernetes.io/name"] == "ray-serve-llm"
-    assert pod["spec"]["shareProcessNamespace"] is True
-    assert pod["spec"]["terminationGracePeriodSeconds"] == 120
-
-
-def test_server_image_and_trigger(server):
-    deploy = one(server, "Deployment", "ray-serve-llm")
-    c = container(deploy, "server")
-    assert c["image"] == "image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest"
-    # The pod names the entrypoint itself, so an image CMD mangled by the builder is never passed to the server.
-    containerfile = (REPO / "inference-server/Containerfile").read_text()
-    assert f'ENTRYPOINT {json.dumps(c["command"])}' in containerfile
-    assert c["command"] == ["/opt/app-root/src/entrypoint.sh"] and "args" not in c
-    [trigger] = json.loads(deploy["metadata"]["annotations"]["image.openshift.io/triggers"])
-    assert trigger["from"] == {"kind": "ImageStreamTag", "name": "ray-serve-llm:latest"}
-    assert trigger["fieldPath"] == 'spec.template.spec.containers[?(@.name=="server")].image'
-
-
-def test_server_probes(server):
-    c = container(one(server, "Deployment", "ray-serve-llm"), "server")
-    startup, ready, live = c["startupProbe"], c["readinessProbe"], c["livenessProbe"]
-    assert startup["exec"]["command"] == READY_FILE
-    assert ready["exec"]["command"] == READY_FILE
-    budget = startup["periodSeconds"] * startup["failureThreshold"]
-    assert 3500 <= budget <= 3700, budget
-    # A short period keeps the notebook's start-to-Ready figure close to the moment the server is serving.
-    assert startup["periodSeconds"] == 2 and ready["periodSeconds"] == 2
-    assert ready["periodSeconds"] * ready["failureThreshold"] == 30
-    # The notebook's words state the period; keep them in step with the chart.
-    words = (REPO / "notebooks/rhvp_bench/words.py").read_text()
-    assert f"every {ready['periodSeconds']} seconds" in words
-    assert live["httpGet"] == {"path": "/-/healthz", "port": "http"}
-    assert live["initialDelaySeconds"] >= 60
-    assert c["ports"] == [{"name": "http", "containerPort": 8000, "protocol": "TCP"}]
-
-
-def test_server_gpu_scheduling(server):
-    pod = one(server, "Deployment", "ray-serve-llm")["spec"]["template"]["spec"]
-    res = container({"spec": {"template": {"spec": pod}}}, "server")["resources"]
-    assert res["requests"]["nvidia.com/gpu"] == 1
-    assert res["limits"]["nvidia.com/gpu"] == 1
-    assert {"key": "nvidia.com/gpu", "operator": "Exists"} in pod["tolerations"]
-    [term] = pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
-    assert {"key": "nvidia.com/gpu.present", "operator": "In", "values": ["true"]} in term["matchExpressions"]
-    assert pod["nodeSelector"] == {"kubernetes.io/arch": "amd64"}
-
-
-def test_server_memory_covers_shm(server):
-    deploy = one(server, "Deployment", "ray-serve-llm")
-    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
-    shm = vols["dshm"]["emptyDir"]
-    assert shm["medium"] == "Memory" and shm["sizeLimit"] == "4Gi"
-    res = container(deploy, "server")["resources"]
-    limit = quantity(res["limits"]["memory"])
-    assert limit >= quantity(res["requests"]["memory"])
-    assert limit >= quantity(shm["sizeLimit"]) + 8 * 2**30
-
-
-def test_server_security_context(server):
-    pod = one(server, "Deployment", "ray-serve-llm")["spec"]["template"]["spec"]
-    assert pod["securityContext"] == {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}}
-    sc = pod["containers"][0]["securityContext"]
-    assert sc["allowPrivilegeEscalation"] is False
-    assert sc["capabilities"] == {"drop": ["ALL"]}
-    # restricted-v2 assigns the UID and fsGroup; a fixed one would be refused.
-    assert "runAsUser" not in sc and "runAsUser" not in pod["securityContext"]
-    assert "privileged" not in sc
-
-
-def test_server_env_and_volumes(server):
-    deploy = one(server, "Deployment", "ray-serve-llm")
-    c = container(deploy, "server")
-    env = env_map(c)
-    assert env["RHVP_CONFIG"] == "/config/llm.yaml"
-    assert env["HF_HOME"] == "/models/hf"
-    assert env["TRITON_CACHE_DIR"] == "/cache/triton"
-    assert env["VLLM_CACHE_ROOT"] == "/cache/vllm"
-    assert env["FLASHINFER_WORKSPACE_BASE"] == "/cache/flashinfer"
-    assert env["XDG_CACHE_HOME"] == "/cache/xdg"
-    assert env["RAY_TMPDIR"] == "/tmp/r"
-    assert env["HF_TOKEN"] == {"secretKeyRef": {"name": "huggingface-secret", "key": "hftoken", "optional": True}}
-    mounts = {m["mountPath"]: m["name"] for m in c["volumeMounts"]}
-    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
-    assert vols[mounts["/config"]]["configMap"] == {
-        "name": "ray-serve-llm-config", "items": [{"key": "llm.yaml", "path": "llm.yaml"}]}
-    assert vols[mounts["/models"]]["persistentVolumeClaim"] == {"claimName": "ray-serve-llm-models"}
-    assert "emptyDir" in vols[mounts["/cache"]]
-    assert "emptyDir" in vols[mounts["/tmp/r"]]
-    assert vols[mounts["/dev/shm"]]["emptyDir"]["medium"] == "Memory"
-
-
-def test_server_config_map(server):
-    cm = one(server, "ConfigMap", "ray-serve-llm-config")
-    assert yaml.safe_load(cm["data"]["llm.yaml"]) == {
-        "app_name": "llm",
-        "model_id": GLOBAL["global"]["model"]["id"],
-        "model_source": GLOBAL["global"]["model"]["source"],
-        "model_revision": GLOBAL["global"]["model"]["revision"],
-        "engine_kwargs": {"max_model_len": 8192, "gpu_memory_utilization": 0.85, "tensor_parallel_size": 1},
-        "accelerator_type": None,
-        "min_replicas": 1,
-        "max_replicas": 1,
-        "object_store_memory_gb": 2,
-        "http_host": "0.0.0.0",
-        "http_port": 8000,
-    }
-
-
-def test_server_service_pvc_secret(server):
-    svc = one(server, "Service", "ray-serve-llm")
-    assert svc["spec"]["selector"] == {"app.kubernetes.io/name": "ray-serve-llm"}
-    assert svc["spec"]["ports"] == [{"name": "http", "port": 8000, "targetPort": "http", "protocol": "TCP"}]
-    pvc = one(server, "PersistentVolumeClaim", "ray-serve-llm-models")
-    assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
-    assert pvc["spec"]["resources"]["requests"]["storage"] == "50Gi"
-    es = one(server, "ExternalSecret", "huggingface-secret")
-    assert es["apiVersion"] == "external-secrets.io/v1"
-    assert es["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
-    assert es["spec"]["secretStoreRef"] == {"name": "vault-backend", "kind": "ClusterSecretStore"}
-    assert es["spec"]["target"]["name"] == "huggingface-secret"
-    assert es["spec"]["data"] == [
-        {"secretKey": "hftoken", "remoteRef": {"key": "secret/data/hub/hfmodel", "property": "hftoken"}}]
-
-
-def test_server_no_route_by_default(server):
-    assert "Route" not in kinds(server)
-
-
-def test_server_build(server):
-    bc = one(server, "BuildConfig", "ray-serve-llm")["spec"]
-    assert bc["strategy"] == {"type": "Docker", "dockerStrategy": {"dockerfilePath": "Containerfile"}}
-    assert bc["source"]["contextDir"] == "inference-server"
-    assert bc["source"]["git"] == {"uri": "https://github.com/eugo-inc/vllm-ray-inference-server", "ref": "main"}
-    assert bc["triggers"] == [{"type": "ConfigChange"}]
-    assert bc["runPolicy"] == "SerialLatestOnly"
-    assert bc["resources"]["requests"]["ephemeral-storage"] == "50Gi"
-    assert bc["completionDeadlineSeconds"] == 10800
-    assert bc["nodeSelector"] == {"kubernetes.io/arch": "amd64"}
-    assert bc["output"]["to"] == {"kind": "ImageStreamTag", "name": "ray-serve-llm:latest"}
-    assert one(server, "ImageStream", "ray-serve-llm")["spec"]["lookupPolicy"] == {"local": True}
-
-
-def test_server_image_override_hides_build(server_variant):
-    assert not kinds(server_variant) & {"BuildConfig", "ImageStream"}
-    deploy = one(server_variant, "Deployment", "ray-serve-llm")
-    assert "image.openshift.io/triggers" not in (deploy["metadata"].get("annotations") or {})
-    assert container(deploy, "server")["image"] == "quay.io/example/ray-serve-llm:1.0"
-    assert not [d for d in server_variant if d["kind"] == "Role" and d["metadata"]["name"] == "rebuild-on-commit"]
-
-
-def test_server_route_when_enabled(server_variant):
-    route = one(server_variant, "Route", "ray-serve-llm")
-    assert route["metadata"]["annotations"]["haproxy.router.openshift.io/timeout"] == "10m"
-    assert route["spec"]["tls"]["termination"] == "edge"
-    assert route["spec"]["to"]["name"] == "ray-serve-llm"
-    assert route["spec"]["port"] == {"targetPort": "http"}
+# ---- server and notebook ---------------------------------------------------------------
 
 
 def test_rebuild_rbac(server, notebook):
@@ -485,7 +244,9 @@ def test_compare_job_name_follows_the_pod_template(compare):
 
 def test_compare_config_is_global_compare_plus_the_model(compare):
     config = json.loads(one(compare["notebook-compare"], "ConfigMap")["data"]["compare.json"])
-    want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k != "enabled"}
+    # mode pairs, the default, is left out, so a pairs run keeps the run id it had before the setting existed.
+    assert GLOBAL["global"]["compare"]["mode"] == "pairs" and "mode" not in config
+    want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k not in ("enabled", "mode")}
     assert {k: v for k, v in config.items() if k != "model"} == json.loads(json.dumps(want))
     assert config["model"] == {k: GLOBAL["global"]["model"][k] for k in ("id", "source", "revision")}
     sys.path.insert(0, str(REPO / "notebooks"))

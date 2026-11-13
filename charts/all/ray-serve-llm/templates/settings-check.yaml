@@ -1,0 +1,2 @@
+{{- /* Renders nothing. Fails the render when a scale-out setting is invalid (_settings.tpl). */ -}}
+{{- include "ray-serve-llm.checkSettings" . -}}

@@ -32,6 +32,9 @@ SCHEMA = "rhvp-image-compare/1"
 A, B = "A", "B"
 WARMUP, SCORED, AA = "warmup", "scored", "aa"
 PRESETS = ("vllm-openai", "ray-serve-llm", "guidellm-mock", "custom")
+#: `mode` in the config: pairs (the default) or scaleout. scaleout is designed but not built yet.
+MODES = ("pairs", "scaleout")
+DEFAULT_MODE = "pairs"
 ENERGY_SOURCES = ("auto", "dcgm", "nvidia-smi", "none")
 ENERGY_LABEL = "GPU-only power"
 DEFAULT_PORT = 8000
@@ -187,7 +190,11 @@ def metric_family(concurrencies: list[int], energy: bool) -> list[dict]:
 
 
 def digest(config: Mapping) -> str:
-    """A short, stable hash of the config: part of the run id, so a changed config is a new run."""
+    """A short, stable hash of the config: part of the run id, so a changed config is a new run. `mode: pairs`, the
+    default, is left out first, so a config keeps the run id it had before `mode` existed (the notebook chart leaves
+    it out of the config it renders too)."""
+    if config.get("mode") == DEFAULT_MODE:
+        config = {key: value for key, value in config.items() if key != "mode"}
     text = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(text.encode()).hexdigest()[:8]
 
@@ -198,6 +205,11 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
     if not isinstance(config, Mapping):
         raise PlanError("the config must be a JSON object")
     cfg = _merge(DEFAULTS, config)
+    mode = cfg.get("mode", DEFAULT_MODE)
+    if mode not in MODES:
+        raise PlanError(f"mode must be one of {', '.join(MODES)}; got {mode!r}")
+    if mode == "scaleout":
+        raise PlanError("mode scaleout (the scale-out benchmark) is designed but not built yet; use pairs")
     run_name = cfg.get("runName")
     if not isinstance(run_name, str) or not NAME.match(run_name):
         raise PlanError(f"runName must be lower-case letters, digits, '-' or '.', at most 40 characters; "

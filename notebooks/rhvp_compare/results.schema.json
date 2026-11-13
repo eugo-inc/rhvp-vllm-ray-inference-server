@@ -378,7 +378,8 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          }
+          },
+          "description": "The side's extra environment variables, as the config gives them (sides[].env). At each start they are set after the preset's own, with {model_id} and the other placeholders filled in; what the server process saw is in each round's launches."
         },
         "gpu": {
           "type": "boolean"
@@ -1034,6 +1035,13 @@
             }
           }
         },
+        "launches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/launch"
+          },
+          "description": "Every server start in the round, in start order. Missing in results written before launches were recorded."
+        },
         "levels": {
           "type": "array",
           "items": {
@@ -1065,6 +1073,99 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "launch": {
+      "type": "object",
+      "description": "One start of a side's server (rhvp_compare/launch.py): what the runner asked for, and the environment the server process saw, for the allow-listed names only.",
+      "required": [
+        "replica",
+        "entrypoint",
+        "command",
+        "args",
+        "env",
+        "env_source",
+        "env_dropped"
+      ],
+      "properties": {
+        "replica": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 for the round's first server start; 2 and up for each replica a scale-out round adds, in start order."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When the runner asked for this start."
+        },
+        "entrypoint": {
+          "enum": [
+            "image",
+            "override"
+          ],
+          "description": "image: the image's own entrypoint ran; override: the side's command ran in its place, bypassing whatever the entrypoint sets."
+        },
+        "command": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The command the runner set, or null for the image's own entrypoint."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The arguments the runner passed."
+        },
+        "image_entrypoint": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The image's ENTRYPOINT as its config states it; null when not read."
+        },
+        "image_cmd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The image's CMD as its config states it; null when not read."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment the server process saw: GLIBC_TUNABLES and every name starting with CUDA_, VLLM_, TORCH_ or HF_, minus names that look like secrets."
+        },
+        "env_source": {
+          "enum": [
+            "process",
+            "container",
+            "none"
+          ],
+          "description": "process: read from the server process itself; container: the container's configured environment (image ENV plus the runner's); none: not recorded."
+        },
+        "env_dropped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed names left out because they look like secrets (HF_TOKEN, VLLM_API_KEY, ...); names only, never values."
         }
       }
     },

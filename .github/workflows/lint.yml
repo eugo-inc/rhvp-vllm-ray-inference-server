@@ -52,4 +52,5 @@ jobs:
       - name: Unit tests
         run: |
           python -m pytest -q tests/test_serve_config.py tests/test_secrets_template.py tests/test_charts.py \
+            tests/test_server_chart.py tests/test_scaleout_contract.py \
             tests/test_compare_stats.py tests/test_compare_parsers.py tests/test_compare_runner.py

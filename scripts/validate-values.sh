@@ -15,6 +15,10 @@
 #    unattended install and is refused here.
 # 3. Checks pattern-metadata.yaml against the Validated Patterns UI catalog schema,
 #    after the catalog's normalization (platform wrapper removed, owners as a list).
+# 4. Checks the scale-out settings (scripts/pattern_settings.py) for each case of step 1:
+#    the server chart's values.yaml with that case's values files merged over it. It
+#    refuses global.scaleOut.mode kuberay (designed, not built yet) and any unknown mode,
+#    the same way the server chart's render does.
 #
 # Every schema is downloaded from a pinned commit and checked against its sha256.
 # Needs python3 with PyYAML and jsonschema (PYTHON=... picks the interpreter), and
@@ -40,6 +44,9 @@ import jsonschema
 import yaml
 
 REPO = sys.argv[1]
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+import pattern_settings  # noqa: E402
+
 SCHEMAS = {
     # clustergroup chart 0.9.58 (validatedpatterns/clustergroup-chart)
     "clustergroup": (
@@ -168,6 +175,12 @@ for platform, extra_global in cases:
     merged = merge(merged, injected)
     label = f"clustergroup values, {platform}" + "".join(f", {k}={v}" for k, v in extra_global.items())
     check(cg_schema, merged, f"{label} [{' + '.join(present)}]")
+    # ---- 4. scale-out settings, as the server chart sees them for this case
+    settings_label = "scale-out settings" + label.removeprefix("clustergroup values")
+    problems = pattern_settings.check(merge(load("charts/all/ray-serve-llm/values.yaml"), merged))
+    failures.extend(f"{settings_label}: {problem}" for problem in problems)
+    if not problems:
+        print(f"ok   {settings_label}")
 
 for root, _dirs, names in os.walk(os.path.join(REPO, "overrides")):
     for name in names:

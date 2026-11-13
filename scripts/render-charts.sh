@@ -15,10 +15,17 @@
 #   charts/notebook-compare*.yaml the notebook chart with global.compare.enabled=true
 #                                (also with energy.source=none and image.override, and with
 #                                bigger side pods: a new Job with the same config)
+#   charts/ray-serve-llm-scaling.yaml  in-pod autoscaling from 1 to 2 replicas sharing the GPU
+#   charts/ray-serve-llm-cache-<mode>.yaml  compileCache.mode node and shared
+#   charts/*-keda.yaml           ray-serve-llm, and notebook with the comparison on, with
+#                                global.scaleOut.mode=keda and that case's values files
+#   refused/<case>.txt           helm's error for each setting the charts must refuse (the
+#                                script fails if one renders, or fails without its message)
 #   clustergroup/<case>.yaml     the clustergroup chart (the app of apps) for:
 #                                  default    AWS, global.gpuMachineSet from values-global.yaml
 #                                  none       AWS, global.gpuMachineSet=none
 #                                  gcp        GCP, global.gpuMachineSet from values-global.yaml
+#                                  keda       AWS, global.scaleOut.mode=keda
 #   clustergroup/<case>.valuefiles  the values files used for that case
 #
 # Any helm error (lint, template, or the clustergroup values schema) fails the script.
@@ -65,7 +72,7 @@ REPO_URL="https://github.com/eugo-inc/vllm-ray-inference-server"
 VARIANT="$(yq -r '.main.variant' values-global.yaml)"
 PATTERN="$(yq -r '.global.pattern' values-global.yaml)"
 VARIANT_FILE="variants/${VARIANT}/values-${VARIANT}.yaml"
-mkdir -p "${RENDER_DIR}/charts" "${RENDER_DIR}/clustergroup"
+mkdir -p "${RENDER_DIR}/charts" "${RENDER_DIR}/clustergroup" "${RENDER_DIR}/refused"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -161,6 +168,53 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
   > "${RENDER_DIR}/charts/notebook-compare-pull.yaml"
 echo "rendered charts/*-variant.yaml and charts/notebook-compare*.yaml"
 
+# Scale-out settings (charts/all/ray-serve-llm/templates/_settings.tpl). --set reads 0.5 as a
+# string, so the GPU share goes in as JSON.
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4 \
+  --set-json server.gpuPerReplica=0.5 > "${RENDER_DIR}/charts/ray-serve-llm-scaling.yaml"
+for cache in node shared; do
+  helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+    --set compileCache.mode="${cache}" > "${RENDER_DIR}/charts/ray-serve-llm-cache-${cache}.yaml"
+done
+
+# Settings the charts must refuse: the render must fail, and say why.
+refuse() {
+  local name="$1" chart="$2" ns="$3" want="$4"
+  shift 4
+  if helm template "${chart}" "charts/all/${chart}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" "$@" \
+      > /dev/null 2> "${RENDER_DIR}/refused/${name}.txt"; then
+    echo "render-charts.sh: ${name}: the ${chart} chart rendered, but must refuse $*" >&2
+    exit 1
+  fi
+  if ! grep -qF -- "${want}" "${RENDER_DIR}/refused/${name}.txt"; then
+    echo "render-charts.sh: ${name}: the ${chart} chart failed without saying '${want}':" >&2
+    cat "${RENDER_DIR}/refused/${name}.txt" >&2
+    exit 1
+  fi
+}
+refuse scaleout-kuberay ray-serve-llm vllm-inference "kuberay mode is designed but not built yet" \
+  --set global.scaleOut.mode=kuberay
+refuse scaleout-unknown ray-serve-llm vllm-inference "global.scaleOut.mode must be none or keda" \
+  --set global.scaleOut.mode=hpa
+refuse autoscaling-no-target ray-serve-llm vllm-inference "targetOngoingRequests must be set when maxReplicas" \
+  --set server.autoscaling.maxReplicas=2
+refuse autoscaling-over-gpus ray-serve-llm vllm-inference "is more than server.gpuCount" \
+  --set server.autoscaling.maxReplicas=2 --set server.autoscaling.targetOngoingRequests=4
+refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
+refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be pairs or scaleout" \
+  --set global.compare.enabled=true --set global.compare.mode=surge
+echo "rendered charts/ray-serve-llm-scaling.yaml, charts/ray-serve-llm-cache-*.yaml; refused/*.txt as expected"
+
+# global.scaleOut.mode=keda, with the values files the operator includes in that case.
+value_files AWS --set global.scaleOut.mode=keda
+operator_sets AWS
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set global.scaleOut.mode=keda > "${RENDER_DIR}/charts/ray-serve-llm-keda.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.scaleOut.mode=keda --set global.compare.enabled=true > "${RENDER_DIR}/charts/notebook-compare-keda.yaml"
+echo "rendered charts/*-keda.yaml with: ${FILES[*]}"
+
 # ---- clustergroup chart (app of apps) ---------------------------------------------
 render_clustergroup() {
   local name="$1" platform="$2"; shift 2
@@ -176,5 +230,6 @@ render_clustergroup() {
 render_clustergroup default AWS
 render_clustergroup none AWS --set global.gpuMachineSet=none
 render_clustergroup gcp GCP
+render_clustergroup keda AWS --set global.scaleOut.mode=keda
 
 echo "render-charts.sh: OK, output in ${RENDER_DIR}"

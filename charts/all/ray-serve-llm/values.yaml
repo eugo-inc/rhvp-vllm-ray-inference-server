@@ -10,6 +10,9 @@ global:
     id: qwen2.5-0.5b-instruct
     source: Qwen/Qwen2.5-0.5B-Instruct
     revision: ""
+  # global.scaleOut comes from values-global.yaml; this stub keeps it off.
+  scaleOut:
+    mode: none
 
 # CPU architecture (kubernetes.io/arch) of the node that builds the image and of
 # the GPU node that runs it. The default AWS GPU node (g6.2xlarge) is amd64.
@@ -44,8 +47,23 @@ server:
     gpu_memory_utilization: 0.85
     tensor_parallel_size: 1
   acceleratorType: null
-  minReplicas: 1
-  maxReplicas: 1
+  # Inside the pod: Ray Serve's own autoscaler adds and removes vLLM replicas
+  # in this one server pod. The defaults (1 and 1) keep one replica and no
+  # autoscaling.
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 1
+    # Ongoing requests per replica that Ray Serve aims for. Required when
+    # maxReplicas is above 1: Ray Serve LLM's own default target is 10^9, so
+    # without it the replica count would never grow. null leaves it unset.
+    targetOngoingRequests: null
+  # GPUs each replica asks Ray for. maxReplicas * gpuPerReplica must not
+  # exceed gpuCount. Below 1 (for example 0.5) replicas share one GPU, which
+  # adds no GPU compute; that is for testing only.
+  gpuPerReplica: 1
+  # Ray's Prometheus metrics. The container port and the Service port are
+  # both named "metrics".
+  metricsPort: 8080
   objectStoreMemoryGb: 2
   httpHost: 0.0.0.0
   httpPort: 8000
@@ -95,6 +113,31 @@ modelStorage:
   size: 50Gi
   # Empty uses the cluster's default StorageClass.
   storageClassName: ""
+  # ReadWriteOnce or ReadWriteMany. Server pods on more than one node
+  # (global.scaleOut.mode: keda) need ReadWriteMany.
+  accessMode: ReadWriteOnce
+
+# Where the GPU compile caches (CUDA driver, FlashInfer, vLLM and Triton) live:
+#   none    the pod's own emptyDir at /cache, emptied on every new pod
+#   node    a folder on the node, kept for later pods on that node
+#   shared  a volume that every server pod mounts
+compileCache:
+  mode: none
+
+# Across pods: OpenShift's Custom Metrics Autoscaler (KEDA) adds and removes
+# whole server pods. Used only while global.scaleOut.mode is keda
+# (values-global.yaml); in every other mode none of this is rendered.
+scaleOut:
+  # Server pods, each with server.gpuCount GPUs.
+  minPods: 1
+  maxPods: 2
+  # Waiting requests per pod (vLLM's gauge, exported by Ray as
+  # ray_vllm_num_requests_waiting) above which a pod is added.
+  waitingRequestsPerPod: 4
+  pollingIntervalSeconds: 15
+  cooldownSeconds: 300
+  # The cluster monitoring's Thanos Querier.
+  thanosUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local:9092
 
 # Route to the OpenAI-compatible API. Off by default: the API has no
 # authentication. The notebook talks to the Service, not to a Route.

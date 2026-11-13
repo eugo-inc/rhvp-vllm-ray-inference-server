@@ -29,6 +29,18 @@ global:
     # Hugging Face commit of that repository; empty means its newest commit.
     revision: 7ae557604adf67be50417f59c2c2f167def9a775
 
+  # Scale-out across server pods. One of:
+  #   none     - one server pod (the default). Inside that pod, Ray Serve can
+  #              still add replicas (server.autoscaling in
+  #              charts/all/ray-serve-llm/values.yaml).
+  #   keda     - OpenShift's Custom Metrics Autoscaler adds and removes whole
+  #              server pods on vLLM's waiting-request count (settings:
+  #              scaleOut in charts/all/ray-serve-llm/values.yaml).
+  #   kuberay  - KubeRay adds Ray worker pods. Designed, not built yet: the
+  #              values check and the server chart refuse it.
+  scaleOut:
+    mode: none
+
   # Compare two inference-server images on this model, on the same GPU, with
   # the same requests (README, "Compare two images"). Off by default.
   #
@@ -54,6 +66,10 @@ global:
   # the run repeats. Setting enabled back to false deletes nothing.
   compare:
     enabled: false
+    # pairs    - paired rounds of the two sides (described above).
+    # scaleout - the scale-out benchmark. Designed, not built yet: the runner
+    #            refuses it.
+    mode: pairs
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
     runName: vllm-two-releases
     # Exactly two sides: A, the baseline, first; then B, the candidate. Every
