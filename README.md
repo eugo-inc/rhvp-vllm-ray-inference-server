@@ -467,12 +467,12 @@ launches use the same GPU. The runner then measures:
   (case ids end in `tokens_per_joule[gpu]`). A level with fewer power samples than `energy.minSamples` (10) gets no
   figure. The mean power comes from DCGM's energy counter when the level has that many distinct counter readings,
   and from the power samples otherwise; when one load level's launches used both, `results.md` and the notebook name
-  the launches of each. The DCGM exporter collects every 30 seconds by default, which gives about 2 samples in a 60-second level,
-  so while `global.compare.enabled` is true (and the energy source is not `none`) the pattern's ClusterPolicy sets
-  the exporter's interval (`DCGM_EXPORTER_INTERVAL`) and its scrape interval to 2 seconds. We expect the GPU
-  Operator to restart the DCGM exporter pods when the comparison is turned on or off. The pattern labels the
-  `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's monitoring scrapes
-  the exporter; the label is set on every install, also when the comparison is off.
+  the launches of each. The DCGM exporter collects every 30 seconds by default, which gives about 2 samples in a
+  60-second level, so while `global.compare.enabled` is true (and the energy source is not `none`) the pattern's
+  ClusterPolicy sets the exporter's interval (`DCGM_EXPORTER_INTERVAL`) and its scrape interval to 2 seconds. We
+  expect the GPU Operator to restart the DCGM exporter pods when the comparison is turned on or off. The pattern
+  labels the `nvidia-gpu-operator` namespace `openshift.io/cluster-monitoring: "true"` so that the cluster's
+  monitoring scrapes the exporter; the label is set on every install, also when the comparison is off.
 
 GuideLLM now and then stops making progress at the end of a level, and the launch's load then times out. The launch
 tries once more, from the start: the side is taken down, waits for the GPU, is started again and timed from that new
