@@ -672,7 +672,7 @@ class FakeDocker:
         pass
 
     def pull(self, ref):
-        pass
+        self.calls.append(("pull", ref))
 
     def run(self, name, body, timeout_s=300.0, log_to=None):
         self.calls.append(("run", name, body))
@@ -720,6 +720,9 @@ def test_the_server_container_is_stopped_for_the_run_and_started_after(monkeypat
     backend = _docker_backend(docker, RHVP_COMPARE_SERVER_CONTAINER="live")
     backend.prepare(_plan())
     assert ("stop", "live") in docker.calls
+    kinds = [c[0] for c in docker.calls]
+    # The server stops only after every pull and the volume helper: a stop during a long pull leaves it running.
+    assert kinds.index("stop") > max(i for i, k in enumerate(kinds) if k in ("pull", "run"))
     assert backend.restore_server() is True  # the first start failed, the second went through
     assert [c for c in docker.calls if c[0] == "start"] == [("start", "live")] * 2
     assert backend.restore_server() is True and len([c for c in docker.calls if c[0] == "start"]) == 2
