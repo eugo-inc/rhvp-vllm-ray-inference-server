@@ -30,6 +30,9 @@ one OpenShift cluster:
 - **An image comparison**, off by default (`global.compare`). A Job compares two inference-server images on the
   server's GPU and takes the server down while it runs (README, "Compare two images"; here, "How the image
   comparison runs").
+- **Scale out**, off by default: more vLLM replicas inside the server pod (`server.autoscaling`, Ray Serve's own
+  autoscaler), more server pods (`global.scaleOut.mode: keda`, Red Hat's Custom Metrics Autoscaler), and the
+  comparison's mode `scaleout` (README, "Scale out"; here, "How scale out works").
 
 ### Names that must stay in sync
 
@@ -54,10 +57,18 @@ one, change it everywhere and run the tests.
 | Notebook ServiceAccount | `notebook`, with a Role and RoleBinding `notebook-read-pods` in `vllm-inference` that allow get/list/watch on pods |
 | Rebuild permission | Role and RoleBinding `rebuild-on-commit` in both namespaces, for ServiceAccount `imperative/imperative-sa`; the namespaces and BuildConfig names are also listed in `ansible/rebuild-on-commit.yaml` |
 | Image comparison runner | Job `compare-<runName>-<hash of the pod template>` in `vllm-notebook` (pod label `app.kubernetes.io/name=image-compare`), ServiceAccount `image-compare`, config ConfigMap `image-compare-config-<hash of the config>` (key `compare.json`) |
-| Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`) |
+| Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`); in keda mode also get and patch on ScaledObject `ray-serve-llm` (`scaledobjects.keda.sh`) in `image-compare-sides` |
 | Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
 | Image comparison sides | Pods `cmp-<last 8 characters of the run id>-r<NN>-<a or b>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side` and `rhvp-compare/run=<run id>` |
 | DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`) |
+| Server metrics | Ray's Prometheus metrics on port `8080` (`server.metricsPort`, `metrics_port` in `llm.yaml`, `ray.init(_metrics_export_port=...)`) in every install; container port and Service port named `metrics` only in keda mode; vLLM's waiting-request gauge is `ray_vllm_num_requests_waiting` |
+| Replica count log line | one JSON line `{"event":"rhvp-scale",...}` per change (`inference-server/rhvp_scale.py` defines it; `notebooks/rhvp_compare/logs.py` keeps its own copy of the names); deployments as Ray Serve LLM names them, `LLMServer:<model id, "/" as "--" and "." as "_">` and `OpenAiIngress` |
+| Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
+| Autoscaler install (keda mode) | namespace `openshift-keda` (OperatorGroup for all namespaces, labelled `openshift.io/cluster-monitoring: "true"`), Subscription key `keda` for package `openshift-custom-metrics-autoscaler-operator` (channel `stable`), app `keda-config` (`charts/all/keda-config`) with KedaController `keda`; all in `overrides/values-scaleout-keda.yaml`, which `sharedValueFiles` includes as `/overrides/values-scaleout-<global.scaleOut.mode>.yaml` |
+| Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`) |
+| Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
+| GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
+| Comparison with docker, scale-out mode | second replica container `<first replica's name>-2`; warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per round `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`) |
 
 ## Repo map
 
@@ -68,13 +79,19 @@ values-global.yaml            pattern name, global.gpuMachineSet, global.model.*
 values-secret.yaml.template   secrets file format: hfmodel / hftoken, value "none"
 variants/prod/values-prod.yaml   the cluster group: namespaces, operator subscriptions, Argo CD apps, imperative jobs
 overrides/values-gpu-machineset-create-AWS.yaml   create-gpu-machineset imperative job and its RBAC
+overrides/values-scaleout-keda.yaml   keda mode: the Custom Metrics Autoscaler's namespace, Subscription and app,
+                                      and the ray-serve-llm app's ignore rules restated with the pause annotation
 ansible/rebuild-on-commit.yaml   imperative job: start a build when that build's source folder changed
 ansible/rebuild_on_commit.py     the rebuild decision (which BuildConfigs to start), tested in tests/test_charts.py
 charts/all/nfd-config/         NodeFeatureDiscovery instance
-charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint)
+charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint); time-slicing-config.yaml
+                               (opt-in GPU time-slicing)
 charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Route (off by default), PVC,
-                               ConfigMap, ExternalSecret; _settings.tpl checks the scale-out settings
-                               (settings-check.yaml renders nothing, it only fails a bad render)
+                               ConfigMap, ExternalSecret; compile-cache-pvc.yaml (compileCache node or shared);
+                               scaledobject.yaml, triggerauthentication.yaml, servicemonitor.yaml (keda mode
+                               only); _settings.tpl checks the scale-out settings (settings-check.yaml renders
+                               nothing, it only fails a bad render)
+charts/all/keda-config/        KedaController keda (an app only in keda mode)
 charts/all/notebook/           BuildConfig, ImageStream, Deployment (JupyterLab + oauth-proxy), Service, Route,
                                ServiceAccount and RBAC; compare-job.yaml, compare-config.yaml (ConfigMap, PVC)
                                and compare-rbac.yaml, rendered only while global.compare.enabled is true
@@ -87,8 +104,9 @@ notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requ
                                inference_timings.ipynb (generated)
 notebooks/rhvp_compare/        the image comparison: plan, runner, probe, guidellm, logs, energy, stats, analyze,
                                report, summary, kube (OpenShift backend), dockerapi (docker backend), example,
-                               words, show, cells, launch (what each server start ran with);
-                               results.schema.json. compare_images.ipynb and
+                               words, show, cells, launch (what each server start ran with), router (the
+                               scale-out mode's request router, docker only); results.schema.json.
+                               compare_images.ipynb and
                                compare-recordings/synthetic.json are generated by make_notebook.py
 scripts/                       render-charts.sh, validate-values.sh (with pattern_settings.py, the scale-out
                                rules), local-smoke.sh, compare-local.sh
@@ -97,7 +115,8 @@ tests/                         test_serve_config.py, test_secrets_template.py, t
                                chart_helpers.py share one chart render),
                                test_notebook_rules.py, test_measure.py, test_compare_stats.py,
                                test_compare_parsers.py, test_compare_runner.py, test_compare_notebook.py,
-                               fixtures/ (a trimmed GuideLLM report, the mock config for compare-local.sh)
+                               test_compare_router.py, fixtures/ (trimmed GuideLLM reports, one with latency
+                               goals; the mock configs for compare-local.sh, pairs and scaleout)
 .github/workflows/             lint.yml, jsonschema.yaml, notebook-check.yml
 pattern.sh  Makefile  Makefile-common  ansible.cfg  .claude/skills/pattern-author/  .cursor/skills/pattern-author/
 ```
@@ -112,9 +131,14 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 2. `serve_app.py` reads `/config/llm.yaml` (the path in `RHVP_CONFIG`) and then the environment overrides
    `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION` and
    `RHVP_MAX_MODEL_LEN`.
-3. It starts Ray with a 2 GiB object store, starts Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`.
-   `serve.run` returns once the app is RUNNING, which means the model is loaded.
-4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM.
+3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
+   Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
+   Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
+   which means the model is loaded.
+4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM. Until then it checks the app every 10
+   seconds (every second while `max_replicas` is above `min_replicas`): it removes the ready file when the app stops
+   being RUNNING, and logs one `rhvp-scale` line for each replica count that changed. Adding or removing a replica
+   leaves the app RUNNING, so the ready file stays.
 5. The startup and readiness probes check that ready file every 2 seconds. The kubelet runs the readiness probe
    as soon as the startup probe passes, so the pod turns Ready up to about 2 seconds after the file appears. That
    is the resolution of the notebook's start-to-Ready figure, which Kubernetes also records in whole seconds. The
@@ -134,14 +158,27 @@ max_replicas: 1
 object_store_memory_gb: 2
 http_host: 0.0.0.0
 http_port: 8000
+# Written only when they differ from these defaults (so a default install renders the llm.yaml above):
+# target_ongoing_requests: null  # server.autoscaling.targetOngoingRequests; required when max_replicas > 1
+# gpu_per_replica: null          # server.gpuPerReplica; null: one GPU per tensor- and pipeline-parallel worker
+# metrics_port: 8080             # server.metricsPort
 ```
+
+`serve_app.py` refuses a config it cannot run, with a message that names the key: among others a `max_replicas`
+above 1 without `target_ongoing_requests` (Ray Serve LLM's own target is 10^9), a `gpu_per_replica` that is not the
+worker count of a tensor-parallel replica, and, for replicas that share a GPU, a `gpu_memory_utilization` above
+`gpu_per_replica`. The chart and `scripts/pattern_settings.py` refuse the same settings before a sync.
 
 Server container environment:
 
 - `RHVP_CONFIG=/config/llm.yaml`
 - `HF_HOME=/models/hf`: model weights on the PVC, kept across restarts.
-- Compile caches on an emptyDir at `/cache`, emptied on every new pod: `TRITON_CACHE_DIR=/cache/triton`,
-  `VLLM_CACHE_ROOT=/cache/vllm`, `FLASHINFER_WORKSPACE_BASE=/cache/flashinfer`, `XDG_CACHE_HOME=/cache/xdg`.
+- Compile caches under `/cache`: `TRITON_CACHE_DIR=/cache/triton`, `VLLM_CACHE_ROOT=/cache/vllm`,
+  `FLASHINFER_WORKSPACE_BASE=/cache/flashinfer`, `XDG_CACHE_HOME=/cache/xdg`. With `compileCache.mode: none` (the
+  default) `/cache` is an emptyDir, emptied on every new pod. With `node` or `shared` it is PVC
+  `ray-serve-llm-compile-cache`, kept for later pods; the pod then also gets `CUDA_CACHE_PATH=/cache/cuda`,
+  `CUDA_CACHE_MAXSIZE=4294967296` (4 GiB) and `fsGroupChangePolicy: OnRootMismatch`. There is no hostPath option:
+  the restricted-v2 SCC the server runs under does not allow hostPath volumes.
 - `RAY_TMPDIR=/tmp/r` on its own emptyDir. Keep it short: Ray puts Unix sockets under it, and socket paths are
   limited to 108 bytes.
 - `/dev/shm`: an emptyDir with `medium: Memory`, 4Gi.
@@ -203,6 +240,79 @@ mock server, without a GPU); tokens per joule from real power samples (both powe
 hand-written answers in the documented formats, and the DCGM label names the reader matches on have not been
 checked against a real DCGM exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry,
 Argo CD health of the Job); and the length of a run (an estimate of 2 to 3 hours with the defaults).
+
+### How scale out works
+
+Three parts, each off by default. With every default, the local charts render exactly as before they existed
+(`scripts/render-charts.sh`; the tests compare the renders).
+
+- **Inside the pod** (`server.autoscaling`, `server.gpuPerReplica`): Ray Serve's own autoscaler, in the locked Ray
+  release, adds and removes vLLM replicas in the one server pod. `serve_app.py` passes `target_ongoing_requests`
+  into `autoscaling_config` and, when replicas share a GPU, a placement bundle of that share per worker
+  (`placement_group_config`). It does not depend on `global.scaleOut.mode`.
+- **Across pods** (`global.scaleOut.mode: keda`): `variants/prod/values-prod.yaml` adds
+  `/overrides/values-scaleout-<mode>.yaml` to `sharedValueFiles`; only the keda file exists. It installs Red Hat's
+  Custom Metrics Autoscaler (operator, KedaController through the `keda-config` app), and the server chart renders
+  the ScaledObject, TriggerAuthentication with its ServiceAccount and Roles, the ServiceMonitor and the `metrics`
+  ports (see the names table). The trigger sums `ray_vllm_num_requests_waiting` over the server pods in
+  `vllm-inference`, read from the Thanos Querier on port 9092 (namespace-scoped), and the HPA that KEDA creates
+  divides it by the pod count. Between `minPods` and `maxPods` the HPA reads the metric on its own 15-second sync
+  period: `pollingIntervalSeconds` only sets how often KEDA refreshes the ScaledObject's status, so a pod is added
+  at the earliest about 15 seconds after requests start to wait. `cooldownSeconds` is the HPA's scale-down
+  stabilization window. Prerequisites: monitoring for user-defined projects enabled on the cluster, and a second
+  GPU (another GPU node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, with
+  `gpu_memory_utilization` lowered to leave room for the other pod; nothing checks that). Server pods on more than
+  one node need `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode
+  cannot change after it is created.
+- **The comparison's mode `scaleout`** (`global.compare.mode`): docker only for now (`kube.py` refuses it with
+  `PLAN_INVALID`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
+  (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that one ScaledObject),
+  and removes the pause when it brings the server back; the by-hand restore command it prints includes the
+  `oc annotate` step. `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace period.
+- **`kuberay`** is a third value of `global.scaleOut.mode`, designed but not built. `scripts/pattern_settings.py`
+  (through `scripts/validate-values.sh`) and `charts/all/ray-serve-llm/templates/_settings.tpl` refuse it, and
+  any unknown mode, with the same message; keep the two in step (`tests/test_scaleout_contract.py`).
+
+Switching keda mode off removes nothing: the apps sync without pruning, so the ScaledObject keeps scaling the
+server until someone deletes it (README, "Scale out", has the commands), and the operator, `openshift-keda` and the
+`keda-config` application stay.
+
+The Subscription follows `stable` with automatic updates. Upstream KEDA 2.21 refuses a bound ServiceAccount token,
+the kind `keda-trigger-auth-prometheus` uses, unless the operator maps that ServiceAccount to a token audience
+(KEDA's 2.21 migration notes); the ScaledObject then never turns Ready and the server stops scaling while the
+operator looks healthy. Red Hat's current operator is on the 2.19 line, which needs no mapping. If a Red Hat
+release adds the rule, map the audience in the KedaController or move the TriggerAuthentication to a long-lived
+token Secret.
+
+Checked: unit tests and chart renders for all three parts. On CPU, in the server image, a stand-in Ray Serve app
+with replicas that take 20 seconds to start scaled from 1 to 2 under `serve_app.serve_and_watch`: the `rhvp-scale`
+lines showed the target and then the running count, the app stayed RUNNING, the ready file stayed, no request
+failed, and `rhvp_status.py` printed the counts. On kind with upstream KEDA 2.19 (upstream 2.21 refused the bound
+token, as above), the chart's own keda objects with stand-ins for the Thanos Querier and the server: 1 to 2 pods on
+a waiting count above the threshold, held at 0 by the pause for a minute, back to 1 pod when the pause was removed;
+every query carried the bearer token, the namespace and the rendered query. Through a Service, a new pod got none
+of the requests of a client that kept 8 connections open; through `rhvp_compare/router.py`, it got a share. The
+comparison's mode ran end to end with docker against GuideLLM mock servers
+(`tests/fixtures/compare-scaleout-mock.json`): schema-valid results, the second replica took part of every surge,
+and the notebook rendered.
+
+Not checked yet:
+
+- No GPU scale event: no real vLLM replica or server pod has been added by either autoscaler. The shared-GPU
+  placement bundle, the GPU check at start and the deployment names of a real Ray Serve LLM app have not run.
+- Nothing of keda mode on OpenShift: the operator install (package and channel are from Red Hat's docs and catalog,
+  not from a cluster), the KedaController that the operator and Argo CD both manage, the operator's trust in the
+  Thanos Querier's certificate, the ServiceMonitor (kind has no CRD for it), the labels on the real metric, the
+  runner's own Role (the kind check paused as cluster admin), the Argo CD rule that keeps the pause annotation,
+  Red Hat's operator build, and GPU time-slicing.
+- No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
+  as 0, so a wrong name means the server never scales, without an error.
+- `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
+- A surge in which some requests miss the latency goals, end to end (unit tests and a trimmed report only); the
+  OpenShift scale round of the comparison, which is not built; the launch records of OpenShift sides carry no
+  server environment (`env_source: "none"`).
+- An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
+  and take the one serving replica out of the Service.
 
 ## How to deploy
 
@@ -486,7 +596,9 @@ Framework facts that catch people out:
 - A per-app `syncPolicy` replaces the chart's default (`automated: {}` plus `retry`) completely, so restate
   both.
 - Missing `sharedValueFiles` are skipped. That is how `gpuMachineSet: none`, or any platform other than AWS,
-  turns the MachineSet job off.
+  turns the MachineSet job off, and how `global.scaleOut.mode: none` adds no autoscaler: each app's valueFiles
+  then lists `/overrides/values-scaleout-none.yaml`, which does not exist. A value named in a `sharedValueFiles`
+  entry must be set, or the clustergroup chart's render fails; `scripts/validate-values.sh` checks it.
 - Keep app keys equal to chart folder names.
 
 ## Local development loop
@@ -494,7 +606,7 @@ Framework facts that catch people out:
 Install the Python tools:
 
 ```sh
-python3.12 -m pip install pytest pyyaml jsonschema nbformat nbclient nbconvert ipykernel httpx
+python3.12 -m pip install pytest pyyaml jsonschema nbformat nbclient nbconvert ipykernel httpx aiohttp==3.14.3
 ```
 
 Then run these, all from the repo root:
@@ -507,6 +619,7 @@ Then run these, all from the repo root:
 | `python3.12 notebooks/make_notebook.py --check` | regenerates both notebooks and their synthetic files and fails if one differs from the committed file | anywhere |
 | `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
 | `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker; GPU sides need an NVIDIA GPU |
+| `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker; no GPU |
 | `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints its rounds and whether the pairs can reach alpha | anywhere |
 
 ## Bumping Ray and vLLM
@@ -573,7 +686,7 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
   writable by uid ...".**
   - Why: OpenShift runs the container as an arbitrary UID in group 0. The image's virtualenv is read-only. Only
     `/opt/app-root/home`, `/cache`, `/models` and `/tmp/r` are writable by group 0. The chart mounts emptyDirs at
-    `/cache` and `/tmp/r`, and the PVC at `/models`.
+    `/cache` (or PVC `ray-serve-llm-compile-cache`, see `compileCache.mode`) and `/tmp/r`, and the PVC at `/models`.
   - Fix: point any new tool's cache at `/cache/<tool>` through its environment variable. For any new image folder
     that must be writable, run `chgrp 0` and `chmod g=u` in the same `RUN` that creates it.
 - **Ray warns that it is using `/tmp` instead of `/dev/shm`, or the pod is OOMKilled.**
@@ -593,8 +706,10 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
 - **FlashInfer errors about `nvcc`, or every pod start takes a long time.**
   - Why: FlashInfer compiles GPU kernels just in time with `nvcc`. The base is NVIDIA's CUDA *devel* UBI 9 image,
     which ships `nvcc`; `CUDA_HOME=/usr/local/cuda`; and the locks pin `cuda-toolkit[nvcc,cccl]` to the same CUDA
-    version. The compile caches live in the `/cache` emptyDir, so every new pod compiles the kernels again.
-  - Fix: do not switch to a `-runtime` or `-base` image.
+    version. With `compileCache.mode: none` (the default) the compile caches live in the `/cache` emptyDir, so
+    every new pod compiles the kernels again.
+  - Fix: do not switch to a `-runtime` or `-base` image. To keep the compiled kernels for later pods, set
+    `compileCache.mode` to `node` (one GPU node) or `shared` (a ReadWriteMany StorageClass).
 - **A request through a Route fails with 504 or times out.**
   - Why: the OpenShift router times out after 30 seconds by default. The optional server Route sets
     `haproxy.router.openshift.io/timeout: 10m`.

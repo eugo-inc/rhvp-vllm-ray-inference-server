@@ -59,6 +59,8 @@ no OpenShift AI subscription.
 - [What to expect on the first install](#what-to-expect-on-the-first-install)
 - [Using the API](#using-the-api)
 - [The notebook](#the-notebook)
+- [Compare two images](#compare-two-images)
+- [Scale out](#scale-out)
 - [Changing the model](#changing-the-model)
 - [Uninstall](#uninstall)
 - [Support](#support)
@@ -137,6 +139,8 @@ flowchart TB
   through the in-cluster Service.
 - **The image comparison**, off by default, adds a Job in `vllm-notebook` that takes the server down and measures
   two server images in turn on its GPU ([Compare two images](#compare-two-images)).
+- **Scale out**, off by default, adds vLLM replicas inside the server pod (Ray Serve's autoscaler), whole server
+  pods (Red Hat's Custom Metrics Autoscaler), or both ([Scale out](#scale-out)).
 
 ## What is in the stock stack
 
@@ -576,6 +580,190 @@ under the same tag is not a new run: change the digest, or `runName`.
   Argo CD. The whole run has also been tried with docker (`scripts/compare-local.sh`), against the same mock server.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - The length of a run, and so of the server's outage, is an estimate.
+
+## Scale out
+
+The server can grow under load in two ways. Both are off by default: a default install runs one server pod with one
+vLLM replica, and its charts render as they did before scale out existed.
+
+| Layer | Switch | What it adds | Who decides |
+|---|---|---|---|
+| Inside the pod | `server.autoscaling.maxReplicas` above 1, in `charts/all/ray-serve-llm/values.yaml` | vLLM replicas in the one server pod | Ray Serve's own autoscaler |
+| Across pods | `global.scaleOut.mode: keda`, in `values-global.yaml` | whole server pods | OpenShift: Red Hat's Custom Metrics Autoscaler, the supported build of KEDA |
+
+`global.scaleOut.mode` takes `none` (the default), `keda` or `kuberay`. `kuberay`, where KubeRay's Ray autoscaler
+adds Ray worker pods, is designed but not built: the values check (`scripts/validate-values.sh`) and the chart render
+both refuse it with a message, rather than falling back to `none`. The layer inside the pod does not depend on
+`global.scaleOut.mode`, and the two layers can be combined; that combination has not been tried.
+
+### Inside the pod: more vLLM replicas
+
+Ray Serve adds a vLLM replica when the requests in flight per replica rise above a target, and removes one when they
+fall. It is part of the pattern's Ray release: no new package and no operator. To turn it on, set these in
+`charts/all/ray-serve-llm/values.yaml` in your fork and push. This example is for a node with 4 GPUs, growing from
+one replica to four:
+
+```yaml
+server:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 4
+    targetOngoingRequests: 8   # requests in flight per replica that Ray Serve aims for
+  gpuPerReplica: 1             # GPUs each replica asks Ray for
+  gpuCount: 4                  # GPUs the pod asks for
+```
+
+The chart render and `scripts/validate-values.sh` refuse these settings, each with a message that names the key:
+
+- `maxReplicas` above 1 without `targetOngoingRequests`. Ray Serve LLM's own default target is 10^9 requests in
+  flight per replica, so the replica count would never grow.
+- `maxReplicas` times `gpuPerReplica` above `gpuCount`.
+- Replicas that share a GPU (`gpuPerReplica` below 1) with `engineKwargs.gpu_memory_utilization` above
+  `gpuPerReplica`. Each vLLM replica claims that fraction of the whole GPU's memory when it starts, so a later replica
+  would not fit.
+
+With `tensor_parallel_size` above 1, each replica needs that many GPUs. The chart does not check this; the server
+checks it when it starts, and exits with code 2 when Ray sees too few GPUs.
+
+**Half a GPU each is a test setup.** The default AWS node has one L4. On it, a second replica can only share that
+GPU (`gpuPerReplica: 0.5`, with `gpu_memory_utilization: 0.4`). Two replicas on one GPU add no GPU compute: they take
+turns on it, and each has less memory for its cache. Use that setup to watch the autoscaler work, not to serve more.
+The real case is a node with several GPUs.
+
+What you can see:
+
+- The server's log has one `rhvp-scale` JSON line each time a replica count changes, for example
+  `{"event":"rhvp-scale","ts":1794551388.123,"app":"llm","deployment":"LLMServer:qwen2_5-0_5b-instruct","from":1,"to":2,"reason":"target"}`.
+  `reason` `target` is the autoscaler's decision; a `running` line follows once the new replica serves. While
+  `maxReplicas` is above `minReplicas`, the server checks the counts every second.
+- `oc exec -n vllm-inference deploy/ray-serve-llm -c server -- python rhvp_status.py` prints the app's state, then
+  one line per deployment, such as `LLMServer:qwen2_5-0_5b-instruct: running 2, target 2`.
+- The pod stays Ready while a replica is added or removed.
+- Ray's Prometheus metrics, vLLM's among them as `ray_vllm_*`, are served on port 8080 inside the container in every
+  install (`server.metricsPort`). Only keda mode opens that port on the pod and the Service.
+
+A server image built before scale out existed ignores the new settings (it logs a warning for each), so its replica
+count never grows and it writes no `rhvp-scale` lines. After the push, the rebuild job builds a new image.
+
+### Across pods: Ray Serve pods scaled out by OpenShift
+
+With `global.scaleOut.mode: keda`, Red Hat's Custom Metrics Autoscaler adds whole server pods while requests queue,
+and removes them after a cooldown. Ray Serve and vLLM inside each pod stay as they are. The mode adds:
+
+- the operator `openshift-custom-metrics-autoscaler-operator` (channel `stable`, from `redhat-operators`) in
+  namespace `openshift-keda`, and the app `keda-config` with its KedaController `keda`;
+- in `vllm-inference`: a ScaledObject `ray-serve-llm` that scales Deployment `ray-serve-llm` between
+  `scaleOut.minPods` (1) and `scaleOut.maxPods` (2), a ServiceMonitor that scrapes the server's metrics port, and the
+  ServiceAccount, Roles and TriggerAuthentication with which the autoscaler reads the cluster's monitoring.
+
+The signal is vLLM's count of waiting requests, `ray_vllm_num_requests_waiting`, summed over the server pods and
+read from the cluster monitoring's Thanos Querier. A pod is added while more than `scaleOut.waitingRequestsPerPod`
+(4) requests wait per pod. The settings are under `scaleOut` in `charts/all/ray-serve-llm/values.yaml`.
+
+Before you turn it on:
+
+- **Monitoring for user-defined projects** must be enabled on the cluster: `enableUserWorkload: true` in ConfigMap
+  `cluster-monitoring-config` in `openshift-monitoring`. This is Red Hat's prerequisite for the autoscaler, and the
+  pattern does not change that cluster setting.
+- **A second pod needs a second GPU:** a second GPU node, or GPU time-slicing on the one node
+  (`timeSlicing.enabled: true` in `charts/all/nvidia-gpu-config/values.yaml`, which offers each GPU as two). Time-
+  slicing has the same limit as half a GPU per replica: no extra compute. Each pod still sees the whole GPU memory,
+  so set `server.engineKwargs.gpu_memory_utilization` to 0.4 with two shares. Nothing checks that setting in this
+  mode; with more, the second pod fails to start.
+- **Pods on more than one node** need the model volume as ReadWriteMany (`modelStorage.accessMode`), and a StorageClass
+  that offers it. A volume's access mode cannot change after it is created: on a running install, delete PVC
+  `ray-serve-llm-models` first, and the model downloads again. Use `compileCache.mode: shared`, not `node`, there.
+- **How soon.** The autoscaler reads the metric every 15 seconds, so a pod is asked for at the earliest about 15
+  seconds after requests start to wait. The new pod then starts like any server pod: it downloads nothing new, but it
+  loads the model and compiles its kernels. `compileCache.mode: node` or `shared` keeps the compiled kernels on a
+  volume (PVC `ray-serve-llm-compile-cache`), so a later pod finds them.
+- **Clients with open connections.** A Service spreads connections, not requests. A client that keeps its
+  connections open, such as GuideLLM, keeps sending to the pods it already reached, and a new pod gets almost none
+  of its requests. Clients that open new connections reach the new pods.
+- **Operator updates.** The Subscription follows `stable` with automatic updates. Upstream KEDA 2.21 refuses the kind
+  of token this pattern's TriggerAuthentication uses (a bound ServiceAccount token) unless the operator maps it to a
+  token audience. If a Red Hat release based on it does the same, the server stops scaling while the operator still
+  looks healthy. Red Hat's current release is based on KEDA 2.19, which needs no mapping.
+
+Turning it off: set `global.scaleOut.mode: none` and push. The apps sync without pruning, so the operator, its
+namespace, the `keda-config` app and the objects in `vllm-inference` stay, and the ScaledObject keeps scaling the
+server. Delete them yourself:
+
+```sh
+oc delete scaledobject ray-serve-llm -n vllm-inference
+oc delete triggerauthentication keda-trigger-auth-prometheus -n vllm-inference
+oc delete servicemonitor ray-serve-llm -n vllm-inference
+oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
+```
+
+The last command is needed because the Deployment keeps the pod count the autoscaler last set. What else stays is
+harmless, and you can delete it when you no longer want it: ServiceAccount `thanos` and its Roles
+`thanos-metrics-reader` and `keda-operator-token-creator` in `vllm-inference`, the Argo CD application `keda-config`,
+and the operator with its namespace `openshift-keda`.
+
+The image comparison pauses the autoscaler for its run (the annotation `autoscaling.keda.sh/paused-replicas: "0"` on
+the ScaledObject), and removes the pause when the run ends.
+
+### The benchmark's scale-out mode
+
+`global.compare.mode: scaleout` measures how fast each image brings a second replica online under load, and how much
+of that load stays within latency goals. It keeps the comparison's paired rounds, statistics and verdicts
+([How the verdicts are decided](#how-the-verdicts-are-decided)). For now it runs only with docker
+(`scripts/compare-local.sh`); the OpenShift Job refuses it (exit 2, `PLAN_INVALID`) until its scale round is built.
+The commented example at the end of `global.compare` in `values-global.yaml` shows the settings.
+
+Each round:
+
+1. starts one replica of the side and times it to its first answer;
+2. starts a small router in front of it, which sends each request to the replica with the fewest requests in flight;
+3. sends requests through the router at a fixed rate (`scaleOut.requestRate`, for `scaleOut.surgeSeconds`) with
+   GuideLLM;
+4. at a fixed time after the first request (`scaleOut.stepAfterSeconds`, the forced step) starts a second replica of
+   the same image, whatever the load. The second replica joins the router once it answers. Both images get their
+   second replica at the same point, so an image that queues less, and would ask for a replica later, is still timed
+   on the same schedule;
+5. times the second replica to its first answer, with the phases from its log, and counts its share of the requests;
+6. reads GuideLLM's share of the requests that met the latency goals (`scaleOut.ttftMs` for the first token,
+   `scaleOut.tpotMs` between tokens).
+
+The two primary metrics are the second replica's time to first answer and that share of requests within the goals.
+With Holm's correction over two metrics, at least 7 pairs are needed for any FASTER or SLOWER verdict. For the share
+within the goals, FASTER means side B met the goals for more of the requests. The other metrics are secondary,
+among them when the server's own `rhvp-scale` lines show a load-triggered scale-up, for a side that runs this
+pattern's server with autoscaling on. Energy is not measured in this mode.
+
+With `scaleOut.sharedGpu: true` (the default) both replicas of a side share one GPU: `server.gpuMemoryUtilization`
+defaults to 0.4 then, and the plan refuses more than 0.475. A side with `compileCache: warm` (docker only, and only
+with the warm-up round) keeps its compile caches from its warm-up round in a docker volume, so its scored rounds
+start with them; `cold`, the default, starts every replica with empty caches.
+
+`scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
+mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`; by
+default both replicas get `GPUS`), `CPUSET` (the CPUs the runner and every container it starts may use) and
+`CACHE_VOLUME` (the name prefix of the warm-cache volumes). The notebook shows the run in its section 4,
+"Scale-out".
+
+### What has not been checked for scale out
+
+- No GPU has scaled yet: neither autoscaler has added a real vLLM replica or pod.
+- Ray Serve's autoscaling in the pod was checked on CPU only, in the pattern's server image, with a stand-in Ray Serve
+  app whose replicas take 20 seconds to start, scaling from 1 to 2: the `rhvp-scale` lines showed the decision and
+  then 2 running replicas, the app stayed RUNNING, the ready file stayed, every request was answered, and
+  `rhvp_status.py` printed the counts. The deployment names of a real app, the shared-GPU placement and the GPU check
+  at start have not run.
+- Keda mode has not run on OpenShift: not the operator install, the KedaController that the operator and Argo CD
+  both manage, the trust in the Thanos Querier's certificate, the ServiceMonitor, the labels of the real metric, the
+  Argo CD rule that keeps the pause annotation, or GPU time-slicing. Its objects were checked on a plain Kubernetes
+  cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and the server: the ScaledObject took the
+  Deployment from 1 to 2 pods when the waiting count rose, the pause held it at 0 for a minute, and removing the
+  pause brought back 1 pod. Through a Service, a new pod got none of the requests of a client with open connections;
+  through the router, it got a share.
+- No server pod has yet been seen exporting `ray_vllm_num_requests_waiting` under that name on its metrics port. If
+  the name or its labels differ, the query answers nothing, KEDA reads that as 0, and the server never scales.
+- `compileCache.mode` `node` and `shared` have not run on OpenShift.
+- The benchmark's mode ran end to end with docker against GuideLLM's mock servers only. A surge in which some
+  requests missed the goals has not run end to end (unit tests only), and the OpenShift scale round is not built.
+- `kuberay` mode is not built.
 
 ## Changing the model
 
