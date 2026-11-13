@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import time
 import traceback
@@ -425,7 +426,8 @@ class Runner:
                         "started_at": utc_now(), "finished_at": None, "node": None, "image_digest": None,
                         "server_version": None, "startup": None, "levels": [], "metrics": {}, "artifacts": {},
                         "launches": [], "start_retries": 0, "load_retries": 0}
-        held: dict = {"handle": None, "replicas": [], "load": None, "router": None, "discarding": None}
+        held: dict = {"handle": None, "replicas": [], "load": None, "router": None, "discarding": None,
+                      "restarts": []}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
             try:
@@ -579,9 +581,11 @@ class Runner:
         start is recorded once, marked discarded, and a replica whose stop failed is stopped once more. A failed stop
         here fails the round, as that replica may still hold the GPU and its container name."""
         record["load_retries"] = tries
-        record.setdefault("notes", []).append(
-            f"{error}; that try was discarded, to run the round once more from a new first replica, with the same "
-            f"requests (its files are the *.try-{tries}.* files, its launch records are marked discarded)")
+        notes = record.setdefault("notes", [])
+        note_at = len(notes)
+        notes.append(f"{error}; that try was discarded, to run the round once more from a new first replica, with the "
+                     f"same requests (its files are the *.try-{tries}.* files, its launch records are marked "
+                     "discarded)")
         held["discarding"] = tries
         record.pop("scale", None)
         record.pop("_reported_version", None)
@@ -589,12 +593,15 @@ class Runner:
         self._stop_scale_helpers(held, record)
         held["load"] = held["router"] = None
 
+        renamed: dict[str, str] = {}
+
         def keep(name: str, key: str) -> None:
             stem, dot, ext = name.rpartition(".")
             kept = f"{stem}.try-{tries}{dot}{ext}"
             if (out_dir / name).exists():
                 (out_dir / name).replace(out_dir / kept)
                 record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
+                renamed[name] = kept
 
         record["artifacts"].pop("load_report", None)
         for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's server.attempt-1.log
@@ -603,6 +610,12 @@ class Runner:
                 keep(path.rpartition("/")[2], key)
         keep("guidellm.log", "guidellm")
         keep("router.log", "router")
+        # The try's notes name its files by their new names, and its memory-check retries as the discarded try's.
+        notes[note_at] = _renamed(notes[note_at], renamed)
+        for restart in held["restarts"]:
+            notes[restart["note"]] = _restart_note(_renamed(restart["error"], renamed), restart["replica"],
+                                                   renamed.get(restart["name"], restart["name"]), discarded=True)
+        held["restarts"] = []
         for replica in list(reversed(held["replicas"])):  # the added replica first, the first replica last
             self._discard_replica(replica, spec, record, out_dir, rel, held)
         held["discarding"] = None
@@ -776,14 +789,9 @@ class Runner:
         name = f"{stem}.attempt-{tries}.log"
         (out_dir / name).write_text(text, encoding="utf-8")
         record["artifacts"][f"{key}_attempt_{tries}"] = f"{rel}/{name}"
-        if n == 1:
-            what = "the side was started once more, and its start is timed from then"
-        else:
-            what = (f"replica {n} was started once more, and its time to first answer still counts from when it was "
-                    "first asked for")
-        record.setdefault("notes", []).append(
-            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); {what} ({name} is the first "
-            "try's log)")
+        notes = record.setdefault("notes", [])
+        notes.append(_restart_note(str(error), n, name))
+        held["restarts"].append({"note": len(notes) - 1, "error": str(error), "replica": n, "name": name})
         self.backend.stop(handle)
         held["replicas"].remove(replica)  # torn down; the next start adds it again
         if n == 1:
@@ -907,6 +915,30 @@ class Runner:
             self.backend.stop(handle)
         except Exception as error:
             record.setdefault("notes", []).append(f"teardown: {type(error).__name__}: {error}")
+
+
+def _restart_note(error: str, replica: int, name: str, discarded: bool = False) -> str:
+    """The round's note on a replica started once more after vLLM's start-up memory check, whose failed start's log is
+    `name`. `discarded`: the replica belonged to a scale round's try that was then discarded (`_discard_try`), so
+    none of the round's figures come from that start."""
+    if discarded:
+        what = f"replica {replica} of the discarded try was started once more"
+        log = f"{name} is the log of its first start"
+    elif replica == 1:
+        what, log = "the side was started once more, and its start is timed from then", f"{name} is the first try's log"
+    else:
+        what = (f"replica {replica} was started once more, and its time to first answer still counts from when it "
+                "was first asked for")
+        log = f"{name} is the first try's log"
+    return f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); {what} ({log})"
+
+
+def _renamed(text: str, renamed: Mapping[str, str]) -> str:
+    """`text` with each file name in `renamed` (a whole name, not part of a longer one) replaced by its new name."""
+    if not renamed:
+        return text
+    names = "|".join(re.escape(name) for name in sorted(renamed, key=len, reverse=True))
+    return re.sub(rf"(?<![\w.-])({names})(?![\w.-])", lambda match: renamed[match.group(1)], text)
 
 
 def _iso(epoch: float) -> str:

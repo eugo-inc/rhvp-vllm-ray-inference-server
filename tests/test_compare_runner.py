@@ -1163,6 +1163,29 @@ def test_each_tries_memory_check_log_is_kept(tmp_path):
             "then finished") in text
 
 
+@pytest.mark.parametrize("make, discarded, kept", [
+    (lambda clock: ScaleBackend(clock, dies={(3, 2): 1}, stalls={3: 1}), [2], ["server-2.attempt-1.try-1.log"]),
+    (lambda clock: ScaleBackend(clock, dies={(3, 1): 1}, stalls={3: 1}), [1], ["server.attempt-1.try-1.log"]),
+    (lambda clock: DiesTwice(clock, stalls={3: 1}), [2], ["server-2.attempt-1.try-1.log", "server-2.attempt-1.log"]),
+])
+def test_the_notes_of_a_discarded_try_name_its_kept_files(tmp_path, make, discarded, kept):
+    # The discard renames the try's files to *.try-1.*; the notes written during that try (a memory-check retry, the
+    # time-out) must name the files by their new names, and a retry of the discarded try must not claim the round's
+    # start is timed from it.
+    clock = FakeClock()
+    results, the_runner = scale_run(tmp_path, make(clock), clock)
+    r3 = results["rounds"][2]
+    assert r3["status"] == "ok" and r3["load_retries"] == 1
+    named = [name for note in r3["notes"] for name in re.findall(r"[\w.-]+\.log\b", note)]
+    assert named and all((the_runner.dir / "rounds/03-A-scored" / name).is_file() for name in named), named
+    assert [name for name in named if ".attempt-" in name] == kept
+    assert "guidellm.try-1.log" in named and "guidellm.log" not in named  # the time-out's "see guidellm.log"
+    retries = [note for note in r3["notes"] if "memory check" in note]
+    assert [n for n in discarded if any(f"replica {n} of the discarded try was started once more" in note
+                                        for note in retries)] == discarded
+    assert not any("timed from then" in note for note in retries)
+
+
 def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
     clock = FakeClock()
     backend = ScaleBackend(clock, stalls={1: 2})
