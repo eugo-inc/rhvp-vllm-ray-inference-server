@@ -32,7 +32,8 @@
 #
 # Mode scaleout (mode: scaleout in the config): each round starts a second container of the side, named like the
 # first plus -2, at the forced step; the runner puts a small router in front of the two (router.py, a child process
-# of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own.
+# of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is refused
+# when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
@@ -40,8 +41,9 @@
 #   NETWORK         docker network (default rhvp-compare)
 #   MODELS_VOLUME   docker volume for /models (default rhvp-compare-models)
 #   GPUS            "all" (default) or a device id such as 0; give one id on a machine with several GPUs
-#   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1); default empty,
-#                   every replica gets GPUS (one GPU shared, as scaleOut.sharedGpu: true expects)
+#   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1), for
+#                   scaleOut.sharedGpu: false; default empty, every replica gets GPUS (one GPU shared, as
+#                   scaleOut.sharedGpu: true expects)
 #   CPUSET          CPUs the runner and every container it starts may use, as docker writes them (for example
 #                   0-3; default all)
 #   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)

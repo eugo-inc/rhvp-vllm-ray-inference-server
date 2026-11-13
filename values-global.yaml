@@ -167,7 +167,9 @@ global:
     #     stepAfterSeconds: 30
     #     ttftMs: 1000     # goal: time to first token, at most
     #     tpotMs: 100      # goal: inter-token latency, at most
-    #     # Both replicas of a side on one GPU (false: each its own GPU).
+    #     # Both replicas of a side on one GPU. false: each on a GPU of its
+    #     # own, given with REPLICA_GPUS (scripts/compare-local.sh); a run
+    #     # whose REPLICA_GPUS does not match this setting is refused.
     #     sharedGpu: true
 
 main:

@@ -54,12 +54,14 @@ def recorded_env(env: Mapping[str, str]) -> tuple[dict[str, str], list[str]]:
 
 def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env: Mapping[str, str] | None,
            env_source: str, started_at: str | None = None, image_entrypoint: Sequence[str] | None = None,
-           image_cmd: Sequence[str] | None = None, start_retries: int = 0) -> dict:
+           image_cmd: Sequence[str] | None = None, start_retries: int = 0, gpus: str | None = None,
+           gpu_uuids: Sequence[str] | None = None) -> dict:
     """One launch record. `replica` is 1 for a round's first server start and counts up for each replica a
     scale-out round adds. `command` is what the runner set in place of the image's entrypoint (None: the image's own
     ran). `env` is the environment the server process saw, as read from `env_source`; None records nothing.
     `start_retries` is how many times this replica was started again after vLLM's start-up memory check stopped it
-    (the record describes the last start)."""
+    (the record describes the last start). `gpus` is the GPU request the platform got for this start (docker: "all"
+    or device ids), `gpu_uuids` the UUIDs of the GPUs that request reached; None when the backend does not say."""
     if isinstance(replica, bool) or not isinstance(replica, int) or replica < 1:
         raise ValueError(f"replica must be a whole number of at least 1, got {replica!r}")
     if isinstance(start_retries, bool) or not isinstance(start_retries, int) or start_retries < 0:
@@ -82,4 +84,6 @@ def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env
         "env_source": env_source,
         "env_dropped": dropped,
         "start_retries": start_retries,
+        "gpus": gpus,
+        "gpu_uuids": list(gpu_uuids) if gpu_uuids is not None else None,
     }

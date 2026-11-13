@@ -39,7 +39,12 @@ the run id>-<a or b>`) in place of the tmpfs, so its warm-up round fills the com
 the volumes are removed when the run ends. In mode scaleout both replicas of a round share it.
 
 The scale round (mode scaleout): the second replica is a container named like the first plus `-2`; the router
-(router.py) and GuideLLM run as child processes of the runner, GuideLLM against the router.
+(router.py) and GuideLLM run as child processes of the runner, GuideLLM against the router. Where each replica runs is
+set by RHVP_COMPARE_REPLICA_GPUS (else RHVP_COMPARE_GPUS), and it must agree with the plan's scaleOut.sharedGpu
+(`check_plan`, before anything changes): sharedGpu true needs both replicas on the same GPUs, false needs a GPU id of
+its own for each. prepare() then reads, with nvidia-smi, the GPUs each replica's device request reaches (a request for
+a GPU this machine lacks fails there, before the first round), and every launch record keeps the request (`gpus`) and
+those GPUs' UUIDs (`gpu_uuids`).
 
 Launch records (`launch_facts`): the environment of the side's largest process (by resident memory, which is the
 server even when an entrypoint script or an init process is PID 1), read with docker exec once the server has
@@ -310,6 +315,7 @@ class DockerBackend:
         self.results_root = results_root
         self.run_id = ""
         self._gpu_facts: dict | None = None
+        self._gpu_uuids: dict[str, list[str]] = {}  # device request -> the UUIDs nvidia-smi saw through it
         self._server_stopped = False
         self._restored = False
         self.log_timeout_s, self.stop_grace_s = 300.0, 30
@@ -332,6 +338,59 @@ class DockerBackend:
                 name = (c.get("Names") or ["?"])[0].lstrip("/")
                 raise runner.RunActive(f"another comparison is running: runner container {name}. This run changed "
                                        f"nothing; start it again once that one has ended.")
+
+    def check_plan(self, plan: Mapping) -> None:
+        """Refuse (PlanError, before anything changes) a scaleout plan whose scaleOut.sharedGpu does not match where
+        the replicas would run: sharedGpu true needs both replicas on the same GPUs, false a GPU of its own for each
+        (RHVP_COMPARE_REPLICA_GPUS)."""
+        from . import plan as plans
+
+        scale = plan.get("scale_out") if plan.get("mode") == plans.SCALEOUT else None
+        if not scale or not any(s.get("gpu", True) for s in plan["sides"]):
+            return
+        if self.replica_gpus and len(self.replica_gpus) < 2:
+            raise plans.PlanError(f"RHVP_COMPARE_REPLICA_GPUS names {len(self.replica_gpus)} GPU; mode scaleout "
+                                  "starts two replicas, so it needs one GPU id per replica (such as 0,1), or none")
+        first, second = self._gpus(1), self._gpus(2)
+        if scale["shared_gpu"] and first != second:
+            raise plans.PlanError(
+                f"scaleOut.sharedGpu is true (both replicas of a side on one GPU), but RHVP_COMPARE_REPLICA_GPUS "
+                f"gives replica 1 GPU {first} and replica 2 GPU {second}. Set scaleOut.sharedGpu: false (each "
+                "replica then gets the full server.gpuMemoryUtilization of its own GPU), or leave REPLICA_GPUS empty")
+        if not scale["shared_gpu"] and (first == second or "all" in (first.lower(), second.lower())):
+            raise plans.PlanError(
+                f"scaleOut.sharedGpu is false (each replica on its own GPU), but both replicas would get GPUs "
+                f"{first if first == second else first + ' and ' + second}, and a vLLM server uses the first GPU it "
+                "sees: set REPLICA_GPUS (scripts/compare-local.sh) to a different GPU id for each replica, such as "
+                "0,1, or set scaleOut.sharedGpu: true")
+
+    def _probe_replica_gpus(self, plan: Mapping) -> None:
+        """Mode scaleout: read the GPUs each replica's device request reaches (index and UUID, with nvidia-smi), so
+        a request this machine cannot meet fails before the first round, and the launch records name the GPUs."""
+        from . import plan as plans
+
+        gpu_side = next((s for s in plan["sides"] if s.get("gpu", True)), None)
+        if plan.get("mode") != plans.SCALEOUT or gpu_side is None:
+            return
+        for replica in (1, 2):
+            request = self._gpus(replica)
+            if request in self._gpu_uuids:
+                continue
+            what = f"the GPUs of replica {replica} ({'REPLICA_GPUS' if self.replica_gpus else 'GPUS'} {request})"
+            try:
+                code, log = self.docker.run(self._name(f"gpu-probe-{replica}"), {
+                    "Image": gpu_side["image"], "Entrypoint": ["nvidia-smi"],
+                    "Cmd": ["--query-gpu=index,uuid", "--format=csv,noheader"], "Labels": {LABEL: self.run_id},
+                    "HostConfig": self._host({"NetworkMode": "none", "DeviceRequests": _gpu_request(request),
+                                              "Memory": HELPER_MEMORY})}, timeout_s=60)
+            except runner.RoundError as error:
+                raise runner.RoundError(f"{what} could not be reached: {error}. Check GPUS and REPLICA_GPUS against "
+                                        "this machine's GPUs") from None
+            rows = [text.split(",") for _, text in logs.lines(log) if text.strip()]
+            if code != 0 or not rows:
+                raise runner.RoundError(f"{what} could not be read with nvidia-smi (exit {code}). Check GPUS and "
+                                        "REPLICA_GPUS against this machine's GPUs")
+            self._gpu_uuids[request] = [row[1].strip() for row in rows if len(row) > 1 and row[1].strip()]
 
     def on_stop(self) -> None:
         """A stop has begun: shorter waits from now on (flags only)."""
@@ -363,6 +422,7 @@ class DockerBackend:
     # ---- before and after the run ----
 
     def prepare(self, plan: Mapping) -> None:
+        self.check_plan(plan)  # main_run asks first (PLAN_INVALID); this keeps a direct caller from skipping it
         self.run_id = plan["run_id"]
         self.docker.network(self.network)
         state = None
@@ -401,6 +461,7 @@ class DockerBackend:
 
             llm.parent.mkdir(parents=True, exist_ok=True)
             llm.write_text(plans.llm_yaml(plan), encoding="utf-8")
+        self._probe_replica_gpus(plan)
         # The live server stops last. The pulls above can take minutes and cannot be interrupted; a stop (or a
         # SIGKILL after the stop timeout) that lands during them then leaves the server running, not down.
         if state is not None and state.get("Running"):
@@ -518,10 +579,14 @@ class DockerBackend:
             raise runner.RoundError(str(error)) from None
 
     def launch_facts(self, handle: Mapping) -> dict:
-        """The environment the server process saw (see the module's docstring), and the image's own entrypoint."""
+        """The environment the server process saw (see the module's docstring), the image's own entrypoint, and for
+        a side on a GPU the device request its container got (`gpus`) with the UUIDs prepare() read through it."""
         config = (self.docker.image(handle["image"]) or {}).get("Config") or {}
         out = {"image_entrypoint": config.get("Entrypoint"), "image_cmd": config.get("Cmd"), "env": None,
                "env_source": "none"}
+        if handle.get("gpu"):
+            request = self._gpus(handle.get("replica", 1))
+            out.update(gpus=request, gpu_uuids=self._gpu_uuids.get(request))
         try:
             code, text = self.docker.exec(handle["id"], ["sh", "-c", SERVER_ENVIRON])
             env = environ(text) if code == 0 else {}

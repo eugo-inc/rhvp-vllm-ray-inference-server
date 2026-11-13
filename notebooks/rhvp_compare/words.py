@@ -139,8 +139,11 @@ SCALE_LINE = ("Surge: {rate:g} requests per second for {surge:g} s. Forced step:
 SCALE_GOAL_TTFT = "time to first token at most {value:g} ms"
 SCALE_GOAL_TPOT = "inter-token latency at most {value:g} ms"
 SCALE_GOALS_JOIN = " and "
-SCALE_GPU_SHARED = "Both replicas of a side share one GPU."
-SCALE_GPU_OWN = "Each replica has its own GPU."
+SCALE_GPU_SHARED = "Declared: both replicas of a side share one GPU (scaleOut.sharedGpu true)."
+SCALE_GPU_OWN = "Declared: each replica has its own GPU (scaleOut.sharedGpu false)."
+SCALE_GPU_GIVEN = ("GPUs each replica's container was given, from the launch records: {given}. A vLLM server uses the "
+                   "first GPU it sees.")
+SCALE_GPU_REPLICA = "replica {replica}: {gpus}"
 SCALE_GPU_NONE = "The sides ran without a GPU."
 SCALE_HEADERS = ("The second replica", "A median", "B median", "B/A median", "Verdict")
 SCALE_FACT_HEADERS = ("The second replica, per round", "A median", "B median", "Rounds (A, B)")

@@ -186,4 +186,12 @@ def _scale_lines(results: Mapping) -> list[str]:
         out.append(f"| {side} | {len(scales)} | {_num(median([s.get('step_at_s') for s in scales]), 's')} | "
                    f"{_num(median(joined), 's')} | "
                    f"{_num(median([s.get('new_replica_share') for s in scales]), 'share')} | {late} |")
+    scale = results["plan"].get("scale_out") or {}
+    if any(side.get("gpu", True) for side in results["plan"]["sides"]):
+        declared = ("both replicas of a side share one GPU" if scale.get("shared_gpu")
+                    else "each replica has its own GPU")
+        given = summary.replica_gpus(results)
+        shown = "; ".join(f"replica {n}: `{' or '.join(g)}`" for n, g in given.items()) or "not recorded"
+        out += ["", f"GPUs: declared, {declared} (scaleOut.sharedGpu {str(bool(scale.get('shared_gpu'))).lower()}). "
+                    f"Given to each replica's container, from the launch records: {shown}."]
     return out

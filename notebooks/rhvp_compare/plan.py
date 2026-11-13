@@ -278,7 +278,8 @@ def _scale_out(raw, sides: list[dict], server: Mapping) -> dict:
             raise PlanError(
                 f"server.gpuMemoryUtilization ({share:g}) is each replica's share of the GPU in mode scaleout, and "
                 f"with scaleOut.sharedGpu both replicas share one GPU: two of them need it at most "
-                f"{SHARED_GPU_LIMIT / 2:g}. Set scaleOut.sharedGpu: false when each replica has its own GPU")
+                f"{SHARED_GPU_LIMIT / 2:g}. When each replica has a GPU of its own, set scaleOut.sharedGpu: false "
+                "and give each replica its GPU with REPLICA_GPUS (scripts/compare-local.sh)")
     return {
         "replicas_start": 1,
         "replicas_end": 2,

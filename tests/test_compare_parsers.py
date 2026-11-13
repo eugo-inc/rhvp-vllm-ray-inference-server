@@ -21,7 +21,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
-from rhvp_compare import dockerapi, energy, guidellm, kube, logs, plan as plans, runner  # noqa: E402
+from rhvp_compare import dockerapi, energy, guidellm, kube, launch, logs, plan as plans, runner  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
 REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1.json").read_text())
@@ -974,8 +974,10 @@ def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_CPUSET="0-3",
                               RHVP_COMPARE_CACHE_VOLUME="cc")
     config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+              "scaleOut": {"sharedGpu": False},
               "sides": [{"name": "a", "image": "x/a:1", "compileCache": "warm"}, {"name": "b", "image": "x/b:1"}]}
     plan = plans.build(config, "docker")
+    docker.run_log = "2026-01-01T00:00:00Z 0, GPU-0000\n"  # what nvidia-smi lists for each replica's GPU
     backend.prepare(plan)
     volume = f"cc-{plan['run_id'][-8:]}-a"
     assert backend.cache_volumes == {"A": volume} and docker.volumes_removed == [volume]  # a fresh one
@@ -996,6 +998,90 @@ def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
         backend.start(plan, round_, side_a, plans.side_spec(plan, side_a), replica=3)
     backend.cleanup()
     assert docker.volumes_removed == [volume, volume]
+
+
+def _scale_plan_for(shared: bool) -> dict:
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+              "scaleOut": {"sharedGpu": shared}}
+    return plans.build(config, "docker")
+
+
+@pytest.mark.parametrize("shared, replica_gpus, refused", [
+    (True, "", None),
+    (True, "0,0", None),
+    (False, "0,1", None),
+    (True, "0,1", "gives replica 1 GPU 0 and replica 2 GPU 1"),
+    (False, "", "both replicas would get GPUs all"),
+    (False, "1,1", "both replicas would get GPUs 1"),
+    (False, "0", "needs one GPU id per replica"),
+])
+def test_docker_refuses_a_shared_gpu_setting_that_does_not_match_where_the_replicas_run(shared, replica_gpus,
+                                                                                       refused):
+    # scaleOut.sharedGpu sets the memory share and the notebook's sentence; REPLICA_GPUS (else GPUS) places the
+    # replicas. A run whose two disagree is refused before anything changes, and prepare() refuses it too.
+    plan = _scale_plan_for(shared)
+    backend = _docker_backend(FakeDocker(), RHVP_COMPARE_REPLICA_GPUS=replica_gpus)
+    if refused is None:
+        backend.check_plan(plan)
+        return
+    with pytest.raises(plans.PlanError, match=refused):
+        backend.check_plan(plan)
+    docker = FakeDocker(server_state={"Running": True})
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS=replica_gpus, RHVP_COMPARE_SERVER_CONTAINER="live")
+    with pytest.raises(plans.PlanError, match=refused):
+        backend.prepare(plan)
+    assert docker.calls == []  # nothing pulled, nothing stopped
+
+
+def test_a_mismatched_shared_gpu_setting_ends_the_run_plan_invalid_before_anything_changes(tmp_path):
+    config_path = tmp_path / "compare.json"
+    config_path.write_text(json.dumps({**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True}}))
+    docker = FakeDocker()
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1")
+    termination = tmp_path / "termination"
+    with pytest.raises(plans.PlanError, match="scaleOut.sharedGpu is true"):
+        runner.main_run(str(config_path), str(tmp_path / "results"), backend,
+                        env={"RHVP_COMPARE_TERMINATION_LOG": str(termination)})
+    assert "PLAN_INVALID" in termination.read_text() and docker.calls == []
+    assert not (tmp_path / "results").exists()
+
+
+def test_docker_reads_each_replicas_gpus_before_the_first_round_and_records_them():
+    docker = ReplicaDocker()
+    docker.run_log = "2026-01-01T00:00:00Z 1, GPU-1111\n"
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1")
+    plan = _scale_plan_for(False)
+    backend.prepare(plan)
+    probes = [body for kind, name, body in [c for c in docker.calls if c[0] == "run"] if "gpu-probe" in name]
+    assert [b["HostConfig"]["DeviceRequests"][0]["DeviceIDs"] for b in probes] == [["0"], ["1"]]
+    assert probes[0]["Cmd"] == ["--query-gpu=index,uuid", "--format=csv,noheader"]
+    side_a = plan["sides"][0]
+    second = backend.start(plan, plan["rounds"][2], side_a, plans.side_spec(plan, side_a), replica=2)
+    facts = backend.launch_facts(second)
+    assert facts["gpus"] == "1" and facts["gpu_uuids"] == ["GPU-1111"]
+    record = launch.record(2, None, [], facts["env"], facts["env_source"], gpus=facts["gpus"],
+                           gpu_uuids=facts["gpu_uuids"])
+    assert (record["gpus"], record["gpu_uuids"]) == ("1", ["GPU-1111"])
+    shared = _docker_backend(ReplicaDocker())  # sharedGpu true, no REPLICA_GPUS: one request, read once
+    shared.docker.run_log = "2026-01-01T00:00:00Z 0, GPU-0000\n"
+    shared.prepare(_scale_plan_for(True))
+    assert len([c for c in shared.docker.calls if c[0] == "run" and "gpu-probe" in c[1]]) == 1
+
+
+def test_a_replica_gpu_this_machine_lacks_fails_in_prepare_before_the_server_stops():
+    class NoSecondGpu(ReplicaDocker):
+        def run(self, name, body, timeout_s=300.0, log_to=None):
+            self.calls.append(("run", name, body))
+            if "gpu-probe-2" in name:
+                raise runner.RoundError("docker could not start a container: HTTP 500 unknown device id: 1")
+            return 0, "2026-01-01T00:00:00Z 0, GPU-0000\n"
+
+    docker = NoSecondGpu()
+    docker.server_state = {"Running": True}
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_SERVER_CONTAINER="live")
+    with pytest.raises(runner.RoundError, match="the GPUs of replica 2 .REPLICA_GPUS 1. could not be reached"):
+        backend.prepare(_scale_plan_for(False))
+    assert ("stop", "live") not in docker.calls
 
 
 def test_docker_launch_facts_read_the_server_process_then_the_container():

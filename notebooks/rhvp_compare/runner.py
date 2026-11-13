@@ -170,7 +170,11 @@ class Backend(Protocol):
     # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
     #   results volume finds it (kube.py: a ConfigMap). Called after every save.
     # - `launch_facts(handle) -> dict`: what a server start ran with, read while it runs: `env` (the server
-    #   process's environment) and `env_source` (launch.ENV_SOURCES), `image_entrypoint` and `image_cmd`.
+    #   process's environment) and `env_source` (launch.ENV_SOURCES), `image_entrypoint` and `image_cmd`, and the
+    #   GPU request the start got (`gpus`) with the UUIDs it reached (`gpu_uuids`).
+    # - `check_plan(plan)`: raise PlanError for a plan this backend cannot run as declared (dockerapi.py: a
+    #   scaleOut.sharedGpu that does not match where the replicas would run). Called by main_run before anything
+    #   is changed, so the run ends PLAN_INVALID.
 
 
 def write_json(path: Path, data: Mapping) -> None:
@@ -450,7 +454,9 @@ class Runner:
         record["launches"].append(launch.record(
             replica["replica"], spec.get("command"), spec.get("args") or [], facts.get("env"), source,
             started_at=replica["started_at"], image_entrypoint=facts.get("image_entrypoint"),
-            image_cmd=facts.get("image_cmd"), start_retries=replica.get("start_retries", 0)))
+            image_cmd=facts.get("image_cmd"), start_retries=replica.get("start_retries", 0),
+            gpus=facts.get("gpus") if isinstance(facts.get("gpus"), str) else None,
+            gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None))
 
     def _round(self, round_: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                held: dict) -> None:
@@ -866,6 +872,13 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
     except plans.PlanError as error:
         _finish(summary.not_started(PLAN_INVALID, str(error)), termination_log)
         raise
+    check_plan = getattr(backend, "check_plan", None)
+    if check_plan is not None:
+        try:
+            check_plan(the_plan)
+        except plans.PlanError as error:
+            _finish(summary.not_started(PLAN_INVALID, str(error), the_plan["run_id"]), termination_log)
+            raise
     floor = the_plan["floor"]
     print(f"run {the_plan['run_id']}: {len(the_plan['rounds'])} rounds, {the_plan['pairs']} scored pairs, "
           f"{floor['family_size']} primary metrics of {len(the_plan['metrics'])}", flush=True)

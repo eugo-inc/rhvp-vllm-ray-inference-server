@@ -78,8 +78,11 @@ def _level(rng: random.Random, side: str, c: int, at: float, seconds: float) -> 
 
 def _launch(plan: dict, side: str, replica: int, started_at: str) -> dict:
     spec = plans.side_spec(plan, next(s for s in plan["sides"] if s["key"] == side))
+    scale = plan.get("mode") == plans.SCALEOUT  # docker: the device request each replica got (both on GPU 0)
     return launch.record(replica, spec.get("command"), spec.get("args") or [], spec.get("env"), "process",
-                         started_at=started_at, image_entrypoint=["vllm", "serve"], image_cmd=None)
+                         started_at=started_at, image_entrypoint=["vllm", "serve"], image_cmd=None,
+                         gpus="0" if scale else None,
+                         gpu_uuids=["GPU-00000000-0000-0000-0000-000000000000"] if scale else None)
 
 
 def synthesize() -> dict:

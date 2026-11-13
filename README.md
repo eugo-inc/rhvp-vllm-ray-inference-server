@@ -761,15 +761,20 @@ among them when the server's own `rhvp-scale` lines show a load-triggered scale-
 pattern's server with autoscaling on. Energy is not measured in this mode.
 
 With `scaleOut.sharedGpu: true` (the default) both replicas of a side share one GPU: `server.gpuMemoryUtilization`
-defaults to 0.4 then, and the plan refuses more than 0.475. A side with `compileCache: warm` (docker only, and only
+defaults to 0.4 then, and the plan refuses more than 0.475. The setting does not place the replicas; `REPLICA_GPUS`
+does (below), and the run is refused before anything changes when the two disagree: `sharedGpu: true` needs both
+replicas on the same GPU (leave `REPLICA_GPUS` empty), `false` needs a different GPU id for each (such as `0,1`).
+Before the first round the runner reads, with `nvidia-smi`, the GPUs each replica's device request reaches, so a GPU
+id the machine lacks fails there; every launch record keeps the request (`gpus`) and those GPUs' UUIDs
+(`gpu_uuids`), and `results.md` and the notebook show them. A side with `compileCache: warm` (docker only, and only
 with the warm-up round) keeps its compile caches from its warm-up round in a docker volume, so its scored rounds
 start with them; `cold`, the default, starts every replica with empty caches. `results.md` and the notebook show each
 side's setting, and when the two sides differ they say so next to the primary metrics: the start-up figures then
 compare the two cache settings together with the two images. The setting works in mode `pairs` too.
 
 `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
-mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`; by
-default both replicas get `GPUS`), `CPUSET` (the CPUs the runner and every container it starts may use) and
+mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`, for
+`scaleOut.sharedGpu: false`; by default both replicas get `GPUS`), `CPUSET` (the CPUs the runner and every container it starts may use) and
 `CACHE_VOLUME` (the name prefix of the warm-cache volumes). The notebook shows the run in its section 4,
 "Scale-out".
 

@@ -145,6 +145,19 @@ def termination(results: Mapping) -> str:
                     "error_code": run.get("error_code"), "server_restored": run.get("server_restored")})
 
 
+def replica_gpus(results: Mapping) -> dict[int, list[str]]:
+    """Mode scaleout: per replica number, the GPU requests its starts got in the scored rounds that finished, from
+    the launch records (`gpus`), in first-seen order; empty when no record has one."""
+    out: dict[int, list[str]] = {}
+    for r in results.get("rounds") or []:
+        if r.get("kind") != "scored" or r.get("status") != "ok":
+            continue
+        for item in r.get("launches") or []:
+            if isinstance(item.get("gpus"), str) and item["gpus"] not in out.setdefault(item["replica"], []):
+                out[item["replica"]].append(item["gpus"])
+    return {n: given for n, given in sorted(out.items()) if given}
+
+
 def not_started(code: str, message: str, run_id: str | None = None) -> dict:
     """What the log and the termination message say when no results file was written: the config cannot be run
     (PLAN_INVALID), another comparison is running (RUN_ACTIVE), or the run failed before it began (RUNNER_FAILED)."""

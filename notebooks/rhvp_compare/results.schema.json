@@ -1457,6 +1457,23 @@
           "minimum": 0,
           "maximum": 1,
           "description": "How many times this replica was started again in the round after its server stopped at vLLM's start-up memory check (at most once); the record describes the last start."
+        },
+        "gpus": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The GPU request the platform got for this start: under docker the device request (\"all\" or device ids, from RHVP_COMPARE_GPUS or RHVP_COMPARE_REPLICA_GPUS); a vLLM server uses the first GPU it sees. null: not recorded (OpenShift, a side without a GPU, or a file from before this field)."
+        },
+        "gpu_uuids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The UUIDs of the GPUs that request reached, as nvidia-smi listed them before the first round (mode scaleout). null: not read."
         }
       }
     },

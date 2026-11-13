@@ -68,7 +68,7 @@ one, change it everywhere and run the tests.
 | Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
 | GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
-| Comparison with docker, scale-out mode | second replica container `<first replica's name>-2`; warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per round `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`) |
+| Comparison with docker, scale-out mode | second replica container `<first replica's name>-2`; warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per round `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` (nvidia-smi, before the first round); launch-record fields `gpus` and `gpu_uuids` |
 
 ## Repo map
 
@@ -272,7 +272,10 @@ Three parts, each off by default. With every default, the local charts render ex
   one node need `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode
   cannot change after it is created.
 - **The comparison's mode `scaleout`** (`global.compare.mode`): docker only for now (`kube.py` refuses it with
-  `PLAN_INVALID`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
+  `PLAN_INVALID`). `scaleOut.sharedGpu` only sets the memory default and the 0.475 refusal; the docker backend places
+  the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
+  anything changes, a plan whose `sharedGpu` does not match (`DockerBackend.check_plan`); `prepare()` reads each
+  replica's GPUs with nvidia-smi into the launch records (`gpus`, `gpu_uuids`). In keda mode, the OpenShift runner pauses the ScaledObject before it scales the server to 0
   (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that one ScaledObject),
   and removes the pause when it brings the server back; the by-hand restore command it prints includes the
   `oc annotate` step. `kube.stop_budget_seconds()` is 290 s, under the runner pod's 300 s grace period.
