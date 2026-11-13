@@ -18,7 +18,9 @@ GPU from each other, and the first to end would bring the live server back under
 The live server. The backend may scale the pattern's own server down for the run (kube.py) or stop a container
 (dockerapi.py); the runner asks it back however the run ends, and records in run.server_restored whether that
 worked. A server that could not be brought back makes the run exit 4, whatever its status, with the command that
-brings it back in the log.
+brings it back in the log. A server that was running when the run began but had stopped by itself before the backend
+came to take it away is left as it is: nothing brings it back, and the run records that in run.server_found_down, a
+note, results.md and the log.
 
 Results land in <results>/<run id>/: results.json (the file results.schema.json describes), results.md (the short
 table), and rounds/<NN>-<side>-<kind>/ with the server log and the raw GuideLLM report. A run whose results.json
@@ -76,6 +78,9 @@ EXIT_COMPLETE, EXIT_PARTIAL, EXIT_CONFIG, EXIT_FAILED, EXIT_SERVER_NOT_RESTORED,
 
 
 NOT_RESTORED = "the live server was not brought back"
+#: The start of the note a run keeps when its live server had stopped by itself before the backend came to take it
+#: away (run.server_found_down).
+FOUND_DOWN = "the live server was running when the run began but had stopped by itself"
 
 
 class RoundError(Exception):
@@ -140,7 +145,13 @@ class Backend(Protocol):
     #   until it has worked, so it must do nothing once the server is back.
     # - `restore_before_teardown` (bool): ask the server back as soon as a stop begins, before the round's side is
     #   taken down (Kubernetes: its pod waits for the GPU); otherwise after the teardown (docker: no scheduler).
-    # - `on_stop()`: a stop has begun; shorten the waits of what is left (log reads, deletes) to fit the grace period.
+    # - `on_stop()`: a stop has begun; shorten the waits of what is left (log reads, deletes) to fit the grace period,
+    #   and keep prepare() from taking the live server away if it has not yet (dockerapi.py: a stop during the image
+    #   pulls leaves the server running). Called from the signal handler, also while prepare() runs, so it only sets
+    #   flags. An error it raises is ignored, so it sets the flag prepare() reads before anything that can fail.
+    # - `server_found_down` (str or None, read after prepare()): the live server's state when prepare() came to take
+    #   it away, when it was running at the start but had stopped by itself by then (docker: "exited", or "gone");
+    #   the backend left it as it was. Recorded in run.server_found_down.
     # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
     #   results volume finds it (kube.py: a ConfigMap). Called after every save.
 
@@ -184,7 +195,8 @@ class Runner:
             "schema": plans.SCHEMA,
             "run": {"id": self.plan["run_id"], "name": self.plan["run_name"], "status": "running",
                     "error_code": None, "started_at": utc_now(), "finished_at": None,
-                    "platform": self.backend.platform, "server_restored": None, "notes": [], "errors": []},
+                    "platform": self.backend.platform, "server_restored": None, "server_found_down": None,
+                    "notes": [], "errors": []},
             "plan": self.plan,
             "provenance": {"harness": dict(HARNESS),
                            "load_tool": {"name": "guidellm", "image": self.plan["load"]["image"], "version": None},
@@ -245,6 +257,7 @@ class Runner:
                 break
         try:
             self.backend.prepare(self.plan)
+            self._found_down()
             self._describe()
             for round_ in self.plan["rounds"]:
                 if self._stopping:
@@ -292,12 +305,27 @@ class Runner:
             run["errors"] = [e for e in run["errors"] if not e.startswith(NOT_RESTORED)]
         run["server_restored"] = True if back else None
 
+    def _found_down(self) -> None:
+        """Record a live server that had stopped by itself before the backend came to take it away
+        (run.server_found_down, and a note). The backend left it as it was, so nothing brings it back after the run
+        and run.server_restored stays null."""
+        state = getattr(self.backend, "server_found_down", None)
+        if not state:
+            return
+        run = self.results["run"]
+        run["server_found_down"] = state
+        run["notes"].append(f"{FOUND_DOWN} before the runner came to take it away (its state then: {state}); it was "
+                            f"left as it was, and the run does not start it again")
+
     def _backend_on_stop(self) -> None:
         on_stop = getattr(self.backend, "on_stop", None)
         if on_stop is not None:
             try:
                 on_stop()
-            except Exception:  # only shortens waits; the stop goes on without it
+            except Exception:
+                # Ignored, and the stop goes on. A backend sets the flag that keeps prepare() from taking the live
+                # server away before anything that can fail, so an error here costs only the shorter waits; one
+                # raised before that flag would let prepare() go on to stop the server.
                 pass
 
     def _begin_stop(self) -> None:
@@ -328,7 +356,11 @@ class Runner:
 
     def _on_term(self, signum, frame) -> None:  # noqa: ARG002 (signal handler signature)
         """Stop: inside a round, cut it short now (Stopped); between rounds, the loop stops before the next one. The
-        backend's on_stop only sets flags (shorter waits for what is left), so it is safe here."""
+        backend's on_stop is called here at once, not left to _begin_stop: a stop that lands while prepare() runs (the
+        image pulls under docker can take minutes) must reach the backend before prepare() goes on to take the live
+        server away, and dockerapi.py then leaves the server running. Without this call, a stop during the pulls
+        would stop the server and the run's end would start it again. on_stop only sets flags, so it is safe in a
+        signal handler."""
         self._stopping = True
         self._backend_on_stop()
         if self._interruptible:
@@ -614,4 +646,7 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
               flush=True)
     for line in run.get("errors") or []:
         print(f"error: {line}", flush=True)
+    for line in run.get("notes") or []:
+        if line.startswith(FOUND_DOWN):
+            print(f"note: {line}", flush=True)
     return exit_code(results)

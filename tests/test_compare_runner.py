@@ -187,6 +187,20 @@ class ServerBackend(FakeBackend):
         self.events.append(("on_stop",))
 
 
+class FoundDownBackend(FakeBackend):
+    """A backend whose live server was running when the run began but had stopped by itself before prepare() came to
+    take it away (dockerapi.py sets server_found_down then, and leaves the server as it is)."""
+
+    server_found_down = None
+
+    def prepare(self, plan):
+        super().prepare(plan)
+        self.server_found_down = "exited"
+
+    def restore_server(self):
+        return None  # nothing was taken away
+
+
 class PublishingBackend(FakeBackend):
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -632,7 +646,22 @@ def test_the_live_server_comes_back_and_the_run_says_so(tmp_path, monkeypatch):
     assert backend.events[-2:] == [("restore",), ("cleanup",)]  # back first, then the cleanup
     [path] = root.glob("*/results.json")
     assert json.loads(path.read_text())["run"]["server_restored"] is True
+    assert json.loads(path.read_text())["run"]["server_found_down"] is None
     assert json.loads(message.read_text())["server_restored"] is True
+
+
+def test_a_server_that_stopped_by_itself_before_the_run_took_it_is_recorded(tmp_path, monkeypatch, capsys):
+    code, root, _ = _main(tmp_path, FoundDownBackend(), monkeypatch, rounds={"pairs": 1, "warmup": False})
+    assert code == runner.EXIT_COMPLETE  # the run took nothing away, so this is not its failure
+    [path] = root.glob("*/results.json")
+    results = json.loads(path.read_text())
+    jsonschema.validate(results, SCHEMA)
+    run = results["run"]
+    assert (run["server_found_down"], run["server_restored"], run["status"]) == ("exited", None, "complete")
+    [note] = [n for n in run["notes"] if n.startswith(runner.FOUND_DOWN)]
+    assert "its state then: exited" in note and "does not start it again" in note
+    assert f"note: {note}" in capsys.readouterr().out  # the log says so too
+    assert "**The live server had stopped by itself**" in (path.parent / "results.md").read_text()
 
 
 def test_a_server_that_does_not_come_back_is_exit_4(tmp_path, monkeypatch, capsys):
