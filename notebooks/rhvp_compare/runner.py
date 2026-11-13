@@ -555,14 +555,16 @@ class Runner:
                 keep(path.rpartition("/")[2], key)
         keep("guidellm.log", "guidellm")
         keep("guidellm.json", "load_report")  # a report the stopped GuideLLM left; _load removed any older one
-        notes = record.setdefault("notes", [])
-        for i in range(first_note, len(notes)):  # such as a power sampler that did not start in that try
-            text = notes[i]
+        def kept_names(text: str) -> str:
             for old, new in renamed.items():
                 text = text.replace(old, new)
-            notes[i] = f"try {tries}: {text}"
-        notes.append(f"{error}; the side is taken down, and the launch runs once more from a new start with the same "
-                     f"requests (that try's files are the *.try-{tries}.* files)")
+            return text
+
+        notes = record.setdefault("notes", [])
+        for i in range(first_note, len(notes)):  # such as a power sampler that did not start in that try
+            notes[i] = f"try {tries}: {kept_names(notes[i])}"
+        notes.append(f"{kept_names(str(error))}; the side is taken down, and the launch runs once more from a new "
+                     f"start with the same requests (that try's files are the *.try-{tries}.* files)")
         name, key = f"server.try-{tries}.log", f"server_log_try_{tries}"
         held["log_as"] = (name, key)  # a stop from here on: the teardown keeps this try's log under its own name
         handle = held["handle"]

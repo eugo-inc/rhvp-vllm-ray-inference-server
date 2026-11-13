@@ -141,7 +141,8 @@ class FakeBackend:
             (out_dir / "guidellm.log").write_text("stalled\n")
             if self.hang_report:
                 (out_dir / "guidellm.json").write_text('{"partial": true}')
-            raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped", timed_out=True)
+            raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped; see guidellm.log",
+                                     timed_out=True)
         (out_dir / "guidellm.log").write_text("finished\n")
         data = json.loads(json.dumps(REPORT))
         slower = 1.2 if launch["of"] == "B" and launch["kind"] == "scored" else 1.0
@@ -608,7 +609,8 @@ def test_a_load_that_times_out_in_both_tries_is_load_failed(tmp_path):
     assert 99 < failed["startup"]["ready_s"] < 150  # the second start's own figure; nothing of the first try
     assert failed["levels"] == [] and set(failed["values"]) == {"startup/ready_s", "startup/first_answer_s"}
     assert results["analysis"]["load_timeouts"] == {"A": 2, "B": 0}
-    assert "- launch 1 (A): timed out 2 times, ran again, then LOAD_FAILED" in (the_runner.dir / "results.md").read_text()
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 1 (A): timed out 2 times, ran again, then LOAD_FAILED" in text
 
 
 class DiesInEachTry(FakeBackend):
@@ -679,6 +681,120 @@ def test_a_launch_cut_short_between_its_tries_keeps_none_of_the_first_try(tmp_pa
     assert "ran again" not in text.split("- launch 1 (A): timed out", 1)[1].splitlines()[0]
     if code == "STOPPED":
         assert results["run"]["error_code"] == "STOPPED" and [x["index"] for x in results["launches"]] == [1]
+
+
+class SamplerFailsFirst(FakeBackend):
+    """The power sampler of the first load does not start."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.samplers = 0
+
+    def sampler(self, plan, handle):
+        self.samplers += 1
+        if self.samplers == 1:
+            raise RuntimeError("no power")
+        return FakeSampler()
+
+
+def test_the_first_tries_notes_are_marked_as_that_tries(tmp_path):
+    results, _, _ = run(tmp_path, SamplerFailsFirst(hang_once=True), rounds=ONE_ROUND)
+    first = results["launches"][0]
+    assert first["status"] == "ok" and first["levels"][0]["energy"]["mean_power_w"] == pytest.approx(100.0)
+    assert "try 1: power sampling did not start: RuntimeError" in first["notes"]
+    assert not any(n.startswith("power sampling") for n in first["notes"])  # the second try's sampler started
+    [why] = [n for n in first["notes"] if "the side is taken down" in n]
+    assert "see guidellm.try-1.log" in why  # the time-out's own text names the kept log, not the second try's
+
+
+class StartFailsInSecondTry(FakeBackend):
+    """Launch 1's side starts once; its second start, after the time-out, fails."""
+
+    def start(self, plan, launch, side, spec):
+        if launch["index"] == 1 and self.attempts.get(1):
+            raise runner.RoundError("the side's image could not be pulled", runner.SIDE_FAILED)
+        return super().start(plan, launch, side, spec)
+
+
+class GpuBusyInSecondTry(FakeBackend):
+    """The second try's GPU check finds the GPU held, after a memory-check start in the first try."""
+
+    def gpu_free(self, plan, side):
+        super().gpu_free(plan, side)
+        if len(self.gpu_checks) == 3:
+            raise runner.RoundError("another program held the GPU", runner.GPU_NOT_FREE)
+
+
+class TermInSecondGpuCheck(FakeBackend):
+    def gpu_free(self, plan, side):
+        super().gpu_free(plan, side)
+        if len(self.gpu_checks) == 2:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+
+class TermInFirstTriesLog(FakeBackend):
+    """SIGTERM lands while the runner reads the first try's server log, before its teardown."""
+
+    def logs(self, handle):
+        if handle["launch"]["index"] == 1 and not self.stopped:
+            os.kill(os.getpid(), signal.SIGTERM)
+        return super().logs(handle)
+
+
+@pytest.mark.parametrize("backend, code, starts", [
+    (StartFailsInSecondTry(hang_once=True), "SIDE_FAILED", 1),
+    (GpuBusyInSecondTry(hang_once=True, dies={1: 1}), "GPU_NOT_FREE", 2),
+    (TermInSecondGpuCheck(hang_once=True), "STOPPED", 1),
+    (TermInFirstTriesLog(hang_once=True), "STOPPED", 1),
+])
+def test_a_second_try_that_never_loads_says_so(tmp_path, backend, code, starts):
+    results, _, the_runner = run(tmp_path, backend, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    assert (failed["status"], failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == (
+        "failed", code, 1, 0)
+    assert failed["starts"] == starts == backend.started.count((1, "A"))  # only the starts that happened
+    assert failed["startup"] is None and failed["levels"] == [] and failed["values"] == {}
+    assert [load for load in backend.loads if load[0] == 1] == [(1, starts)]
+    text = (the_runner.dir / "results.md").read_text()
+    assert f"- launch 1 (A): timed out 1 time, did not run again, then {code}" in text
+    if starts > 1:
+        assert f"- launch 1 (A): started {starts} times in all, then {code}" in text
+    if code == "STOPPED":  # the teardown kept the first try's log under its own name, and nothing as the launch's
+        assert "server_log_try_1" in failed["artifacts"] and "server_log" not in failed["artifacts"]
+        assert "server.log" not in {p.name for p in (the_runner.dir / "launches/01-A-scored").iterdir()}
+
+
+class DiesThenStopFails(FakeBackend):
+    """Launch 1: the first start stops at the memory check, the second loads and times out, and the teardown
+    between the tries fails."""
+
+    def stop(self, handle):
+        super().stop(handle)
+        if handle["launch"]["index"] == 1 and self.stopped.count(1) == 2:
+            raise runner.RoundError("could not delete the side's pod (HTTP 500)")
+
+
+def test_the_start_count_is_the_starts_that_happened(tmp_path):
+    backend = DiesThenStopFails(hang_once=True, dies={1: 1})
+    results, _, the_runner = run(tmp_path, backend, rounds=ONE_ROUND)
+    failed = results["launches"][0]
+    assert (failed["error_code"], failed["starts"], failed["start_retries"], failed["load_retries"]) == (
+        "RUNNER_ERROR", 2, 1, 0)
+    assert backend.started.count((1, "A")) == 2
+    assert "- launch 1 (A): started 2 times in all, then RUNNER_ERROR" in (the_runner.dir / "results.md").read_text()
+
+
+def test_a_twins_time_out_counts_against_its_side(tmp_path):
+    results, _, the_runner = run(tmp_path, FakeBackend(hangs={2: 1}), rounds=ONE_ROUND)
+    twin = results["launches"][1]
+    assert (twin["side"], twin["status"], twin["load_timeouts"], twin["load_retries"]) == ("A~same", "ok", 1, 1)
+    assert results["analysis"]["load_timeouts"] == {"A": 1, "B": 0}
+    # A comparison of B with A counts only the launches of A and B themselves; the twin's is in the totals.
+    assert {row["load_timeouts"]["A"] for row in results["analysis"]["comparisons"]} == {0}
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 2 (A~same): timed out 1 time, ran again, then finished" in text
+    assert "Only side A timed out" in text
 
 
 def test_a_complete_run_is_not_run_again(tmp_path):
