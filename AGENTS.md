@@ -359,10 +359,14 @@ a waiting count above the threshold, held at 0 by the pause for a minute, back t
 every query carried the bearer token, the namespace and the rendered query. Through a Service, a new pod got none
 of the requests of a client that kept 8 connections open; through `rhvp_compare/router.py`, it got a share. The
 comparison's mode ran end to end with docker against GuideLLM mock servers
-(`tests/fixtures/compare-scaleout-mock.json`, 7 rounds with twins, 56 server starts): schema-valid results, the
-second replica took part of every surge, and the notebook rendered. With real vLLM servers it ran only in an earlier
-version, under the earlier rule (rounds of A and B, no twins), on one machine with one GPU: three runs of one round
-each, one complete, two partial because nearly every request missed the goals at the rate they used.
+(`tests/fixtures/compare-scaleout-mock.json`: 7 rounds with twins, 28 launches, 56 server starts, about 46 minutes on
+CPU): it completed with schema-valid results and the notebook rendered them. The faster-starting mock's second
+replica gave `scale/first_answer_s` FASTER. The second replica got a share of the surge in 26 of the 28 launches; in
+two of side A's it answered about a second before the 40-second surge ended and got none. The mock servers met the
+goals for every request, so `surge/slo_attainment` was 1 in every launch and got NO VERDICT (`zero_floor`). With
+real vLLM servers it ran only in an earlier version, under the earlier rule (rounds of A and B, no twins), on one
+machine with one GPU: three runs of one round each, one complete, two partial because nearly every request missed
+the goals at the rate they used.
 
 Not checked yet:
 

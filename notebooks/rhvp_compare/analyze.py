@@ -15,9 +15,9 @@ together. Standard library only.
 Two checks this pattern adds to the rule, because a failed launch does not stop a run here:
 
 - a launch of side A or B that failed through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY
-  or LOAD_FAILED, or requests failed at the case's load level or, in mode scaleout, in the surge) leaves the pairs that are left overstating that side,
-  so the case gets NO VERDICT (side_failed), whichever side failed. A launch that failed for another reason (stopped,
-  the GPU not free, the platform) only means one pair fewer;
+  or LOAD_FAILED, or requests failed at the case's load level or, in mode scaleout, in the surge) leaves the pairs
+  that are left overstating that side, so the case gets NO VERDICT (side_failed), whichever side failed. A launch
+  that failed for another reason (stopped, the GPU not free, the platform) only means one pair fewer;
 - launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
   (more_than_one_node).
 

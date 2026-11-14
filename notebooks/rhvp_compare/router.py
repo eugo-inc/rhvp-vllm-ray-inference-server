@@ -4,7 +4,7 @@ the replica with the fewest requests in flight (ties take turns).
 
 Why a router: GuideLLM keeps its connections open, so behind a balancer that spreads connections (a Kubernetes
 Service) a replica added during the surge would get almost no requests. This router chooses per request, and counts
-what each replica got, so a round can show that the new replica took part of the surge.
+what each replica got, so a launch can show that the new replica took part of the surge.
 
 The runner starts it as a child process in its own container (`spawn`, used by dockerapi.py), next to GuideLLM:
 

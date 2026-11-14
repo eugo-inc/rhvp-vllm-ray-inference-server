@@ -925,7 +925,9 @@ goals (lower it). Fewer failed requests than that, or a share within the goals a
 mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`, for
 `scaleOut.sharedGpu: false`; by default both replicas get `GPUS`), `CPUSET` (the CPUs the runner and every container it starts may use) and
 `CACHE_VOLUME` (the name prefix of the warm-cache volumes). The notebook shows the run in its section 4,
-"Scale-out". That mock run, 7 rounds with twins and no warm-up, is 28 launches and 56 server starts.
+"Scale-out". That mock run, 7 rounds with twins and no warm-up, is 28 launches and 56 server starts; it took about 46
+minutes on CPU. Its mock servers meet the goals for every request, so the share within the goals is 1 for every side
+and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a rate.
 
 ### What has not been checked for scale out
 

@@ -9,7 +9,7 @@
 # The config file is JSON with the keys of global.compare in values-global.yaml, plus "model" (the keys of
 # global.model). tests/fixtures/compare-local-mock.json is a small one that needs no GPU: two GuideLLM mock
 # servers with different speeds. tests/fixtures/compare-scaleout-mock.json is the same in mode scaleout: mock
-# servers that take a while to start, one surge per round, and a second replica at the forced step.
+# servers that take a while to start, one surge per scored launch, and a second replica at the forced step.
 #
 # What it does:
 #   1. Creates the docker network $NETWORK if it is missing.
@@ -28,12 +28,12 @@
 # Each side runs as an arbitrary UID in group 0 (as on OpenShift), with its caches on a fresh tmpfs and the model
 # weights on the docker volume $MODELS_VOLUME, kept between runs (remove it with docker volume rm). A side with
 # compileCache: warm gets its own cache volume instead (named after $CACHE_VOLUME and the run), filled by its warm-up
-# round and removed when the run ends.
+# launch and removed when the run ends.
 #
-# Mode scaleout (mode: scaleout in the config): each round starts a second container of the side, named like the
-# first plus -2, at the forced step; the runner puts a small router in front of the two (router.py, a child process
-# of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is refused
-# when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
+# Mode scaleout (mode: scaleout in the config): each scored launch starts a second container of the side, named
+# like the first plus -2, at the forced step; the runner puts a small router in front of the two (router.py, a child
+# process of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is
+# refused when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
