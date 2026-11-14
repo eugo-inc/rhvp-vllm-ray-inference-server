@@ -780,11 +780,25 @@ def test_a_launch_cut_short_between_its_tries_keeps_none_of_the_first_try(tmp_pa
     text = (the_runner.dir / "results.md").read_text()
     assert f"- launch 1 (A): timed out 1 time, did not run again, then {code}" in text
     assert "ran again" not in text.split("- launch 1 (A): timed out", 1)[1].splitlines()[0]
-    assert "every figure of such a launch" not in text and "(none of them ran again" in text
+    assert "every figure of such a launch" not in text and "none of them" not in text
+    assert "(it failed before its second try sent a request, so it has no figures" in text
     head = "".join(show._head(results, [], []))
-    assert words.LOAD_RETRIED_NONE in head and words.LOAD_RETRIED_HOW not in head
+    assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_NONE not in head
+    assert words.LOAD_RETRIED_HOW not in head
     if code == "STOPPED":
         assert results["run"]["error_code"] == "STOPPED" and [x["index"] for x in results["launches"]] == [1]
+
+
+def test_two_timed_out_launches_that_did_not_run_again_are_named_as_more_than_one(tmp_path):
+    """One timed-out launch that did not run again is "it"; two are "none of them", in results.md and the notebook."""
+    results, _, _ = run(tmp_path, StopFailsOnce(hang_once=True), rounds=ONE_ROUND)
+    second = results["launches"][1]
+    second.update(status="failed", error_code="LOAD_FAILED", load_timeouts=1, load_retries=0)
+    text = report.markdown(results)
+    assert "(none of them ran again: each failed before its second try sent a request" in text
+    assert "(it failed before" not in text
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_NONE in head and words.LOAD_RETRIED_NONE_ONE not in head
 
 
 class SamplerFailsFirst(FakeBackend):
@@ -1652,7 +1666,8 @@ def test_a_surge_in_which_nothing_finished_gives_no_verdict(tmp_path):
     assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "REQUESTS_FAILED"
     text = (the_runner.dir / "results.md").read_text()
     assert "- launch 5 (B): 0 requests failed, 0 succeeded" in text
-    assert "a figure of 0 gives its case NO VERDICT (nonpositive_value)" in text
+    # Another reason (two nodes, a side that failed) can come before the 0, so this line names none; the table does.
+    assert "a figure of 0 gives its case NO VERDICT:" in text and "NO VERDICT (nonpositive_value):" not in text
     head = "".join(show._head(results, [], []))
     assert "launch 5 (B): 0 failed, 0 finished" in head
 
@@ -1815,6 +1830,8 @@ def test_each_tries_memory_check_log_is_kept(tmp_path):
     text = (the_runner.dir / "results.md").read_text()
     assert ("- launch 3 (A): started 6 servers in all (replica 2 of the discarded try started again, replica 2 "
             "started again), then finished") in text
+    head = "".join(show._head(results, [], []))
+    assert "3 (A, 6 servers; replica 2 of the discarded try, replica 2 started again)" in head
 
 
 @pytest.mark.parametrize("make, retried, kept", [
@@ -1902,10 +1919,10 @@ def test_a_discard_cut_short_records_each_server_once_as_discarded(tmp_path, whi
     text = (the_runner.dir / "results.md").read_text()
     assert "- launch 3 (A): timed out 1 time, did not run again, then " in text
     # The launch never ran again: nothing says it did, or that its figures come from a second try.
-    assert "(none of them ran again: each failed before its second try sent a request" in text
-    assert "every figure of such a launch" not in text
+    assert "(it failed before its second try sent a request, so it has no figures" in text
+    assert "every figure of such a launch" not in text and "none of them" not in text
     head = "".join(show._head(results, [], []))
-    assert words.LOAD_RETRIED_NONE in head and words.LOAD_RETRIED_SCALE not in head
+    assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_SCALE not in head
 
 
 class TermInRouterStop(ScaleBackend):

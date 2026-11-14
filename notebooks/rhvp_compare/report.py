@@ -189,8 +189,9 @@ def markdown(results: Mapping) -> str:
             lines += ["", f"Launches whose GuideLLM timed out (after a time-out {how}; every figure of such a launch "
                       f"comes from that second try, and the first try's files are its *.try-1.* files{not_ran}):"]
         else:  # each failed before its second try sent a request
-            lines += ["", "Launches whose GuideLLM timed out (none of them ran again: each failed before its second "
-                      "try sent a request, so it has no figures; the first try's files are its *.try-1.* files):"]
+            which = ("none of them ran again: each failed" if len(timed_out) > 1 else "it failed")
+            lines += ["", f"Launches whose GuideLLM timed out ({which} before its second try sent a request, so it "
+                      f"has no figures; the first try's files are its *.try-1.* files):"]
         lines += [f"- launch {r['index']} ({r['side']}): timed out {r['load_timeouts']} "
                   f"time{'s' if r['load_timeouts'] > 1 else ''}, "
                   + ("ran again, then " if r.get("load_retries") else "did not run again, then ")
@@ -211,7 +212,7 @@ def markdown(results: Mapping) -> str:
         lines += ["", "Surges in which requests failed or none finished. Only their latency medians are left out of "
                       "the comparison: a failed request counts as one that missed the goals in the share within the "
                       "goals and in goodput. A surge in which no request finished counts as 0 for both, and a figure "
-                      "of 0 gives its case NO VERDICT (nonpositive_value):"]
+                      "of 0 gives its case NO VERDICT:"]
         lines += [f"- launch {u['index']} ({u['side']}): {u['errored']} requests failed, {u['successful']} succeeded"
                   for u in surges]
     lost = [row for row in rows if any((row.get("lost") or {}).values())]

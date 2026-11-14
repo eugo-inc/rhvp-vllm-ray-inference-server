@@ -165,8 +165,8 @@ def _retried(launch: dict, scale: bool) -> str:
         return words.RETRIED_LAUNCH.format(index=index, side=side, starts=starts)
     again = [item for item in launch.get("servers") or [] if item.get("start_retries")]
     if len(again) > 1 or (again and (again[0].get("replica") != 1 or again[0].get("discarded"))):
-        replicas = ", ".join(str(item.get("replica")) + (words.RETRIED_DISCARDED if item.get("discarded") else "")
-                             for item in again)
+        replicas = ", ".join(words.RETRIED_REPLICA.format(replica=item.get("replica"))
+                             + (words.RETRIED_DISCARDED if item.get("discarded") else "") for item in again)
         return words.RETRIED_REPLICAS.format(index=index, side=side, starts=starts, replicas=replicas)
     return words.RETRIED_SERVERS.format(index=index, side=side, starts=starts)
 
@@ -205,7 +205,7 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
         ran = [r for r in launches if r.get("load_timeouts") and r.get("load_retries")]
         how = words.LOAD_RETRIED_SCALE if scale else words.LOAD_RETRIED_HOW
         if not ran:
-            how = words.LOAD_RETRIED_NONE
+            how = words.LOAD_RETRIED_NONE if len(timed_out) > 1 else words.LOAD_RETRIED_NONE_ONE
         elif len(ran) < len(timed_out):
             how += " " + words.LOAD_RETRIED_SOME
         parts.append(line(words.RUN_LOAD_RETRIED.format(launches=", ".join(timed_out), how=how)))

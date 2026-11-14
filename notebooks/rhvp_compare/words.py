@@ -87,7 +87,8 @@ RUN_RETRIED_SCALE = ("Launches with a server started again after vLLM's start-up
                      "the replica the forced step adds, from when it was first asked for.")
 RETRIED_LAUNCH = "{index} ({side}, {starts})"
 RETRIED_SERVERS = "{index} ({side}, {starts} servers)"
-RETRIED_REPLICAS = "{index} ({side}, {starts} servers; replica {replicas} started again)"
+RETRIED_REPLICAS = "{index} ({side}, {starts} servers; {replicas} started again)"
+RETRIED_REPLICA = "replica {replica}"
 RETRIED_DISCARDED = " of the discarded try"
 RUN_LOAD_RETRIED = "Launches whose GuideLLM timed out: {launches}. {how}"
 LOAD_RETRIED_HOW = ("After a time-out the side was taken down and the launch ran again from a new start, timed from "
@@ -99,6 +100,8 @@ LOAD_RETRIED_SCALE = ("After a time-out GuideLLM, the router and the replicas th
                       "time-out fails the launch (LOAD_FAILED).")
 LOAD_RETRIED_NONE = ("None of them ran again: each failed before its second try sent a request, so it has no "
                      "figures (the files of its first try are its *.try-1.* files).")
+LOAD_RETRIED_NONE_ONE = ("It failed before its second try sent a request, so it has no figures (the files of its first "
+                         "try are its *.try-1.* files).")
 LOAD_RETRIED_SOME = ("A launch that did not run again failed before its second try sent a request, so it has no "
                      "figures.")
 LOAD_RETRIED_RAN = "{index} ({side}): ran again"
@@ -107,8 +110,8 @@ RUN_LEVELS = "Load levels left out, where requests failed or none finished: {lev
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
 RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "
               "a failed request counts as one that missed the goals in the share within the goals and in goodput. A "
-              "surge in which no request finished counts as 0 for both, and a figure of 0 gives its case NO VERDICT "
-              "(a figure of 0).")
+              "surge in which no request finished counts as 0 for both, and a figure of 0 gives its case NO "
+              "VERDICT.")
 RUN_SURGE = "launch {index} ({side}): {errored} failed, {successful} finished"
 ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
                 "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
@@ -226,7 +229,7 @@ SCALE_REQUESTS_NOTE = ("The router's counts, summed over the side's own scored l
                        "figures.")
 SCALE_SURGE_RULE = ("A failed request counts as one that missed the goals, and requests still running when the "
                     "surge ends are left out. A surge in which no request finished counts as 0 attainment and 0 "
-                    "goodput, and a figure of 0 is not a ratio: that case gets NO VERDICT (a figure of 0).")
+                    "goodput, and a figure of 0 is not a ratio: that case gets NO VERDICT.")
 SCALE_EVENTS = ("Scale-ups the servers logged themselves (the pattern's rhvp-scale lines): side A in {a} of {na} "
                 "launches, side B in {b} of {nb}. The runner's llm.yaml for this pattern's server allows one replica, "
                 "and a side on it logs none.")
