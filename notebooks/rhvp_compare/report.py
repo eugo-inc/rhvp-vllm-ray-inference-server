@@ -144,8 +144,8 @@ def markdown(results: Mapping) -> str:
                   for r in timed_out]
     for mixed in summary.energy_methods_mixed(results):
         lines += ["", f"**Two energy methods at {mixed['concurrency']} streams:** tokens per joule came from the "
-                      f"energy counter in launches {', '.join(map(str, mixed['energy_counter']))} and from the mean of "
-                      f"the power samples in launches {', '.join(map(str, mixed['power_mean']))}."]
+                      f"energy counter in {summary.launches(mixed['energy_counter'])} and from the mean of the power "
+                      f"samples in {summary.launches(mixed['power_mean'])}."]
     unusable = summary.levels_unusable(results)
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]

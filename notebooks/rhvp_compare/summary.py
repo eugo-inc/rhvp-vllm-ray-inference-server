@@ -86,6 +86,11 @@ def levels_unusable(results: Mapping) -> list[dict]:
     return out
 
 
+def launches(indexes: list[int]) -> str:
+    """"launch 2" or "launches 2, 5"."""
+    return f"launch{'es' if len(indexes) > 1 else ''} {', '.join(map(str, indexes))}"
+
+
 def energy_methods_mixed(results: Mapping) -> list[dict]:
     """The load levels whose tokens per joule came from the energy counter in some finished measured launches and from
     the mean of the power samples in others (energy.window_power picks per level), with the launches of each."""

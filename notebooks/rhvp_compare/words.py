@@ -83,8 +83,7 @@ RUN_LEVELS = "Load levels left out, where requests failed or none finished: {lev
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
 ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
                 "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
-ENERGY_MIXED_LEVEL = ("at {concurrency} streams, the energy counter in launches {counter} and the power samples in "
-                      "launches {power}")
+ENERGY_MIXED_LEVEL = "at {concurrency} streams, the energy counter in {counter} and the power samples in {power}"
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
 RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
             "(side_failed).")

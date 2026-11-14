@@ -189,8 +189,8 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                 for u in summary.levels_unusable(results)]
     if unusable:
         parts.append(line(words.RUN_LEVELS.format(levels=", ".join(unusable))))
-    mixed = [words.ENERGY_MIXED_LEVEL.format(concurrency=m["concurrency"], power=", ".join(map(str, m["power_mean"])),
-                                             counter=", ".join(map(str, m["energy_counter"])))
+    mixed = [words.ENERGY_MIXED_LEVEL.format(concurrency=m["concurrency"], power=summary.launches(m["power_mean"]),
+                                             counter=summary.launches(m["energy_counter"]))
              for m in summary.energy_methods_mixed(results)]
     if mixed:
         parts.append(line(words.ENERGY_MIXED.format(levels="; ".join(mixed))))

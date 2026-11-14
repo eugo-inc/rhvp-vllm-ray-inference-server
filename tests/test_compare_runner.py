@@ -893,10 +893,10 @@ def test_a_level_whose_launches_mixed_the_two_energy_methods_is_named(tmp_path):
     mixed = summary.energy_methods_mixed(results)
     assert [m["concurrency"] for m in mixed] == [1, 4]
     assert all(m["energy_counter"] == [1] and m["power_mean"] == [2, 3, 4] for m in mixed)
-    assert ("**Two energy methods at 4 streams:** tokens per joule came from the energy counter in launches 1 and from "
+    assert ("**Two energy methods at 4 streams:** tokens per joule came from the energy counter in launch 1 and from "
             "the mean of the power samples in launches 2, 3, 4.") in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
-    assert "at 4 streams, the energy counter in launches 1 and the power samples in launches 2, 3, 4" in head
+    assert "at 4 streams, the energy counter in launch 1 and the power samples in launches 2, 3, 4" in head
     assert not summary.energy_methods_mixed(run(tmp_path / "plain", rounds=ONE_ROUND)[0])
 
 
@@ -904,6 +904,20 @@ def test_the_plan_note_at_one_round_names_single_measurement():
     [note] = [line for line in runner.plan_lines(plans.build(config(rounds=ONE_ROUND), "docker"))
               if line.startswith("note:") and "need at least" in line]
     assert note.endswith("with 1 round every case gets NO VERDICT (single_measurement)")
+
+
+@pytest.mark.parametrize("twins", ["none", "A", "both"])
+@pytest.mark.parametrize("count", [1, 4, 6, 8])
+def test_the_plan_note_names_the_reason_the_analysis_gives(tmp_path, twins, count):
+    """One round, too few rounds and a missing twin, in the order the analysis checks them: every one of these
+    reasons the run gives is in the plan's lines, and the lines name no other (a missing twin is named as "no_floor
+    or one_sided_floor")."""
+    codes = {"single_measurement", "too_few_rounds", "no_floor", "one_sided_floor"}
+    results, _, _ = run(tmp_path, rounds={"count": count, "warmup": False, "twins": twins})
+    given = {row["reason"] for row in results["analysis"]["comparisons"]} & codes
+    lines = "\n".join(runner.plan_lines(results["plan"]))
+    named = {code for code in codes if code in lines}
+    assert given <= named and named - given <= {"no_floor", "one_sided_floor"}, (given, lines)
 
 
 def test_the_plan_note_below_the_secondary_minimum_says_the_secondary_cases_get_none_either():

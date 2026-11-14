@@ -711,24 +711,30 @@ def exit_code(results: Mapping) -> int:
 
 
 def plan_lines(the_plan: Mapping) -> list[str]:
-    """What a plan allows, before anything runs: the lineup, the launches, and whether a verdict is possible."""
+    """What a plan allows, before anything runs: the lineup, the launches, and whether a verdict is possible. The
+    note names the reason the analysis will give, checked in its order (analyze._decide): one round, too few rounds,
+    then a side without a twin."""
     power = the_plan["power"]
     names = ", ".join(e["key"] for e in the_plan["lineup"])
     out = [f"run {the_plan['run_id']}: {the_plan['rounds']} rounds of {names}, {len(the_plan['launches'])} server "
            f"starts, {power['family_size']} primary cases of {len(the_plan['cases'])} ({power['plain']})"]
-    if not power["both_twins"]:
-        out.append("note: without a twin for both sides no case can get a verdict (NO VERDICT: no_floor or "
-                   "one_sided_floor)")
-    elif the_plan["rounds"] == 1:
+    no_twin = "no_floor or one_sided_floor"
+    if the_plan["rounds"] == 1:
         out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
                    f"verdict; with 1 round every case gets NO VERDICT (single_measurement)")
-    elif not power["reachable"]:
+    elif the_plan["rounds"] < power["min_rounds"]:
         secondary = stats.min_rounds(1, the_plan["analysis"]["alpha"])
-        graded = ("the secondary cases are graded on their own" if the_plan["rounds"] >= secondary else
-                  f"so does every secondary case, which needs {secondary}")
+        if the_plan["rounds"] < secondary:
+            graded = f"so does every secondary case, which needs {secondary}"
+        elif power["both_twins"]:
+            graded = "the secondary cases are graded on their own"
+        else:
+            graded = f"without a twin for both sides so does every secondary case ({no_twin})"
         out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
                    f"verdict; with {the_plan['rounds']} every primary case gets NO VERDICT (too_few_rounds), and "
                    f"{graded}")
+    elif not power["both_twins"]:
+        out.append(f"note: without a twin for both sides no case can get a verdict (NO VERDICT: {no_twin})")
     else:
         out.append(f"a verdict on a primary case needs {power['must_agree']} of the {the_plan['rounds']} rounds to "
                    f"lean the same way; at most {min(power['max_primary_cases'], power['family_size'])} primary "
