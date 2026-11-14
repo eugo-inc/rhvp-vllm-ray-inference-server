@@ -202,8 +202,12 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
         index=r["index"], side=r["side"], code=r.get("error_code") or r.get("status")) for r in launches
         if r.get("load_timeouts")]
     if timed_out:
-        how = ((words.LOAD_RETRIED_SCALE if scale else words.LOAD_RETRIED_HOW)
-               if any(r.get("load_retries") for r in launches) else words.LOAD_RETRIED_NONE)
+        ran = [r for r in launches if r.get("load_timeouts") and r.get("load_retries")]
+        how = words.LOAD_RETRIED_SCALE if scale else words.LOAD_RETRIED_HOW
+        if not ran:
+            how = words.LOAD_RETRIED_NONE
+        elif len(ran) < len(timed_out):
+            how += " " + words.LOAD_RETRIED_SOME
         parts.append(line(words.RUN_LOAD_RETRIED.format(launches=", ".join(timed_out), how=how)))
     troubled = summary.levels_unusable(results)
     unusable = [words.RUN_LEVEL.format(index=u["index"], side=u["side"], concurrency=u["concurrency"])

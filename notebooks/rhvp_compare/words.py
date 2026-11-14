@@ -99,6 +99,8 @@ LOAD_RETRIED_SCALE = ("After a time-out GuideLLM, the router and the replicas th
                       "time-out fails the launch (LOAD_FAILED).")
 LOAD_RETRIED_NONE = ("None of them ran again: each failed before its second try sent a request, so it has no "
                      "figures (the files of its first try are its *.try-1.* files).")
+LOAD_RETRIED_SOME = ("A launch that did not run again failed before its second try sent a request, so it has no "
+                     "figures.")
 LOAD_RETRIED_RAN = "{index} ({side}): ran again"
 LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."

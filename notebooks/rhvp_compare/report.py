@@ -182,9 +182,12 @@ def markdown(results: Mapping) -> str:
                if scale else
                "the side was taken down and the launch ran again from a new start, timed from that start, with the "
                "same requests")
-        if any(r.get("load_retries") for r in timed_out):
+        ran = [r for r in timed_out if r.get("load_retries")]
+        if ran:
+            not_ran = ("; a launch that did not run again failed before its second try sent a request, so it has no "
+                       "figures" if len(ran) < len(timed_out) else "")
             lines += ["", f"Launches whose GuideLLM timed out (after a time-out {how}; every figure of such a launch "
-                      "comes from that second try, and the first try's files are its *.try-1.* files):"]
+                      f"comes from that second try, and the first try's files are its *.try-1.* files{not_ran}):"]
         else:  # each failed before its second try sent a request
             lines += ["", "Launches whose GuideLLM timed out (none of them ran again: each failed before its second "
                       "try sent a request, so it has no figures; the first try's files are its *.try-1.* files):"]

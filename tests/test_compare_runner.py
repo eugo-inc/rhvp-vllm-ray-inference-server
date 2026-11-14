@@ -1718,8 +1718,28 @@ def test_a_surge_whose_guidellm_timed_out_runs_the_launch_once_more_and_the_laun
     assert ("after a time-out GuideLLM, the router and the replicas that had started were taken down, and the launch "
             "ran again from a new first replica") in text
     assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
+    assert "a launch that did not run again" not in text
     head = "".join(show._head(results, [], []))
     assert "Launches whose GuideLLM timed out: 3 (A): ran again." in head and words.LOAD_RETRIED_SCALE in head
+    assert words.LOAD_RETRIED_SOME not in head
+
+
+def test_the_time_out_list_says_which_launches_ran_again(tmp_path):
+    # Launch 3 timed out and ran again; launch 7 is made one that timed out and failed before its second try. Only a
+    # launch that ran again is said to have its figures from its second try.
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, stalls={3: 1}), clock)
+    l7 = results["launches"][6]
+    assert (l7["index"], l7["side"]) == (7, "A~same")
+    l7.update(status="failed", error_code="RUNNER_ERROR", load_timeouts=1, load_retries=0, values={})
+    text = report.markdown(results)
+    assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
+    assert "- launch 7 (A~same): timed out 1 time, did not run again, then RUNNER_ERROR" in text
+    assert ("; a launch that did not run again failed before its second try sent a request, so it has no figures):"
+            in text)
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_SCALE in head and words.LOAD_RETRIED_SOME in head
+    assert words.LOAD_RETRIED_NONE not in head
 
 
 def test_a_time_out_before_the_forced_step_takes_down_only_the_first_replica(tmp_path):
@@ -1923,6 +1943,10 @@ def test_a_scale_launch_starts_its_new_replica_once_more_after_vllms_memory_chec
             in (the_runner.dir / "results.md").read_text())
     head = "".join(show._head(results, [], []))
     assert "started again after vLLM" in head and "3 (A, 3 servers; replica 2 started again)" in head
+    # The count is the launch's own `starts`: without its server records the launch says the same number.
+    del l3["servers"]
+    assert "- launch 3 (A): started 3 servers in all, then finished" in report.markdown(results)
+    assert "3 (A, 3 servers)" in "".join(show._head(results, [], []))
 
 
 def test_a_scale_launch_starts_its_first_replica_once_more_after_vllms_memory_check(tmp_path):
