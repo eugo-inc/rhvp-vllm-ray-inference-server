@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from . import summary
+from . import plan as plans, stats, summary, words
 
 
 def _num(value, unit: str = "") -> str:
     if value is None:
         return "-"
+    if unit == "share":
+        return f"{value:.1%}"
     if unit in ("s",):
         text = f"{value:.2f}"
     elif unit == "ms":
@@ -38,6 +40,18 @@ def _verdict(row: Mapping) -> str:
     return f"{row['verdict']} ({row['reason']})" if row.get("reason") else row["verdict"]
 
 
+def _starts(launch: Mapping, scale: bool) -> str:
+    """How many servers a launch started in all; in mode scaleout also which replicas started again, when not only the
+    first replica of its kept try did (from its server records)."""
+    again = [item for item in launch.get("servers") or [] if item.get("start_retries")]
+    text = f"started {launch.get('starts')} {'servers' if scale else 'times'} in all"
+    if scale and (len(again) > 1 or (again and (again[0].get("replica") != 1 or again[0].get("discarded")))):
+        text += " (" + ", ".join(f"replica {item.get('replica')}"
+                                 f"{' of the discarded try' if item.get('discarded') else ''} started again"
+                                 for item in again) + ")"
+    return text
+
+
 def markdown(results: Mapping) -> str:
     """The run's summary: what was compared, on what, how, and one row per case."""
     plan = results["plan"]
@@ -55,14 +69,15 @@ def markdown(results: Mapping) -> str:
                  f"{run.get('finished_at') or '-'}. Platform: {plan.get('platform', '-')}.")
     revision = f" at revision {model['revision']}" if model.get("revision") else ""
     lines += ["", f"Model: `{model['source']}`{revision}, served as `{model['id']}`.", ""]
-    lines += ["| Side | Name | Image | Digest | Server version |", "|---|---|---|---|---|"]
+    lines += ["| Side | Name | Image | Digest | Server version | Compile cache |", "|---|---|---|---|---|---|"]
     sides_prov = prov.get("sides") or {}
-    for side in plan["sides"]:
+    caches = [side.get("compile_cache") or "cold" for side in plan["sides"]]
+    for side, cache in zip(plan["sides"], caches):
         p = sides_prov.get(side["key"]) or {}
         version = p.get("server_version") or {}
         shown = " ".join(f"{k} {v}" for k, v in version.items() if k != "source" and v) or "-"
         lines.append(f"| {side['key']} | {side['name']} | `{side['image']}` | `{p.get('image_digest') or '-'}` | "
-                     f"{shown} |")
+                     f"{shown} | {cache} |")
     gpu = prov.get("gpu") or {}
     node = prov.get("node") or {}
     lines += ["", f"GPU: {gpu.get('product') or '-'} (count {gpu.get('count') or '-'}, driver "
@@ -71,10 +86,23 @@ def markdown(results: Mapping) -> str:
     load = plan["load"]
     warmup = ", after one warm-up launch per side" if plan.get("warmup") else ""
     lineup = ", ".join(e["key"] for e in plan["lineup"])
+    scale = plan.get("scale_out") if plan.get("mode") == plans.SCALEOUT else None
+    if scale:
+        shape = (f"{scale['request_rate']:g} requests per second for {scale['surge_s']:.0f} s through a least-busy "
+                 f"router, a second replica asked for {scale['step_after_s']:g} s after the first request")
+        starts = f", which start {plans.server_starts(plan)} servers (two in each scored launch)"
+    else:
+        shape = (f"{load['seconds_per_level']:.0f} s at each of {', '.join(str(c) for c in load['concurrencies'])} "
+                 f"concurrent streams")
+        starts = ""
     lines.append(f"Plan: {plan['rounds']} rounds of {lineup} in rotating order ({plan['schedule']}){warmup}: "
-                 f"{len(plan['launches'])} launches. Load: GuideLLM, {load['prompt_tokens']} prompt and "
-                 f"{load['output_tokens']} output tokens per request, {load['seconds_per_level']:.0f} s at each of "
-                 f"{', '.join(str(c) for c in load['concurrencies'])} concurrent streams, seed {load['seed']}.")
+                 f"{len(plan['launches'])} launches{starts}. Load: GuideLLM, {load['prompt_tokens']} prompt and "
+                 f"{load['output_tokens']} output tokens per request, {shape}, seed {load['seed']}.")
+    if scale:
+        goals = "; ".join(f"{name} at most {scale['slo'][key]:g} ms" for key, name in
+                          (("ttft_ms", "time to first token"), ("tpot_ms", "inter-token latency"))
+                          if scale["slo"].get(key) is not None)
+        lines.append(f"Latency goals: {goals}. Mode scaleout: {scale['surge_rule']}.")
     lines.append(f"Method: B/A per round; exact two-sided sign test, Holm's correction over the primary cases "
                  f"that have a p-value ({rule.get('plain') or power['plain']}; {power['family_size']} declared), alpha "
                  f"{plan['analysis']['alpha']}; the bar is the noise each side's twin measured (rule "
@@ -97,6 +125,13 @@ def markdown(results: Mapping) -> str:
                          f"{_num(row['baseline_median'], unit)} | {_num(row['subject_median'], unit)} | "
                          f"{_ratio(row)} | {_bar(row)} | {row['n_rounds']} ({row['n_untied']}) | "
                          f"{_p(row.get(p_key))} | {_verdict(row)} |")
+        if role == "primary" and caches[0] != caches[1]:
+            lines += ["", f"**The two sides started with different compile caches: side A {caches[0]}, side B "
+                          f"{caches[1]}.** The start-up figures and their verdicts compare the two cache settings "
+                          "together with the two images."]
+        elif role == "primary" and caches == ["warm", "warm"]:
+            lines += ["", "Both sides started their scored launches with warm compile caches, kept from their warm-up "
+                          "launches."]
     timeouts = analysis.get("load_timeouts") or {}
     if timeouts.get("A") or timeouts.get("B"):
         lines += ["", f"**GuideLLM timed out** {timeouts.get('A', 0)} times in the launches of side A and "
@@ -120,6 +155,11 @@ def markdown(results: Mapping) -> str:
                          f"{t['floor']:.1%} | {t['n']} | {_p(t.get('p_raw'))} |")
     for note in analysis.get("notes") or []:
         lines += ["", f"**Note:** {note}."]
+    if scale:
+        lines += _scale_lines(results)
+        fit = summary.surge_rate_fit(results)
+        if fit:
+            lines += ["", "**" + words.SCALE_RATE_NOTES[fit] + "**"]
     launches = results.get("launches") or []
     failed = [r for r in launches if r.get("status") != "ok"]
     if failed:
@@ -128,15 +168,30 @@ def markdown(results: Mapping) -> str:
                   f"{r.get('error_code') or 'failed'}: {r.get('error') or r.get('status')}" for r in failed]
     retried = [r for r in launches if r.get("start_retries")]
     if retried:
-        lines += ["", "Launches whose side was started again after vLLM's start-up memory check failed "
-                  "(timed from the last start):"]
-        lines += [f"- launch {r['index']} ({r['side']}): started {r.get('starts')} times in all, "
+        lines += ["", "Launches with a server started again after vLLM's start-up memory check failed (a launch's "
+                  "first replica timed from its last start, the replica a scale-out launch adds from when it was "
+                  "first asked for):" if scale else
+                  "Launches whose side was started again after vLLM's start-up memory check failed (timed from the "
+                  "last start):"]
+        lines += [f"- launch {r['index']} ({r['side']}): {_starts(r, bool(scale))}, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
     timed_out = [r for r in launches if r.get("load_timeouts")]
     if timed_out:
-        lines += ["", "Launches whose GuideLLM timed out (after a time-out the side was taken down and the launch ran "
-                  "again from a new start, timed from that start, with the same requests; every figure of such a "
-                  "launch comes from that second try, and the first try's files are its *.try-1.* files):"]
+        how = ("GuideLLM, the router and the replicas that had started were taken down, and the launch ran again "
+               "from a new first replica, timed from that start, with the same requests and a new second replica"
+               if scale else
+               "the side was taken down and the launch ran again from a new start, timed from that start, with the "
+               "same requests")
+        ran = [r for r in timed_out if r.get("load_retries")]
+        if ran:
+            not_ran = ("; a launch that did not run again failed before its second try sent a request, so it has no "
+                       "figures" if len(ran) < len(timed_out) else "")
+            lines += ["", f"Launches whose GuideLLM timed out (after a time-out {how}; every figure of such a launch "
+                      f"comes from that second try, and the first try's files are its *.try-1.* files{not_ran}):"]
+        else:  # each failed before its second try sent a request
+            which = ("none of them ran again: each failed" if len(timed_out) > 1 else "it failed")
+            lines += ["", f"Launches whose GuideLLM timed out ({which} before its second try sent a request, so it "
+                      f"has no figures; the first try's files are its *.try-1.* files):"]
         lines += [f"- launch {r['index']} ({r['side']}): timed out {r['load_timeouts']} "
                   f"time{'s' if r['load_timeouts'] > 1 else ''}, "
                   + ("ran again, then " if r.get("load_retries") else "did not run again, then ")
@@ -146,11 +201,20 @@ def markdown(results: Mapping) -> str:
         lines += ["", f"**Two energy methods at {mixed['concurrency']} streams:** tokens per joule came from the "
                       f"energy counter in {summary.launches(mixed['energy_counter'])} and from the mean of the power "
                       f"samples in {summary.launches(mixed['power_mean'])}."]
-    unusable = summary.levels_unusable(results)
+    troubled = summary.levels_unusable(results)
+    unusable = [u for u in troubled if u["concurrency"] is not None]
     if unusable:
         lines += ["", "Load levels left out of the comparison:"]
         lines += [f"- launch {u['index']} ({u['side']}), {u['concurrency']} streams: "
                   f"{u['errored']} requests failed, {u['successful']} succeeded" for u in unusable]
+    surges = [u for u in troubled if u["concurrency"] is None]
+    if surges:
+        lines += ["", "Surges in which requests failed or none finished. Only their latency medians are left out of "
+                      "the comparison: a failed request counts as one that missed the goals in the share within the "
+                      "goals and in goodput. A surge in which no request finished counts as 0 for both, and a figure "
+                      "of 0 gives its case NO VERDICT:"]
+        lines += [f"- launch {u['index']} ({u['side']}): {u['errored']} requests failed, {u['successful']} succeeded"
+                  for u in surges]
     lost = [row for row in rows if any((row.get("lost") or {}).values())]
     if lost:
         lines += ["", "Cases that lost rounds because one side failed on its own account (so NO VERDICT, "
@@ -164,3 +228,38 @@ def markdown(results: Mapping) -> str:
                       f"stopped it (its state then: {run['server_found_down']}). The run left it as it was and did not "
                       f"start it again."]
     return "\n".join(lines) + "\n"
+
+
+def _scale_lines(results: Mapping) -> list[str]:
+    """Mode scaleout: per side, the medians over the side's own scored launches (not its twin's) of when the second
+    replica was asked for and first sent requests, and its share of the surge's requests through the router."""
+    out = ["", "The second replica (medians over each side's own scored launches that reached the forced step; "
+               "seconds after the surge's first request):", "",
+           "| Side | Launches | asked for | first sent requests | its share of the requests | answered after the "
+           "surge |", "|---|---|---|---|---|---|"]
+    for side in ("A", "B"):
+        scales = [r["scale"] for r in results.get("launches") or [] if r.get("kind") == "scored"
+                  and r.get("side") == side and r.get("status") == "ok" and (r.get("scale") or {}).get("new_replica")]
+
+        def median(values: list) -> float | None:
+            values = [v for v in values if isinstance(v, (int, float))]
+            return stats.median(values) if values else None
+
+        late = sum(1 for s in scales if s["new_replica"].get("joined_during_surge") is False)
+        joined = [s["new_replica"].get("joined_at_s") for s in scales if s["new_replica"].get("joined_during_surge")]
+        out.append(f"| {side} | {len(scales)} | {_num(median([s.get('step_at_s') for s in scales]), 's')} | "
+                   f"{_num(median(joined), 's')} | "
+                   f"{_num(median([s.get('new_replica_share') for s in scales]), 'share')} | {late} |")
+    scale = results["plan"].get("scale_out") or {}
+    if any(side.get("gpu", True) for side in results["plan"]["sides"]):
+        declared = ("both replicas of a side share one GPU" if scale.get("shared_gpu")
+                    else "each replica has its own GPU")
+        given = summary.replica_gpus(results)
+        shown = "; ".join(f"replica {n}: " + " or ".join(
+            f"`{g['gpus']}` ({', '.join(f'`{u}`' for u in g['uuids']) or 'UUID not read'})" for g in entries)
+            for n, entries in given.items()) or "not recorded"
+        out += ["", f"GPUs: declared, {declared} (scaleOut.sharedGpu {str(bool(scale.get('shared_gpu'))).lower()}). "
+                    f"Given to each replica's container, from the server records, with the UUIDs nvidia-smi read "
+                    f"through each request before the first launch: {shown}. For a MIG device the UUID is its "
+                    f"parent GPU's."]
+    return out

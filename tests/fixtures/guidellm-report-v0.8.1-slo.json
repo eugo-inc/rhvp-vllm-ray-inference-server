@@ -1,0 +1,172 @@
+{
+ "metadata": {
+  "version": 2,
+  "guidellm_version": "0.8.1",
+  "python_version": "3.13.13",
+  "platform": "Linux"
+ },
+ "config": {
+  "spec": {
+   "metrics": {
+    "kind": "generative",
+    "sample_size": 0,
+    "slo": {
+     "ttft_ms": 45.0,
+     "tpot_ms": 9.0,
+     "e2el_ms": null
+    }
+   }
+  }
+ },
+ "benchmarks": [
+  {
+   "config": {
+    "strategy": {
+     "type_": "concurrent",
+     "worker_count": 2,
+     "max_concurrency": 2,
+     "streams": 2,
+     "rampup_duration": 0.0
+    },
+    "slo": {
+     "ttft_ms": 45.0,
+     "tpot_ms": 9.0,
+     "e2el_ms": null
+    }
+   },
+   "metrics": {
+    "request_totals": {
+     "successful": 47,
+     "errored": 0,
+     "incomplete": 1,
+     "total": 48
+    },
+    "requests_per_second": {
+     "successful": {
+      "mean": 11.5,
+      "median": 12.01536044184904,
+      "count": 46,
+      "total_sum": 529.0,
+      "percentiles": {
+       "p90": 12.165054541552223
+      }
+     },
+     "total": {
+      "mean": 11.5,
+      "median": 12.01536044184904,
+      "count": 46,
+      "total_sum": 529.0,
+      "percentiles": {
+       "p90": 12.165054541552223
+      }
+     }
+    },
+    "output_token_count": {
+     "successful": {
+      "mean": 16.0,
+      "median": 16.0,
+      "count": 47,
+      "total_sum": 752.0,
+      "percentiles": {
+       "p90": 16.0
+      }
+     },
+     "total": {
+      "mean": 15.979166666666666,
+      "median": 16.0,
+      "count": 48,
+      "total_sum": 767.0,
+      "percentiles": {
+       "p90": 16.0
+      }
+     }
+    },
+    "output_tokens_per_second": {
+     "successful": {
+      "mean": 187.5,
+      "median": 245.64005856515374,
+      "count": 750,
+      "total_sum": 140625.0,
+      "percentiles": {
+       "p90": 248.80199311899395
+      }
+     },
+     "total": {
+      "mean": 191.0,
+      "median": 245.76960037501465,
+      "count": 764,
+      "total_sum": 145924.0,
+      "percentiles": {
+       "p90": 248.89057678613815
+      }
+     }
+    },
+    "time_to_first_token_ms": {
+     "successful": {
+      "mean": 43.71837859458111,
+      "median": 42.54579544067383,
+      "count": 47,
+      "total_sum": 2054.763793945312,
+      "percentiles": {
+       "p90": 44.292449951171875
+      }
+     },
+     "total": {
+      "mean": 43.68484020233154,
+      "median": 42.54579544067383,
+      "count": 48,
+      "total_sum": 2096.872329711914,
+      "percentiles": {
+       "p90": 44.292449951171875
+      }
+     }
+    },
+    "inter_token_latency_ms": {
+     "successful": {
+      "mean": 8.102714254501018,
+      "median": 8.10246467590332,
+      "count": 705,
+      "total_sum": 5712.413549423218,
+      "percentiles": {
+       "p90": 8.19096565246582
+      }
+     },
+     "total": {
+      "mean": 8.101013671705223,
+      "median": 8.10246467590332,
+      "count": 719,
+      "total_sum": 5824.628829956056,
+      "percentiles": {
+       "p90": 8.19096565246582
+      }
+     }
+    },
+    "request_goodput": {
+     "successful": {
+      "mean": 11.0,
+      "median": 12.01536044184904,
+      "count": 44,
+      "total_sum": 484.0,
+      "percentiles": {
+       "p90": 12.165054541552223
+      }
+     },
+     "total": {
+      "mean": 11.0,
+      "median": 12.01536044184904,
+      "count": 44,
+      "total_sum": 484.0,
+      "percentiles": {
+       "p90": 12.165054541552223
+      }
+     }
+    },
+    "slo_attainment": 0.9574468085106383,
+    "slo_determined_requests": 47
+   },
+   "start_time": 1794548509.0834835,
+   "end_time": 1794548513.0834835,
+   "duration": 4.0
+  }
+ ]
+}

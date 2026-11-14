@@ -1,0 +1,21 @@
+{{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+# Lets the cluster's monitoring for user-defined projects scrape Ray's Prometheus
+# metrics from every server pod, through the Service's port named metrics
+# (server.metricsPort). The autoscaler (scaledobject.yaml) reads vLLM's
+# waiting-request gauge from there. Monitoring for user-defined projects must be
+# enabled on the cluster; this pattern does not change that setting.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ray-serve-llm
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-serve-llm
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+{{- end }}

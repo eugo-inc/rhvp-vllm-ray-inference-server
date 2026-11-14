@@ -36,11 +36,14 @@ clusterGroup:
       channel: stable
 
   # Added to every application and to the cluster group itself. A file that does
-  # not exist is skipped. Only overrides/values-gpu-machineset-create-AWS.yaml
-  # exists, so the GPU machine job runs only with global.gpuMachineSet: create
-  # on AWS.
+  # not exist is skipped. Only two exist:
+  #   - overrides/values-gpu-machineset-create-AWS.yaml, so the GPU machine job
+  #     runs only with global.gpuMachineSet: create on AWS;
+  #   - overrides/values-scaleout-keda.yaml, so Red Hat's Custom Metrics
+  #     Autoscaler is installed only with global.scaleOut.mode: keda.
   sharedValueFiles:
     - '/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml'
+    - '/overrides/values-scaleout-{{ $.Values.global.scaleOut.mode }}.yaml'
 
   # Application keys equal the chart folder names under charts/all/.
   applications:
@@ -79,6 +82,8 @@ clusterGroup:
       # setting or changing image.override on a running install, follow the
       # three steps in AGENTS.md, Troubleshooting (oc set image, then prune the
       # build objects the chart no longer renders).
+      # A list: overrides/values-scaleout-keda.yaml restates these rules and adds
+      # one for the autoscaler's pause; keep the two in step.
       ignoreDifferences:
         - group: apps
           kind: Deployment

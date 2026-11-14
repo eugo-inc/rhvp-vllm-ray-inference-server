@@ -29,6 +29,16 @@ global:
     # Hugging Face commit of that repository; empty means its newest commit.
     revision: 7ae557604adf67be50417f59c2c2f167def9a775
 
+  # Scale-out across server pods. One of:
+  #   none     - one server pod (the default). Inside that pod, Ray Serve can
+  #              still add replicas (server.autoscaling in
+  #              charts/all/ray-serve-llm/values.yaml).
+  #   keda     - OpenShift's Custom Metrics Autoscaler adds and removes whole
+  #              server pods on vLLM's waiting-request count (settings:
+  #              scaleOut in charts/all/ray-serve-llm/values.yaml).
+  scaleOut:
+    mode: none
+
   # Compare two inference-server images on this model, on the same GPU, with
   # the same requests (README, "Compare two images"). Off by default.
   #
@@ -57,6 +67,13 @@ global:
   # the run repeats. Setting enabled back to false deletes nothing.
   compare:
     enabled: false
+    # levels   - rounds of the two sides, each launch loaded at
+    #            load.concurrencies (described above). The default.
+    # scaleout - the scale-out benchmark (the commented example at the end of
+    #            this block). It runs with scripts/compare-local.sh (docker)
+    #            for now: the OpenShift Job refuses it (PLAN_INVALID) until
+    #            its scale round is built.
+    mode: levels
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
     runName: vllm-two-releases
     # Exactly two sides: A, the baseline, first; then B, the candidate. Every
@@ -124,6 +141,51 @@ global:
       # samples than energy.minSamples (10) gets no figure, and at 8 rounds one
       # missing figure of side A or B costs a primary case its verdict.
       source: auto
+    # Mode scaleout, for scripts/compare-local.sh (its config file is JSON
+    # with these keys, plus model). Its rounds are the same A, A~same, B,
+    # B~same. Each scored launch starts one replica of its side, then sends
+    # requests at a fixed rate (the surge) through a router that picks the
+    # replica with the fewest requests in flight, and starts a second replica
+    # of the same image stepAfterSeconds after the surge's first request. The
+    # primary cases are the new replica's time to first answer and the share
+    # of the surge's requests within the latency goals. With two primaries, 7
+    # rounds are the fewest that can give a verdict, and at 8 rounds all 8
+    # must lean the same way. A figure of 0 (say, a surge with no request
+    # within the goals) is not a ratio: that case gets NO VERDICT. 8 rounds
+    # with the warm-up start 66 servers (two in each scored launch, twins
+    # included); about 5 to 7 hours is an estimate, never timed on a GPU.
+    # Energy is not measured in this mode. compileCache: warm (docker only)
+    # keeps a side's compile caches from its warm-up round for its scored
+    # rounds; cold, the default, starts every replica with empty caches.
+    #   mode: scaleout
+    #   sides:
+    #     - name: vllm-0-32-0
+    #       image: docker.io/vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+    #       preset: vllm-openai
+    #       compileCache: cold
+    #     - name: vllm-0-33-0
+    #       image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
+    #       preset: vllm-openai
+    #       compileCache: cold
+    #   rounds: {count: 8, warmup: true, twins: both}
+    #   server:
+    #     # Each replica's share of the GPU: with sharedGpu, two replicas
+    #     # need it at most 0.475, so 0.85 above is refused in this mode.
+    #     gpuMemoryUtilization: 0.4
+    #     maxModelLen: 8192
+    #   scaleOut:
+    #     # Requests per second: above what one replica serves within the
+    #     # goals, and below twice that. 4 is a placeholder; README, "Picking
+    #     # the surge rate", says how to find the rate for your sides.
+    #     requestRate: 4
+    #     surgeSeconds: 300
+    #     stepAfterSeconds: 30
+    #     ttftMs: 1000     # goal: time to first token, at most
+    #     tpotMs: 100      # goal: inter-token latency, at most
+    #     # Both replicas of a side on one GPU. false: each on a GPU of its
+    #     # own, given with REPLICA_GPUS (scripts/compare-local.sh); a run
+    #     # whose REPLICA_GPUS does not match this setting is refused.
+    #     sharedGpu: true
 
 main:
   variant: prod

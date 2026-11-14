@@ -113,11 +113,11 @@ RUN set -eux; \
     chgrp -R 0 /opt/app-root/home /cache /tmp/r /models; \
     chmod -R g=u /opt/app-root/home /cache /tmp/r /models
 
-COPY serve_app.py rhvp_status.py entrypoint.sh /opt/app-root/src/
+COPY serve_app.py rhvp_status.py rhvp_scale.py entrypoint.sh /opt/app-root/src/
 
 RUN set -eux; \
     chmod 0755 /opt/app-root/src/entrypoint.sh; \
-    chmod 0644 /opt/app-root/src/serve_app.py /opt/app-root/src/rhvp_status.py; \
+    chmod 0644 /opt/app-root/src/serve_app.py /opt/app-root/src/rhvp_status.py /opt/app-root/src/rhvp_scale.py; \
     /opt/app-root/venv/bin/python -m compileall -q /opt/app-root/src; \
     /opt/app-root/venv/bin/python -c "from importlib.metadata import version as v; print(*(p + ' ' + v(p) for p in ('ray', 'vllm', 'torch')))"
 

@@ -13,10 +13,25 @@ server). A launch whose GuideLLM timed out runs once more (LOAD_RETRIES): the si
 the GPU check and timed from that new start, and GuideLLM runs with the same requests (the same load seed). Sent
 again to the same server, those requests could find their prompts in its prefix cache, which no other launch has.
 Every figure of the launch then comes from that second try; the first try's files are kept as *.try-1.*, its notes
-start with "try 1:", and nothing it measured stays in the launch's figures, also when the launch then fails or is
-stopped. The launch's `load_timeouts` counts every time-out and `load_retries` the loads that ran again; a second
-time-out is LOAD_FAILED. The analysis counts every time-out against its side, so a server that hangs under load is
-never hidden behind a launch that finished on its second try.
+start with "try 1:", its server records are marked discarded, and nothing it measured stays in the launch's figures,
+also when the launch then fails or is stopped (the launch's teardown finishes a discard that a failed stop or a
+SIGTERM cut short). The launch's `load_timeouts` counts every time-out and `load_retries` the loads that ran again; a
+second time-out is LOAD_FAILED. The analysis counts every time-out against its side, so a server that hangs under
+load is never hidden behind a launch that finished on its second try.
+
+The scale round (plan mode scaleout, every scored launch; a warm-up launch is the same in both modes). The side's
+first replica starts and is timed as in mode levels; a router (router.py, least-busy) is put in front of it, and
+GuideLLM's surge goes through the router. At scale_out.step_after_s after the router saw the surge's first request
+(the forced step), the runner starts a second replica of the same side, times it from its start to its first answer,
+and adds it to the router. The launch keeps how many requests each replica got (`scale.router`), so the new
+replica's share of the surge is on record. A second replica that never answers fails the launch (SIDE_NEVER_READY);
+one that answers only after the surge has ended is still timed, with a share of 0. A twin's scale round is its
+side's. When GuideLLM times out, the launch runs once more as in mode levels (LOAD_RETRIES): GuideLLM, the router and
+the replicas that had started are taken down, and a new first replica is started and timed, then the surge runs with
+the same requests and a new second replica.
+
+Every server a launch starts has a server record in the launch's `servers` (servers.py): what the runner ran, and the
+environment the server process saw when the backend can read it (`server_facts`).
 
 SIGTERM (a deleted Job, or the Job's time limit; SIGINT too) stops the run without waiting for the launch: the
 launch is cut short and recorded as STOPPED, its side is taken down, the backend cleans up, and the results file is
@@ -44,17 +59,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import time
 import traceback
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 
 import httpx
 
-from . import analyze, energy, guidellm, logs, plan as plans, probe, report, stats, summary
+from . import analyze, energy, guidellm, logs, plan as plans, probe, report, servers, stats, summary
 
 HARNESS = {"name": "rhvp_compare", "version": "1"}
 
@@ -72,14 +89,15 @@ LOAD_FAILED = "LOAD_FAILED"            # GuideLLM failed, or timed out in both t
 STOPPED = "STOPPED"                    # the runner was told to stop (SIGTERM) during the launch
 RUNNER_ERROR = "RUNNER_ERROR"          # anything else: the platform's API, or a fault in the runner
 LAUNCH_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPED, RUNNER_ERROR)
-#: How many more times a side is started in one launch when its server stopped at vLLM's start-up memory check
-#: (logs.memory_profiling_failed); recorded in the launch's start_retries. A second such failure of the same start is
-#: SIDE_FAILED. A launch whose load runs again (LOAD_RETRIES) starts the side anew, and that start gets its own retry.
+#: How many more times a server is started in one launch when it stopped at vLLM's start-up memory check
+#: (logs.memory_profiling_failed): the side, and in mode scaleout also the replica the forced step adds. Recorded in
+#: the launch's start_retries and in that server's record. A second such failure of the same start is SIDE_FAILED. A
+#: launch whose load runs again (LOAD_RETRIES) starts its servers anew, and each new start gets its own retry.
 START_RETRIES = 1
 #: How many more times a launch runs after its GuideLLM timed out (LoadError.timed_out), so one stall of the load tool
-#: is not a failure of the side. The retry takes the side down and starts it again (see the module's docstring); the
-#: launch's load_timeouts counts the time-out at once, its load_retries only once the second load has begun. A
-#: second time-out is LOAD_FAILED.
+#: is not a failure of the side. The retry takes the side's servers down and starts the launch again (see the
+#: module's docstring); the launch's load_timeouts counts the time-out at once, its load_retries only once the second
+#: load has begun. A second time-out is LOAD_FAILED.
 LOAD_RETRIES = 1
 #: The run's `error_code`, null when every planned launch finished:
 LAUNCHES_FAILED = "LAUNCHES_FAILED"  # every launch ran and some failed (status partial)
@@ -147,6 +165,13 @@ class Backend(Protocol):
 
     def run_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> Path: ...
 
+    # The scale round also needs (plan mode scaleout):
+    # - `start(plan, launch, side, spec, replica=2)`: the launch's second replica, next to the first (`replica` is
+    #   passed only for 2);
+    # - `router(plan, targets, out_dir)`: a router in front of `targets`, with `url`, `add(target) -> dict`,
+    #   `stats() -> dict` and `stop()` (router.Process);
+    # - `start_load(plan, launch, target, out_dir)`: GuideLLM started in the background (guidellm.Running).
+
     def sampler(self, plan: Mapping, handle: Any) -> Sampler | None: ...
 
     def logs(self, handle: Any) -> str: ...
@@ -159,6 +184,9 @@ class Backend(Protocol):
 
     # Optional, each called only when the backend has it:
     # - `check_alone()`: raise RunActive when another comparison is running. Called before anything is changed.
+    # - `check_plan(plan)`: raise PlanError for a plan this backend cannot run as declared (dockerapi.py: a
+    #   scaleOut.sharedGpu that does not match where the replicas would run). Called by main_run before anything
+    #   is changed, so the run ends PLAN_INVALID.
     # - `restore_server() -> bool | None`: bring back the live server the backend took away in prepare(); True once
     #   it is back (and checked), None when there was nothing to bring back; raises when it could not. Called again
     #   until it has worked, so it must do nothing once the server is back.
@@ -175,6 +203,9 @@ class Backend(Protocol):
     #   read that failed during a stop; each becomes a note of the run.
     # - `publish(run_id, status_text, result_text_or_None)` keeps the short status where a reader without the
     #   results volume finds it (kube.py: a ConfigMap). Called after every save.
+    # - `server_facts(handle) -> dict`: what a server ran with, read while it runs: `env` (the server process's
+    #   environment) and `env_source` (servers.ENV_SOURCES), `image_entrypoint` and `image_cmd`, and the GPU request
+    #   the server got (`gpus`) with the UUIDs it reached (`gpu_uuids`).
 
 
 def write_json(path: Path, data: Mapping) -> None:
@@ -389,6 +420,20 @@ class Runner:
             self._interruptible = False
             raise Stopped()
 
+    @contextmanager
+    def _held_off(self) -> Iterator[None]:
+        """A few quick steps that a stop must not cut half-way (renaming a discarded try's files): a SIGTERM that comes
+        in meanwhile is raised as Stopped right after them."""
+        was = self._interruptible
+        self._interruptible = False
+        try:
+            yield
+        finally:
+            self._interruptible = was
+        if was and self._stopping:
+            self._interruptible = False
+            raise Stopped()
+
     def _describe(self) -> None:
         try:
             facts = self.backend.describe() or {}
@@ -411,9 +456,12 @@ class Runner:
                         "side": launch["side"], "of": launch["of"], "kind": launch["kind"], "status": "failed",
                         "error": None, "error_code": None, "started_at": utc_now(), "finished_at": None,
                         "node": None, "image_digest": None, "server_version": None, "startup": None, "levels": [],
-                        "values": {}, "artifacts": {}, "starts": 0, "start_retries": 0, "load_timeouts": 0,
-                        "load_retries": 0}
-        held: dict = {"handle": None}
+                        "values": {}, "artifacts": {}, "servers": [], "starts": 0, "start_retries": 0,
+                        "load_timeouts": 0, "load_retries": 0}
+        # Everything the launch has running, so the teardown takes it down whatever happened: the servers in start
+        # order (`replicas`, the first replica first), GuideLLM in the background and the router (mode scaleout), and
+        # a discard of a try that is not finished yet (`discard`, see _discard_try).
+        held: dict = {"replicas": [], "load": None, "router": None, "discard": None}
         try:
             self._interruptible = True  # SIGTERM from here on raises Stopped
             try:
@@ -437,8 +485,16 @@ class Runner:
         finally:
             if self._stopping:  # also a stop that came in after the launch's own work: the server back first
                 self._begin_stop()
-            if held["handle"] is not None:  # a try being discarded keeps its log under the try's name
-                self._after(held["handle"], record, out_dir, rel, *held.get("log_as", ("server.log", "server_log")))
+            self._stop_scale_helpers(held, record)
+            if held["discard"] is not None:  # a discard that failed or was stopped partway: finish it here
+                self._finish_discard(spec, record, out_dir, rel, held, quiet=True)
+            for entry in reversed(held["replicas"]):  # the added replica first, the first replica last
+                if entry["replica"] == 1:
+                    self._record_server(entry, spec, record)
+                    self._after(entry["handle"], record, out_dir, rel)
+                else:
+                    self._after_replica(entry, spec, record, out_dir, rel)
+            record["servers"].sort(key=lambda item: (not item.get("discarded"), item["replica"]))  # tries in order
             record["finished_at"] = utc_now()
         record.pop("_reported_version", None)
         record.pop("_started_epoch", None)
@@ -446,9 +502,12 @@ class Runner:
 
     def _launch(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                 held: dict) -> None:
-        """Wait for the GPU, start the side, time its start, load it; any failure raises. A load whose GuideLLM timed
-        out runs the launch once more (LOAD_RETRIES) from a new start of the side, so the second try meets the same
-        conditions as every other launch: a server that has served no load, and the same requests."""
+        """Wait for the GPU, start the side, time its start, load it (mode levels) or run the scale round (mode
+        scaleout, `_surge`); any failure raises. A load whose GuideLLM timed out runs the launch once more
+        (LOAD_RETRIES) from a new start of the side, so the second try meets the same conditions as every other
+        launch: a server that has served no load (in mode scaleout, a first replica that has served no surge), and
+        the same requests."""
+        scale = self.plan.get("mode") == plans.SCALEOUT and launch["kind"] != plans.WARMUP
         tries = 0
         while True:
             first_note = len(record.get("notes") or [])  # the notes from here on belong to this try
@@ -456,7 +515,10 @@ class Runner:
             if launch["kind"] == plans.WARMUP:
                 return
             try:
-                record["levels"] = self._load(launch, handle, target, out_dir, rel, record, tries)
+                if scale:
+                    self._surge(launch, side, spec, record, out_dir, rel, held, target, tries)
+                else:
+                    record["levels"] = self._load(launch, handle, target, out_dir, rel, record, tries)
             except guidellm.LoadError as error:
                 if not error.timed_out:
                     raise
@@ -464,7 +526,7 @@ class Runner:
                 if tries >= LOAD_RETRIES:
                     raise
                 tries += 1
-                self._discard_try(record, out_dir, rel, held, error, tries, first_note)
+                self._discard_try(spec, record, out_dir, rel, held, error, tries, first_note)
                 continue
             except BaseException as error:  # a stop after a time-out: while GuideLLM or the sampler was stopped
                 cause = error.__context__
@@ -472,14 +534,39 @@ class Runner:
                         isinstance(cause, guidellm.LoadError) and cause.timed_out):
                     record["load_timeouts"] += 1
                 raise
-            record["values"].update(guidellm.flat_values(record["levels"]))
+            if not scale:
+                record["values"].update(guidellm.flat_values(record["levels"]))
             return
+
+    def _start(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, held: dict, replica: int,
+               retries: int) -> dict:
+        """Start one server of the launch (replica 1, the side; replica 2, the one a scale launch adds) and hold it at
+        once, so the teardown takes it down whatever happens next. It counts in the launch's `starts` once the
+        platform has taken it, and a start again after vLLM's start-up memory check (`retries` 1) counts in
+        `start_retries`, with its note, only then too."""
+        started_at, epoch = utc_now(), self.wall()
+        if replica == 1:
+            handle = self.backend.start(self.plan, launch, side, spec)
+        else:
+            handle = self.backend.start(self.plan, launch, side, spec, replica=replica)
+        entry = {"replica": replica, "handle": handle, "started_at": started_at, "epoch": epoch,
+                 "start_retries": retries}
+        held["replicas"].append(entry)
+        record["starts"] += 1
+        if retries:  # only now has the server started again
+            record["start_retries"] += 1
+            record.setdefault("notes", []).append(
+                "the side was started once more after vLLM's start-up memory check, and its start is timed from then"
+                if replica == 1 else
+                f"replica {replica} was started once more after vLLM's start-up memory check; its time to first "
+                "answer still counts from when it was first asked for")
+        return entry
 
     def _start_side(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
                     held: dict):
-        """Wait for the GPU, start the side and time it to its first answer: (handle, target). A server that stopped
-        at vLLM's start-up memory check is started once more (START_RETRIES), and its start is timed from that
-        start."""
+        """Wait for the GPU, start the side (in mode scaleout, its first replica) and time it to its first answer:
+        (handle, target). A server that stopped at vLLM's start-up memory check is started once more
+        (START_RETRIES), and its start is timed from that start."""
         timeout = self.plan["server"]["warmup_timeout_s" if launch["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
         retries = 0
@@ -487,13 +574,8 @@ class Runner:
             self.backend.gpu_free(self.plan, side)
             record["_started_epoch"] = self.wall()
             t0 = self.clock()
-            handle = held["handle"] = self.backend.start(self.plan, launch, side, spec)
-            record["starts"] += 1
-            if retries:  # only now has the side started again
-                record["start_retries"] += 1
-                record.setdefault("notes", []).append(
-                    "the side was started once more after vLLM's start-up memory check, and its start is timed "
-                    "from then")
+            entry = self._start(launch, side, spec, record, held, 1, retries)
+            handle = entry["handle"]
             deadline = t0 + timeout
             target = self.backend.endpoint(handle, deadline)
             alive = lambda: self.backend.alive(handle)  # noqa: E731
@@ -506,81 +588,289 @@ class Runner:
                     record["_reported_version"] = probe.reported_version(client)
                 break
             except probe.StartFailed as error:
-                if error.never_ready or retries >= START_RETRIES:
-                    raise
-                if not self._start_again(handle, record, out_dir, rel, error, retries + 1):
+                if (error.never_ready or retries >= START_RETRIES
+                        or not self._start_again(entry, record, out_dir, rel, error, held)):
                     raise
                 retries += 1
-                held["handle"] = None  # torn down; the next start sets it
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["values"].update({"startup/ready_s": ready_s, "startup/first_answer_s": first_s})
         return handle, target
 
-    def _start_again(self, handle, record: dict, out_dir: Path, rel: str, error: Exception, attempt: int) -> bool:
+    def _start_again(self, entry: dict, record: dict, out_dir: Path, rel: str, error: Exception, held: dict) -> bool:
         """When the server's log shows vLLM's memory-profiling check failing: keep that log as
-        server.attempt-<attempt>.log, take the side down and return True (the launch starts it again). Anything
-        else: False, and the launch fails."""
+        server.attempt-<n>.log (server-2.attempt-<n>.log for the replica a scale launch adds), take that server down,
+        let go of it and return True (the launch starts it again). Anything else: False, and the launch fails."""
+        handle, n = entry["handle"], entry["replica"]
         try:
             text = self.backend.logs(handle)
         except Exception:
             return False
         if not logs.memory_profiling_failed(text):
             return False
-        name = f"server.attempt-{attempt}.log"
+        attempt = entry["start_retries"] + 1
+        stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
+        name = f"{stem}.attempt-{attempt}.log"
         (out_dir / name).write_text(text, encoding="utf-8")
-        record["artifacts"][f"server_log_attempt_{attempt}"] = f"{rel}/{name}"
+        record["artifacts"][f"{key}_attempt_{attempt}"] = f"{rel}/{name}"
+        who = "the side" if n == 1 else f"replica {n}"
         record.setdefault("notes", []).append(
-            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); the side is to be taken down "
+            f"{error} at vLLM's start-up memory check ({logs.MEMORY_PROFILING_ERROR}); {who} is to be taken down "
             f"and started once more ({name} is the log of the start that stopped)")
         self.backend.stop(handle)
+        held["replicas"].remove(entry)  # torn down; the next start holds the new one
         return True
 
-    def _discard_try(self, record: dict, out_dir: Path, rel: str, held: dict, error: Exception, tries: int,
-                     first_note: int) -> None:
-        """After a load whose GuideLLM timed out: clear what the try measured, keep every file of it as *.try-N.*
-        (artifact keys *_try_N), mark its notes as the try's, and take the side down, so the launch starts again
-        from the GPU check. The figures go first and the note before the teardown, so a teardown that fails or is
-        stopped half-way leaves a failed launch with none of the try's figures, and says why."""
-        record.pop("_reported_version", None)
-        record["startup"], record["levels"], record["values"] = None, [], {}
-        renamed: dict[str, str] = {}
+    # ---- the scale round (plan mode scaleout) ----
 
-        def keep(name: str, key: str) -> None:
-            stem, dot, ext = name.rpartition(".")
-            kept = f"{stem}.try-{tries}{dot}{ext}"
-            if (out_dir / name).exists():
-                (out_dir / name).replace(out_dir / kept)
-                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
-                renamed[name] = kept
+    def _surge(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, out_dir: Path, rel: str,
+               held: dict, target: str, retry: int = 0) -> None:
+        """The surge through the router; the second replica at the forced step; the surge's figures, and how the
+        router shared it out. `retry`: the try this is after a GuideLLM time-out (0 for the first)."""
+        scale = self.plan["scale_out"]
+        for stale in ("guidellm.json", "guidellm.log"):  # from an earlier attempt of the run in a reused folder
+            (out_dir / stale).unlink(missing_ok=True)
+        router = held["router"] = self.backend.router(self.plan, [target], out_dir)
+        if retry:  # only now does the surge run again
+            record["load_retries"] = retry
+            record.setdefault("notes", []).append(
+                f"the launch ran once more from a new first replica, with the same requests (the first try's files "
+                f"are the *.try-{retry}.* files)")
+        running = held["load"] = self.backend.start_load(self.plan, launch, router.url, out_dir)
+        load_deadline = self.clock() + self.plan["load"]["timeout_s"]
+        surge_at = None
+        while surge_at is None:  # the surge starts when its first request reaches the router
+            surge_at = router.stats().get("first_request_at")
+            if surge_at is None:
+                if running.poll() is not None:
+                    running.finish()  # LoadError when it failed
+                    raise guidellm.LoadError("GuideLLM ended before it sent a request")
+                if self.clock() > load_deadline:  # GuideLLM hung before its first request: a time-out
+                    raise guidellm.LoadError("GuideLLM sent no request before its time limit", timed_out=True)
+                self.sleep(0.25)
+        step_at = surge_at + scale["step_after_s"]
+        while (left := step_at - self.wall()) > 0:
+            if running.poll() is not None:
+                running.finish()
+                raise guidellm.LoadError("the surge ended before the forced step")
+            self.sleep(min(left, 0.5))
+        record["scale"] = {"surge_started_at": _iso(surge_at), "step_after_s": scale["step_after_s"],
+                           "step_at_s": None, "new_replica": None, "router": None, "new_replica_share": None,
+                           "events": [], "load_triggered_s": None}
+        timeout = self.plan["server"]["ready_timeout_s"]
+        t0 = self.clock()
+        deadline = t0 + timeout
+        model = self.plan["model"]["id"]
+        retries, asked_epoch = 0, None
+        while True:  # a start that stops at vLLM's memory check is tried once more, and its time counts
+            entry = self._start(launch, side, spec, record, held, 2, retries)
+            if asked_epoch is None:
+                asked_epoch = entry["epoch"]
+                record["scale"]["step_at_s"] = round(asked_epoch - surge_at, 3)
+            entry["epoch"] = asked_epoch  # its log's phases: from the first ask
+            handle2 = entry["handle"]
+            target2 = self.backend.endpoint(handle2, deadline)
+            alive2 = lambda: self.backend.alive(handle2)  # noqa: E731
+            try:
+                with self.client(target2) as client:
+                    ready_s = probe.wait_ready(client, model, t0, deadline, alive2)
+                    first_s = probe.first_answer(client, model, t0, deadline, alive2,
+                                                 self.plan["server"]["first_answer_tokens"],
+                                                 self.plan["load"]["request_format"])
+                break
+            except probe.StartFailed as error:
+                if (error.never_ready or retries >= START_RETRIES
+                        or not self._start_again(entry, record, out_dir, rel, error, held)):
+                    raise
+                retries += 1
+        surge_over = running.poll() is not None
+        joined = router.add(target2) or {}
+        joined_at = joined.get("joined_at") if isinstance(joined.get("joined_at"), (int, float)) else self.wall()
+        record["scale"]["new_replica"] = {
+            "ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
+            "joined_at_s": round(joined_at - surge_at, 3), "joined_during_surge": not surge_over,
+            "clock": "runner, from just before the second replica was asked for", "breakdown": []}
+        record["values"].update({"scale/ready_s": ready_s, "scale/first_answer_s": first_s})
+        report_path = running.finish()  # a time-out: _launch runs the launch once more
+        record["artifacts"]["load_report"] = f"{rel}/{report_path.name}"
+        raw = json.loads(report_path.read_text(encoding="utf-8"))
+        version = guidellm.version(raw)
+        if version:
+            self.results["provenance"]["load_tool"]["version"] = version
+        level = guidellm.surge_level(raw)
+        level["energy"] = energy.none_entry("none", "energy is not measured in mode scaleout")
+        record["levels"] = [level]
+        record["values"].update(guidellm.surge_values(level))
+        record["scale"]["router"] = self._router_stats(router.stats(), [target, target2], surge_at)
+        sent = [b["sent"] for b in record["scale"]["router"]["backends"]]
+        record["scale"]["new_replica_share"] = round(sent[1] / sum(sent), 4) if sum(sent) else None
 
-        for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's server.attempt-1.log
-            if "_try_" not in key:
-                del record["artifacts"][key]
-                keep(path.rpartition("/")[2], key)
-        keep("guidellm.log", "guidellm")
-        keep("guidellm.json", "load_report")  # a report the stopped GuideLLM left; _load removed any older one
-        def kept_names(text: str) -> str:
-            for old, new in renamed.items():
-                text = text.replace(old, new)
-            return text
+    def _router_stats(self, counts: Mapping, targets: list[str], surge_at: float) -> dict:
+        """The router's counts per replica (replica 1 first), its times in seconds after the surge's start."""
+        by_url = {b.get("url"): b for b in counts.get("backends") or []}
+        out = []
+        for replica, url in enumerate(targets, start=1):
+            b = by_url.get(url) or {}
 
-        notes = record.setdefault("notes", [])
-        for i in range(first_note, len(notes)):  # such as a power sampler that did not start in that try
-            notes[i] = f"try {tries}: {kept_names(notes[i])}"
-        notes.append(f"{kept_names(str(error))}; the side is to be taken down and the launch run once more from a new "
-                     f"start with the same requests (that try's files are the *.try-{tries}.* files)")
-        name, key = f"server.try-{tries}.log", f"server_log_try_{tries}"
-        held["log_as"] = (name, key)  # a stop from here on: the teardown keeps this try's log under its own name
-        handle = held["handle"]
+            def since(key: str) -> float | None:
+                value = b.get(key)
+                return round(value - surge_at, 3) if isinstance(value, (int, float)) else None
+
+            out.append({"replica": replica, "sent": int(b.get("sent") or 0), "finished": int(b.get("finished") or 0),
+                        "failed": int(b.get("failed") or 0), "cancelled": int(b.get("cancelled") or 0),
+                        "max_in_flight": int(b.get("max_in_flight") or 0), "first_s": since("first_at"),
+                        "last_s": since("last_at")})
+        return {"policy": counts.get("policy") or "least-busy", "backends": out}
+
+    def _stop_scale_helpers(self, held: dict, record: dict) -> None:
+        """Stop the surge and the router, if the launch got that far and they still run. Each is let go of once its
+        stop was tried, so a stop that cuts this short leaves the rest to the next call."""
+        running, router = held.get("load"), held.get("router")
+        if running is not None and running.poll() is None:
+            try:
+                running.stop()
+            except Exception as error:
+                record.setdefault("notes", []).append(f"GuideLLM not stopped: {type(error).__name__}")
+        held["load"] = None
+        if router is not None:
+            try:
+                router.stop()
+            except Exception as error:
+                record.setdefault("notes", []).append(f"router not stopped: {type(error).__name__}: {error}")
+        held["router"] = None
+
+    def _after_replica(self, entry: dict, spec: Mapping, record: dict, out_dir: Path, rel: str) -> None:
+        """The added replica: its server record, its log (server-<n>.log, with its start's breakdown), teardown."""
+        handle, n = entry["handle"], entry["replica"]
+        self._record_server(entry, spec, record)
         try:
-            (out_dir / name).write_text(self.backend.logs(handle), encoding="utf-8")
-            record["artifacts"][key] = f"{rel}/{name}"
-        except Exception as read_error:
-            notes.append(f"the server log of that try not read: {type(read_error).__name__}")
-        self.backend.stop(handle)
-        held["handle"] = None
-        held.pop("log_as", None)
+            text = self.backend.logs(handle)
+            (out_dir / f"server-{n}.log").write_text(text, encoding="utf-8")
+            record["artifacts"][f"server_log_{n}"] = f"{rel}/server-{n}.log"
+            new = (record.get("scale") or {}).get("new_replica")
+            if new is not None:
+                new["breakdown"] = logs.breakdown(text, entry["epoch"])
+        except Exception as error:
+            record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(error).__name__}")
+        try:
+            self.backend.stop(handle)
+        except Exception as error:
+            record.setdefault("notes", []).append(f"teardown of replica {n}: {type(error).__name__}: {error}")
+
+    def _record_server(self, entry: dict, spec: Mapping, record: dict, discarded: bool = False) -> None:
+        """The server's record: what the runner ran, and what the backend can read of what the server saw.
+        `discarded`: a server of a try that was run again (`_discard_try`). Written once per server: one already
+        recorded is skipped."""
+        if entry.get("recorded"):
+            return
+        facts: dict = {}
+        read = getattr(self.backend, "server_facts", None)
+        if read is not None:
+            try:
+                facts = read(entry["handle"]) or {}
+            except Exception as error:  # the server record says what it could not read
+                record.setdefault("notes", []).append(f"server facts of replica {entry['replica']} not read: "
+                                                      f"{type(error).__name__}")
+        source = facts.get("env_source") if facts.get("env_source") in servers.ENV_SOURCES else "none"
+        record["servers"].append(servers.record(
+            entry["replica"], spec.get("command"), spec.get("args") or [], facts.get("env"), source,
+            started_at=entry["started_at"], image_entrypoint=facts.get("image_entrypoint"),
+            image_cmd=facts.get("image_cmd"), start_retries=entry.get("start_retries", 0),
+            gpus=facts.get("gpus") if isinstance(facts.get("gpus"), str) else None,
+            gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None,
+            discarded=discarded))
+        entry["recorded"] = True
+
+    # ---- a try discarded after a GuideLLM time-out ----
+
+    def _discard_try(self, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict, error: Exception,
+                     tries: int, first_note: int) -> None:
+        """After a load (mode levels) or a surge (mode scaleout) whose GuideLLM timed out: clear what the try
+        measured, say why, stop GuideLLM and the router (mode scaleout), then `_finish_discard`: keep every file of
+        the try as *.try-N.* (artifact keys *_try_N), mark its notes as the try's, and take its servers down with
+        their server records marked discarded. The launch then starts again from the GPU check.
+
+        The figures go first and the note before anything that can fail or be stopped, so a launch cut short here
+        has none of the try's figures and says why. While `held["discard"]` is set, every server in `held` belongs to
+        the discarded try, and the launch's teardown finishes a discard that a failed stop or a SIGTERM cut short.
+        A failed stop here fails the launch, as that server may still hold the GPU and its name."""
+        record.pop("_reported_version", None)
+        record.pop("scale", None)
+        record["startup"], record["levels"], record["values"] = None, [], {}
+        notes = record.setdefault("notes", [])
+        if self.plan.get("mode") != plans.SCALEOUT:
+            what = "the side is to be taken down and the launch run once more from a new start"
+        elif len(held["replicas"]) > 1:
+            what = "both replicas are to be taken down and the launch run once more from a new first replica"
+        else:  # GuideLLM hung before the forced step: only the first replica had started
+            what = "the side is to be taken down and the launch run once more from a new first replica"
+        notes.append(f"{error}; {what} with the same requests (that try's files are the *.try-{tries}.* files)")
+        held["discard"] = {"tries": tries, "first_note": first_note, "note_at": len(notes) - 1, "renamed": None}
+        self._stop_scale_helpers(held, record)
+        self._finish_discard(spec, record, out_dir, rel, held)
+
+    def _finish_discard(self, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict,
+                        quiet: bool = False) -> None:
+        """The rest of a discard (`_discard_try`), each step done once, also when the teardown runs this again after
+        a stop or a failed stop: the try's files renamed and its notes marked (in one step a stop cannot cut), then
+        its servers taken down. `quiet` (the teardown): a failed stop becomes a note."""
+        discard = held["discard"]
+        tries = discard["tries"]
+        if discard["renamed"] is None:
+            with self._held_off():
+                renamed: dict[str, str] = {}
+
+                def keep(name: str, key: str) -> None:
+                    stem, dot, ext = name.rpartition(".")
+                    kept = f"{stem}.try-{tries}{dot}{ext}"
+                    if (out_dir / name).exists():
+                        (out_dir / name).replace(out_dir / kept)
+                        record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{kept}"
+                        renamed[name] = kept
+
+                record["artifacts"].pop("load_report", None)  # kept below under its try's name, if the file is there
+                for key, path in list(record["artifacts"].items()):  # such as a memory-check retry's .attempt-1.log
+                    if "_try_" not in key:
+                        del record["artifacts"][key]
+                        keep(path.rpartition("/")[2], key)
+                keep("guidellm.log", "guidellm")
+                keep("guidellm.json", "load_report")  # a report the stopped GuideLLM left; the load removed any older
+                keep("router.log", "router")
+                notes = record["notes"]
+                for i in range(discard["first_note"], discard["note_at"]):  # such as a sampler that did not start
+                    notes[i] = f"try {tries}: {_renamed(notes[i], renamed)}"
+                notes[discard["note_at"]] = _renamed(notes[discard["note_at"]], renamed)
+                discard["renamed"] = renamed
+        for entry in list(reversed(held["replicas"])):  # the added replica first, the first replica last
+            self._discard_server(entry, spec, record, out_dir, rel, held, quiet)
+        held["discard"] = None
+
+    def _discard_server(self, entry: dict, spec: Mapping, record: dict, out_dir: Path, rel: str, held: dict,
+                        quiet: bool) -> None:
+        """One server of a discarded try: its server record marked discarded and its log as <stem>.try-N.log, each
+        once, then its teardown. `quiet` (the teardown): a failed stop becomes a note."""
+        n, tries = entry["replica"], held["discard"]["tries"]
+        self._record_server(entry, spec, record, discarded=True)
+        if not entry.get("log_kept"):
+            stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
+            name = f"{stem}.try-{tries}.log"
+            try:
+                (out_dir / name).write_text(self.backend.logs(entry["handle"]), encoding="utf-8")
+                record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{name}"
+            except Exception as read_error:
+                what = "the server log of that try" if n == 1 else f"the log of replica {n} of that try"
+                record.setdefault("notes", []).append(f"{what} not read: {type(read_error).__name__}")
+            entry["log_kept"] = True
+        try:
+            self.backend.stop(entry["handle"])
+        except Exception as stop_error:
+            if not quiet:
+                raise
+            record.setdefault("notes", []).append(
+                f"teardown of replica {n} of the discarded try: {type(stop_error).__name__}: {stop_error}")
+        held["replicas"].remove(entry)
+
+    # ---- the load (mode levels) ----
 
     def _load(self, launch: Mapping, handle, target: str, out_dir: Path, rel: str, record: dict,
               retry: int = 0) -> list[dict]:
@@ -648,13 +938,13 @@ class Runner:
                 result = energy.Power(None, result.samples, None, f"{result.note}; {note}")
             level["energy"] = energy.level_energy(level, result, sampler.source)
 
-    def _after(self, handle, record: dict, out_dir: Path, rel: str, log_name: str = "server.log",
-               log_key: str = "server_log") -> None:
-        """Logs, facts and teardown, whatever happened in the launch."""
+    def _after(self, handle, record: dict, out_dir: Path, rel: str) -> None:
+        """Logs, facts and teardown of the side (in mode scaleout, its first replica), whatever happened in the
+        launch."""
         try:
             text = self.backend.logs(handle)
-            (out_dir / log_name).write_text(text, encoding="utf-8")
-            record["artifacts"][log_key] = f"{rel}/{log_name}"
+            (out_dir / "server.log").write_text(text, encoding="utf-8")
+            record["artifacts"]["server_log"] = f"{rel}/server.log"
             if record.get("startup") is not None:
                 record["startup"]["breakdown"] = logs.breakdown(text, record.get("_started_epoch") or 0.0)
             version = record.get("_reported_version")
@@ -664,6 +954,14 @@ class Runner:
                 source = "log" if version else None
             if version:
                 record["server_version"] = {"vllm": version, "source": source}
+            scale = record.get("scale")
+            if scale is not None:  # the scale-ups the server itself logged (the pattern's rhvp-scale lines)
+                scale["events"] = logs.scale_events(text)
+                surge_at = summary_epoch(scale.get("surge_started_at"))
+                up = logs.first_scale_up(scale["events"], surge_at) if surge_at is not None else None
+                if up is not None:
+                    scale["load_triggered_s"] = round(up, 3)
+                    record["values"]["scale/load_triggered_s"] = up
         except Exception as error:
             record.setdefault("notes", []).append(f"server log not read: {type(error).__name__}")
         try:
@@ -690,6 +988,28 @@ class Runner:
             record.setdefault("notes", []).append(f"teardown: {type(error).__name__}: {error}")
 
 
+def _renamed(text: str, renamed: Mapping[str, str]) -> str:
+    """`text` with each file name in `renamed` (a whole name, not part of a longer one) replaced by its new name."""
+    if not renamed:
+        return text
+    names = "|".join(re.escape(name) for name in sorted(renamed, key=len, reverse=True))
+    return re.sub(rf"(?<![\w.-])({names})(?![\w.-])", lambda match: renamed[match.group(1)], text)
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def summary_epoch(text: str | None) -> float | None:
+    """Seconds since the epoch of a time the runner wrote (utc_now, _iso)."""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def _finish(results: Mapping, termination_log: str | None) -> None:
     """The run's last words: the results file as one line between marker lines in the log, and the short summary as
     the container's termination message (when the platform gives a path for it)."""
@@ -711,13 +1031,16 @@ def exit_code(results: Mapping) -> int:
 
 
 def plan_lines(the_plan: Mapping) -> list[str]:
-    """What a plan allows, before anything runs: the lineup, the launches, and whether a verdict is possible. The
-    note names the reason the analysis will give, checked in its order (analyze._decide): one round, too few rounds,
-    then a side without a twin."""
+    """What a plan allows, before anything runs: the lineup, the launches and the servers they start, and whether a
+    verdict is possible. The note names the reason the analysis will give, checked in its order (analyze._decide):
+    one round, too few rounds, then a side without a twin."""
     power = the_plan["power"]
     names = ", ".join(e["key"] for e in the_plan["lineup"])
-    out = [f"run {the_plan['run_id']}: {the_plan['rounds']} rounds of {names}, {len(the_plan['launches'])} server "
-           f"starts, {power['family_size']} primary cases of {len(the_plan['cases'])} ({power['plain']})"]
+    launches, starts = len(the_plan["launches"]), plans.server_starts(the_plan)
+    shown = (f"{launches} server starts" if starts == launches else
+             f"{launches} launches, {starts} server starts (two in each scored launch)")
+    out = [f"run {the_plan['run_id']}: {the_plan['rounds']} rounds of {names}, {shown}, {power['family_size']} "
+           f"primary cases of {len(the_plan['cases'])} ({power['plain']})"]
     no_twin = "no_floor or one_sided_floor"
     if the_plan["rounds"] == 1:
         out.append(f"note: {power['family_size']} primary cases need at least {power['min_rounds']} rounds for any "
@@ -757,6 +1080,13 @@ def main_run(config_path: str, results_root: str, backend: Backend, env: Mapping
     except plans.PlanError as error:
         _finish(summary.not_started(PLAN_INVALID, str(error)), termination_log)
         raise
+    check_plan = getattr(backend, "check_plan", None)
+    if check_plan is not None:
+        try:
+            check_plan(the_plan)
+        except plans.PlanError as error:
+            _finish(summary.not_started(PLAN_INVALID, str(error), the_plan["run_id"]), termination_log)
+            raise
     for line in plan_lines(the_plan):
         print(line, flush=True)
     deadline = env.get("RHVP_COMPARE_DEADLINE_SECONDS")

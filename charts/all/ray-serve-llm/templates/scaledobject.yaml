@@ -1,0 +1,70 @@
+{{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+{{- $so := .Values.scaleOut }}
+{{- /* scaleOut.minPods and scaleOut.maxPods are checked in _settings.tpl; these are the trigger's own. */ -}}
+{{- if not (and (include "ray-serve-llm.isNumber" $so.waitingRequestsPerPod) (gt (float64 $so.waitingRequestsPerPod) 0.0)) }}
+{{- fail (printf "scaleOut.waitingRequestsPerPod must be a number above 0; got %v" $so.waitingRequestsPerPod) }}
+{{- end }}
+{{- if not (and (include "ray-serve-llm.isWhole" $so.pollingIntervalSeconds) (ge (float64 $so.pollingIntervalSeconds) 1.0)) }}
+{{- fail (printf "scaleOut.pollingIntervalSeconds must be a whole number of at least 1; got %v" $so.pollingIntervalSeconds) }}
+{{- end }}
+{{- if not (and (include "ray-serve-llm.isWhole" $so.cooldownSeconds) (ge (float64 $so.cooldownSeconds) 0.0) (le (float64 $so.cooldownSeconds) 3600.0)) }}
+{{- fail (printf "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got %v" $so.cooldownSeconds) }}
+{{- end }}
+{{- if not (and (kindIs "string" $so.thanosUrl) (regexMatch "^https?://[^/]+" (toString $so.thanosUrl))) }}
+{{- fail (printf "scaleOut.thanosUrl must be an http:// or https:// address; got %v" $so.thanosUrl) }}
+{{- end }}
+# Across pods (global.scaleOut.mode: keda): Red Hat's Custom Metrics Autoscaler
+# (overrides/values-scaleout-keda.yaml) adds and removes whole server pods. Its
+# signal is vLLM's waiting-request gauge, which Ray exports as
+# ray_vllm_num_requests_waiting on the metrics port (servicemonitor.yaml), read
+# from the cluster monitoring's Thanos Querier with the token of ServiceAccount
+# thanos (triggerauthentication.yaml). The query sums the gauge over every server
+# pod, and the trigger's default AverageValue type divides it by the pod count:
+# a pod is added while more than scaleOut.waitingRequestsPerPod requests wait per
+# pod, up to scaleOut.maxPods.
+#
+# The image comparison's runner pauses this autoscaler for a run with the
+# annotation autoscaling.keda.sh/paused-replicas: "0", and removes it when the run
+# ends; the ray-serve-llm app ignores that annotation
+# (overrides/values-scaleout-keda.yaml).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ray-serve-llm
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+  annotations:
+    # The CRD exists only once the operator is installed; without this, the whole
+    # app's first sync would fail its dry run.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ray-serve-llm
+  minReplicaCount: {{ $so.minPods | int }}
+  maxReplicaCount: {{ $so.maxPods | int }}
+  # Between 1 and maxPods the HPA reads the metric on its own sync period (15 s
+  # by default), not on this interval; with minPods at 1 or more, this interval
+  # only sets how often KEDA refreshes the ScaledObject's status.
+  pollingInterval: {{ $so.pollingIntervalSeconds | int }}
+  advanced:
+    # KEDA's own cooldownPeriod applies only to a scale to 0, which minPods (at
+    # least 1) rules out. Between 1 and maxPods the HPA that KEDA creates scales,
+    # so scaleOut.cooldownSeconds is how long it waits before it removes a pod.
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ $so.cooldownSeconds | int }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $so.thanosUrl | quote }}
+        # Port 9092 of the Thanos Querier answers only for this namespace.
+        namespace: {{ .Release.Namespace | quote }}
+        query: {{ printf "sum(ray_vllm_num_requests_waiting{namespace=%q,service=%q})" .Release.Namespace "ray-serve-llm" | quote }}
+        threshold: {{ $so.waitingRequestsPerPod | toString | quote }}
+        authModes: bearer
+      authenticationRef:
+        name: keda-trigger-auth-prometheus
+{{- end }}

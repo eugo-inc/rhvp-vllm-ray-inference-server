@@ -21,7 +21,8 @@ SECTION_TITLE = {
     1: "Verdicts",
     2: "Start-up",
     3: "Energy per token",
-    4: "What was compared, and how",
+    4: "Scale-out",
+    5: "What was compared, and how",
 }
 SECTION_TEXT = {
     1: ("One row per case. B/A is the median, over the rounds, of side B's figure divided by side A's in the same "
@@ -39,11 +40,20 @@ SECTION_TEXT = {
     2: ("Time to ready runs from just before the runner asks for the side's pod until the server lists the model; "
         "time to first answer, until the first generated text of a streamed request comes back. Both are timed by "
         "the runner, the same way for every image, and the warm-up launches (which pull the image and download the "
-        "model) are left out. The phases below come from the servers' own log lines, as each server words them."),
+        "model) are left out. A side set to compileCache warm starts its scored launches with the compile caches its "
+        "warm-up launch left; the table in section 5 shows each side's setting. The phases below come from the "
+        "servers' own log lines, as each server words them."),
     3: ("Output tokens per joule at each concurrency level: the level's output tokens per second divided by the mean "
         "GPU power over the level's time window. The power is GPU-only power, the board power the GPU reports; the "
         "rest of the machine is not in it. No figure is given from fewer power samples than the plan asks for."),
-    4: ("The images as the node pulled them, the versions the servers reported, the GPU and the node, the method "
+    4: ("Runs in mode scaleout only. In each scored launch one replica of the side starts and answers; GuideLLM then "
+        "sends requests at a fixed rate (the surge) through a router that sends each request to the replica with the "
+        "fewest requests in flight. At a fixed time after the surge's first request (the forced step) the runner "
+        "starts a second replica of the same image, and the router sends it requests once it answers. The new "
+        "replica's start is timed like the first one's; the surge's figures are GuideLLM's, against latency goals "
+        "set before the first round. A twin's launch runs the same scale round, so these cases have a noise floor "
+        "too."),
+    5: ("The images as the node pulled them, the versions the servers reported, the GPU and the node, the method "
         "declared before the first round, and each side against its twin: the median of side / twin over the "
         "rounds and the noise floor it gives."),
 }
@@ -72,15 +82,37 @@ RUN_FAILED_LAUNCHES = "Launches that failed: {launches}."
 RUN_CODE = "Why the run did not finish: {code}."
 RUN_RETRIED = ("Launches whose side was started again after vLLM's start-up memory check failed (timed from the "
                "last start), with how many times it was started in all: {launches}.")
+RUN_RETRIED_SCALE = ("Launches with a server started again after vLLM's start-up memory check failed, with how many "
+                     "servers each started in all: {launches}. A launch's first replica is timed from its last start; "
+                     "the replica the forced step adds, from when it was first asked for.")
 RETRIED_LAUNCH = "{index} ({side}, {starts})"
+RETRIED_SERVERS = "{index} ({side}, {starts} servers)"
+RETRIED_REPLICAS = "{index} ({side}, {starts} servers; {replicas} started again)"
+RETRIED_REPLICA = "replica {replica}"
+RETRIED_DISCARDED = " of the discarded try"
 RUN_LOAD_RETRIED = "Launches whose GuideLLM timed out: {launches}. {how}"
 LOAD_RETRIED_HOW = ("After a time-out the side was taken down and the launch ran again from a new start, timed from "
                     "that start, with the same requests; every figure of such a launch comes from that second try. A "
                     "second time-out fails the launch (LOAD_FAILED).")
+LOAD_RETRIED_SCALE = ("After a time-out GuideLLM, the router and the replicas that had started were taken down, and "
+                      "the launch ran again from a new first replica, timed from that start, with the same requests "
+                      "and a new second replica; every figure of such a launch comes from that second try. A second "
+                      "time-out fails the launch (LOAD_FAILED).")
+LOAD_RETRIED_NONE = ("None of them ran again: each failed before its second try sent a request, so it has no "
+                     "figures (the files of its first try are its *.try-1.* files).")
+LOAD_RETRIED_NONE_ONE = ("It failed before its second try sent a request, so it has no figures (the files of its first "
+                         "try are its *.try-1.* files).")
+LOAD_RETRIED_SOME = ("A launch that did not run again failed before its second try sent a request, so it has no "
+                     "figures.")
 LOAD_RETRIED_RAN = "{index} ({side}): ran again"
 LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
+RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "
+              "a failed request counts as one that missed the goals in the share within the goals and in goodput. A "
+              "surge in which no request finished counts as 0 for both, and a figure of 0 gives its case NO "
+              "VERDICT.")
+RUN_SURGE = "launch {index} ({side}): {errored} failed, {successful} finished"
 ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
                 "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
 ENERGY_MIXED_LEVEL = "at {concurrency} streams, the energy counter in {counter} and the power samples in {power}"
@@ -99,6 +131,12 @@ ROUND_ONE = "round {n}"
 ROUND_MANY = "rounds {n}"
 TWIN_ZERO_SIDE = "side {side}"
 TWIN_ZERO_TWIN = "side {side}'s twin"
+#: sides[].compileCache, as the tables show it.
+CACHE_NAMES = {"cold": "cold", "warm": "warm"}
+CACHE_DIFFER = ("The two sides started with different compile caches: side A {a}, side B {b}. The start-up figures "
+                "and their verdicts compare the two cache settings together with the two images.")
+CACHE_BOTH_WARM = ("Both sides started their scored launches with warm compile caches, kept from their warm-up "
+                   "launches.")
 SIDE_LINE = "A = {a} · B = {b}"
 
 # ---- section 1: verdicts ----
@@ -158,13 +196,74 @@ ENERGY_SOURCE = {"dcgm": "DCGM, read from the cluster's monitoring", "nvidia-smi
 ENERGY_LINE = "Source: {source}. {label}. At least {samples} power samples per load level."
 ENERGY_MISSING = "No energy figure for: {what}. The results file says why, in each level's energy note."
 
-# ---- section 4: provenance ----
+# ---- section 4: scale-out ----
 
-SIDES_HEADERS = ("Side", "Name", "Image", "As pulled", "Server version")
+SCALE_OFF = ("No scale round in this run: it ran in mode levels, at fixed numbers of concurrent streams. Mode "
+             "scaleout runs with the docker backend (scripts/compare-local.sh) for now.")
+SCALE_LINE = ("Surge: {rate:g} requests per second for {surge:g} s. Forced step: the second replica is asked for "
+              "{step:g} s after the surge's first request. Latency goals: {goals}. Router: the replica with the "
+              "fewest requests in flight.")
+SCALE_GOAL_TTFT = "time to first token at most {value:g} ms"
+SCALE_GOAL_TPOT = "inter-token latency at most {value:g} ms"
+SCALE_GOALS_JOIN = " and "
+SCALE_GPU_SHARED = "Declared: both replicas of a side share one GPU (scaleOut.sharedGpu true)."
+SCALE_GPU_OWN = "Declared: each replica has its own GPU (scaleOut.sharedGpu false)."
+SCALE_GPU_GIVEN = ("GPUs each replica's container was given, from the server records, with the UUIDs nvidia-smi read "
+                   "through each request before the first launch: {given}. A vLLM server uses the first GPU it sees. "
+                   "For a MIG device the UUID is its parent GPU's.")
+SCALE_GPU_REPLICA = "replica {replica}: {gpus}"
+SCALE_GPU_REQUEST = "{request} ({uuids})"
+SCALE_GPU_OR = " or "
+SCALE_GPU_NO_UUID = "UUID not read"
+SCALE_GPU_NONE = "The sides ran without a GPU."
+SCALE_HEADERS = ("The second replica", "A median", "B median", "B/A median", "Verdict")
+SCALE_FACT_HEADERS = ("The second replica, per launch", "A median", "B median", "Launches (A, B)")
+SCALE_ASKED = "asked for, after the surge's first request"
+SCALE_JOINED = "first sent requests, after the surge's first request"
+SCALE_SHARE = "share of the surge's requests the router sent it"
+SCALE_LATE = ("Launches in which the second replica answered only after the surge had ended and got no requests: "
+              "{launches}.")
+SCALE_REQUESTS_HEADERS = ("Side", "Replica", "Sent", "Finished", "Failed", "Cancelled", "Most in flight")
+SCALE_REQUESTS_NOTE = ("The router's counts, summed over the side's own scored launches (its twin's are left out). "
+                       "Cancelled: requests still running when the surge ended, which GuideLLM leaves out of its "
+                       "figures.")
+SCALE_SURGE_RULE = ("A failed request counts as one that missed the goals, and requests still running when the "
+                    "surge ends are left out. A surge in which no request finished counts as 0 attainment and 0 "
+                    "goodput, and a figure of 0 is not a ratio: that case gets NO VERDICT.")
+SCALE_EVENTS = ("Scale-ups the servers logged themselves (the pattern's rhvp-scale lines): side A in {a} of {na} "
+                "launches, side B in {b} of {nb}. The runner's llm.yaml for this pattern's server allows one replica, "
+                "and a side on it logs none.")
+SCALE_PHASE_HEADERS = ("Second replica's phase, from its log", "A median", "B median", "Launches (A, B)")
+SCALE_NONE = "No scored launch of this run reached the forced step."
+#: summary.surge_rate_fit: the surge rate did not separate the sides.
+SCALE_RATE_ALL_MET = ("Every scored surge met the latency goals for all of its requests, on both sides: the rate "
+                      "never pushed the replicas past the goals, and the share within the goals cannot tell the "
+                      "sides apart. A higher scaleOut.requestRate suits these sides (README, \"Picking the surge "
+                      "rate\").")
+SCALE_RATE_ALL_FAILED = ("In every scored surge, on both sides, at least half of the requests GuideLLM judged (those "
+                         "that finished or failed) failed. A failed request counts as a miss, so the share within the "
+                         "goals then mostly counts failed requests. A lower scaleOut.requestRate may suit these sides "
+                         "(README, \"Picking the surge rate\").")
+SCALE_RATE_ALL_MISSED = ("In every scored surge, on both sides, at most 5% of the requests GuideLLM judged (those that "
+                         "finished or failed) met the latency goals: the rate kept both sides past the goals for "
+                         "nearly every request. A lower scaleOut.requestRate may suit these sides (README, \"Picking "
+                         "the surge rate\").")
+#: summary.surge_rate_fit's answer -> its note.
+SCALE_RATE_NOTES = {"all_met": SCALE_RATE_ALL_MET, "all_failed": SCALE_RATE_ALL_FAILED,
+                    "all_missed": SCALE_RATE_ALL_MISSED}
+
+# ---- section 5: provenance ----
+
+SIDES_HEADERS = ("Side", "Name", "Image", "As pulled", "Server version", "Compile cache")
 MACHINE_LINE = "GPU: {gpu} · count {count} · driver {driver} · node type {node} · {arch} · OpenShift {openshift}"
 LOAD_LINE = ("Load: GuideLLM {version}, {prompt} prompt and {output} output tokens per request, {seconds:g} s at "
              "each of {levels} concurrent streams, seed {seed}. Server seed {server_seed}.")
-PLAN_LINE = "Plan: {rounds} rounds of {lineup}, the order rotating from round to round{warmup}; {launches} launches."
+SURGE_LOAD_LINE = ("Load: GuideLLM {version}, {prompt} prompt and {output} output tokens per request, {rate:g} "
+                   "requests per second for {seconds:g} s in each scored launch, seed {seed}. Server seed "
+                   "{server_seed}.")
+PLAN_LINE = ("Plan: {rounds} rounds of {lineup}, the order rotating from round to round{warmup}; {launches} "
+             "launches.")
+PLAN_SCALE = " In mode scaleout each scored launch starts two servers: {starts} server starts in all."
 PLAN_WARMUP = ", after one warm-up launch per side"
 TWIN_HEADERS = ("Side", "Case", "Side / twin, median", "Noise floor", "Rounds", "p, not corrected")
 TWIN_NOTE = ("Each side against its twin, an identical copy of it in the same rounds: how far two launches of one "

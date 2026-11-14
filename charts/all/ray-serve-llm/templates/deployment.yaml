@@ -39,6 +39,11 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        {{- if include "ray-serve-llm.compileCacheKept" . }}
+        # The kept cache holds many small files: change their group only when the volume's
+        # top folder does not already have the pod's fsGroup, not on every start.
+        fsGroupChangePolicy: OnRootMismatch
+        {{- end }}
       nodeSelector:
         kubernetes.io/arch: {{ .Values.arch | quote }}
       affinity:
@@ -64,6 +69,13 @@ spec:
             - name: http
               containerPort: {{ .Values.server.httpPort | int }}
               protocol: TCP
+            {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+            # Ray's Prometheus metrics (ray.init _metrics_export_port); the autoscaler reads
+            # vLLM's waiting-request gauge from here (servicemonitor.yaml).
+            - name: metrics
+              containerPort: {{ .Values.server.metricsPort | int }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: RHVP_CONFIG
               value: /config/llm.yaml
@@ -77,6 +89,15 @@ spec:
               value: /cache/flashinfer
             - name: XDG_CACHE_HOME
               value: /cache/xdg
+            {{- if include "ray-serve-llm.compileCacheKept" . }}
+            # The CUDA driver's own cache of kernels it compiled from PTX; with /cache on a
+            # volume that outlives the pod (compileCache.mode), a later pod finds them.
+            - name: CUDA_CACHE_PATH
+              value: /cache/cuda
+            # 4 GiB, the driver's largest cache size.
+            - name: CUDA_CACHE_MAXSIZE
+              value: "4294967296"
+            {{- end }}
             - name: RAY_TMPDIR
               value: /tmp/r
             - name: HF_TOKEN
@@ -147,8 +168,13 @@ spec:
           persistentVolumeClaim:
             claimName: ray-serve-llm-models
         - name: cache
+          {{- if include "ray-serve-llm.compileCacheKept" . }}
+          persistentVolumeClaim:
+            claimName: ray-serve-llm-compile-cache
+          {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.server.cacheSizeLimit }}
+          {{- end }}
         - name: ray-tmp
           emptyDir: {}
         - name: dshm

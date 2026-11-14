@@ -35,7 +35,8 @@
     "command": null,
     "args": [],
     "env": {},
-    "gpu": true
+    "gpu": true,
+    "compile_cache": "cold"
    },
    {
     "key": "B",
@@ -45,7 +46,8 @@
     "command": null,
     "args": [],
     "env": {},
-    "gpu": true
+    "gpu": true,
+    "compile_cache": "cold"
    }
   ],
   "lineup": [
@@ -739,6 +741,47 @@
    "artifacts": {
     "server_log": "launches/01-A-warmup/server.log"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:00:00.000Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -816,6 +859,47 @@
    "artifacts": {
     "server_log": "launches/02-B-warmup/server.log"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:06:08.847Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -1030,6 +1114,47 @@
     "server_log": "launches/03-A-scored/server.log",
     "load_report": "launches/03-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:12:01.591Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -1244,6 +1369,47 @@
     "server_log": "launches/04-A-same-scored/server.log",
     "load_report": "launches/04-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:17:16.929Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -1458,6 +1624,47 @@
     "server_log": "launches/05-B-scored/server.log",
     "load_report": "launches/05-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:22:33.760Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -1672,6 +1879,47 @@
     "server_log": "launches/06-B-same-scored/server.log",
     "load_report": "launches/06-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:27:32.776Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -1886,6 +2134,47 @@
     "server_log": "launches/07-A-same-scored/server.log",
     "load_report": "launches/07-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:32:28.087Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -2100,6 +2389,47 @@
     "server_log": "launches/08-B-scored/server.log",
     "load_report": "launches/08-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:37:43.166Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -2314,6 +2644,47 @@
     "server_log": "launches/09-B-same-scored/server.log",
     "load_report": "launches/09-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:42:38.377Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -2528,6 +2899,47 @@
     "server_log": "launches/10-A-scored/server.log",
     "load_report": "launches/10-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:47:36.837Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -2742,6 +3154,47 @@
     "server_log": "launches/11-B-scored/server.log",
     "load_report": "launches/11-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:52:52.309Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -2956,6 +3409,47 @@
     "server_log": "launches/12-B-same-scored/server.log",
     "load_report": "launches/12-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T00:57:47.275Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -3170,6 +3664,47 @@
     "server_log": "launches/13-A-scored/server.log",
     "load_report": "launches/13-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:02:45.057Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -3384,6 +3919,47 @@
     "server_log": "launches/14-A-same-scored/server.log",
     "load_report": "launches/14-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:08:00.995Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -3598,6 +4174,47 @@
     "server_log": "launches/15-B-same-scored/server.log",
     "load_report": "launches/15-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:13:16.690Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -3812,6 +4429,47 @@
     "server_log": "launches/16-A-scored/server.log",
     "load_report": "launches/16-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:18:13.038Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -4026,6 +4684,47 @@
     "server_log": "launches/17-A-same-scored/server.log",
     "load_report": "launches/17-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:23:29.654Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -4240,6 +4939,47 @@
     "server_log": "launches/18-B-scored/server.log",
     "load_report": "launches/18-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:28:48.218Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -4454,6 +5194,47 @@
     "server_log": "launches/19-B-same-scored/server.log",
     "load_report": "launches/19-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:33:45.467Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -4668,6 +5449,47 @@
     "server_log": "launches/20-B-scored/server.log",
     "load_report": "launches/20-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:38:42.930Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -4882,6 +5704,47 @@
     "server_log": "launches/21-A-same-scored/server.log",
     "load_report": "launches/21-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:43:40.920Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -5096,6 +5959,47 @@
     "server_log": "launches/22-A-scored/server.log",
     "load_report": "launches/22-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:48:54.701Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -5310,6 +6214,47 @@
     "server_log": "launches/23-A-scored/server.log",
     "load_report": "launches/23-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:54:09.672Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -5524,6 +6469,47 @@
     "server_log": "launches/24-B-same-scored/server.log",
     "load_report": "launches/24-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T01:59:26.704Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -5738,6 +6724,47 @@
     "server_log": "launches/25-B-scored/server.log",
     "load_report": "launches/25-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:04:23.326Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -5952,6 +6979,47 @@
     "server_log": "launches/26-A-same-scored/server.log",
     "load_report": "launches/26-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:09:21.199Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -6166,6 +7234,47 @@
     "server_log": "launches/27-A-same-scored/server.log",
     "load_report": "launches/27-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:14:38.490Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -6380,6 +7489,47 @@
     "server_log": "launches/28-A-scored/server.log",
     "load_report": "launches/28-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:19:56.522Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -6594,6 +7744,47 @@
     "server_log": "launches/29-B-same-scored/server.log",
     "load_report": "launches/29-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:25:15.340Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -6808,6 +7999,47 @@
     "server_log": "launches/30-B-scored/server.log",
     "load_report": "launches/30-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:30:10.756Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -7022,6 +8254,47 @@
     "server_log": "launches/31-B-scored/server.log",
     "load_report": "launches/31-B-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:35:07.822Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -7236,6 +8509,47 @@
     "server_log": "launches/32-A-same-scored/server.log",
     "load_report": "launches/32-A-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:40:03.569Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -7450,6 +8764,47 @@
     "server_log": "launches/33-A-scored/server.log",
     "load_report": "launches/33-A-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:45:19.312Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,
@@ -7664,6 +9019,47 @@
     "server_log": "launches/34-B-same-scored/server.log",
     "load_report": "launches/34-B-same-scored/guidellm.json"
    },
+   "servers": [
+    {
+     "replica": 1,
+     "started_at": "2026-01-01T02:50:37.559Z",
+     "entrypoint": "image",
+     "command": null,
+     "args": [
+      "--model",
+      "example-org/example-model",
+      "--served-model-name",
+      "example-model",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--seed",
+      "0"
+     ],
+     "image_entrypoint": [
+      "vllm",
+      "serve"
+     ],
+     "image_cmd": null,
+     "env": {
+      "HF_HOME": "/models/hf",
+      "VLLM_CACHE_ROOT": "/cache/vllm",
+      "VLLM_CONFIG_ROOT": "/cache/vllm-config",
+      "VLLM_NO_USAGE_STATS": "1"
+     },
+     "env_source": "process",
+     "env_dropped": [],
+     "start_retries": 0,
+     "gpus": null,
+     "gpu_uuids": null,
+     "discarded": false
+    }
+   ],
    "starts": 1,
    "start_retries": 0,
    "load_timeouts": 0,

@@ -9,12 +9,16 @@ put an RFC 3339 time first). Two kinds of entry come out:
   node's clock.
 
 The patterns follow vLLM's log lines and change between vLLM versions, so a breakdown lists only what it found; a
-phase that is missing was not logged in a form this table knows, which says nothing about the server. Standard
+phase that is missing was not logged in a form this table knows, which says nothing about the server.
+
+`scale_events` reads the rhvp-scale lines the pattern's own server writes when its replica count changes. Standard
 library only.
 """
 
 from __future__ import annotations
 
+import json
+import math
 import re
 from datetime import datetime
 from collections.abc import Iterable
@@ -130,3 +134,62 @@ def breakdown(log: str, started_epoch: float) -> list[dict]:
                 seen.add(key)
                 out.append({"phase": key, "label": label, "seconds": None, "at_s": since, "source": "log"})
     return out
+
+
+# ---- the rhvp-scale line ----
+
+#: The line the pattern's own server writes each time a replica count of its Ray Serve app changes. Its shape is
+#: defined once, in inference-server/rhvp_scale.py (another image, so these names are a copy);
+#: tests/test_scaleout_contract.py keeps the copy and the parser below in step with it.
+SCALE_EVENT = "rhvp-scale"
+SCALE_FIELDS = ("event", "ts", "app", "deployment", "from", "to", "reason")
+SCALE_REASONS = ("target", "running")
+SCALE_MARKER = '{"event":"rhvp-scale"'
+
+
+def _scale_record(raw: object) -> dict | None:
+    """The event in `raw` (a decoded JSON value) if it has the whole shape, else None."""
+    if not isinstance(raw, dict) or any(field not in raw for field in SCALE_FIELDS) or raw["event"] != SCALE_EVENT:
+        return None
+    ts = raw["ts"]
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+        return None
+    for field in ("app", "deployment"):
+        if not isinstance(raw[field], str) or not raw[field]:
+            return None
+    for field in ("from", "to"):
+        if isinstance(raw[field], bool) or not isinstance(raw[field], int) or raw[field] < 0:
+            return None
+    if raw["reason"] not in SCALE_REASONS:
+        return None
+    return {field: raw[field] for field in SCALE_FIELDS}
+
+
+def scale_events(log: str) -> list[dict]:
+    """Every rhvp-scale event in a server log, in log order: its fields, with `ts` as a float, plus `log_ts`, the
+    log line's own timestamp in seconds since the epoch (None for a line without one). The event may follow a
+    prefix on its line. A line with the marker that does not hold a whole, well-typed event is left out."""
+    decoder = json.JSONDecoder()
+    out = []
+    for at, text in lines(log):
+        start = text.find(SCALE_MARKER)
+        if start < 0:
+            continue
+        try:
+            raw, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        record = _scale_record(raw)
+        if record is not None:
+            record["ts"] = float(record["ts"])
+            record["log_ts"] = at
+            out.append(record)
+    return out
+
+
+def first_scale_up(events: Iterable[dict], since_epoch: float) -> float | None:
+    """Seconds from `since_epoch` to the first decision to add a replica that the server logged at or after it (an
+    event with reason target and more replicas after than before), by the event's own `ts`; None when there is
+    none."""
+    times = [e["ts"] for e in events if e.get("reason") == "target" and e["to"] > e["from"] and e["ts"] >= since_epoch]
+    return min(times) - since_epoch if times else None

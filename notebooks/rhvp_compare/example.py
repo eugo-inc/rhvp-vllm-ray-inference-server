@@ -3,7 +3,8 @@
 fixed seed, never measured, and flagged as such (`run.synthetic: true`, the made-up images registry.example/...).
 
 make_notebook.py writes it to compare-recordings/synthetic.json and checks it with --check, like the timing
-notebook's synthetic recording. Standard library only.
+notebook's synthetic recording. `synthesize_scale_out()` makes a run in mode scaleout the same way, for the tests of
+the notebook's scale-out section; nothing writes it to the repository. Standard library only.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import analyze, plan as plans
+from . import analyze, energy, guidellm, plan as plans, servers
 
 PATH = Path(__file__).resolve().parents[1] / "compare-recordings" / "synthetic.json"
 SEED = 20260101
@@ -32,6 +33,16 @@ A_BASE = {"ready_s": 92.0, "first_answer_s": 95.0, "ttft_ms": {1: 22.0, 8: 31.0,
           "itl_ms": {1: 6.1, 8: 7.4, 32: 11.8}, "tps": {1: 160.0, 8: 1050.0, 32: 2600.0},
           "power_w": {1: 95.0, 8: 160.0, 32: 230.0}}
 B_FACTOR = {"ready_s": 0.99, "first_answer_s": 0.80, "ttft_ms": 1.01, "itl_ms": 0.90, "tps": 1.10, "power_w": 1.02}
+#: The mode scaleout example: the same sides and twins, one surge per scored launch, the second replica asked for
+#: 30 s in.
+SCALE_CONFIG = {**CONFIG, "runName": "synthetic-scale-out", "mode": "scaleout",
+                "scaleOut": {"requestRate": 6, "surgeSeconds": 120, "stepAfterSeconds": 30, "ttftMs": 500,
+                             "tpotMs": 50}}
+#: Side A's typical scale-round figures, and side B's factors against them (made up).
+SCALE_A = {"new_ready_s": 64.0, "new_first_answer_s": 66.0, "attainment": 0.78, "share": 0.31, "ttft_ms": 210.0,
+           "itl_ms": 21.0, "tps": 620.0}
+SCALE_B = {"new_ready_s": 0.85, "new_first_answer_s": 0.82, "attainment": 1.09, "share": 1.12, "ttft_ms": 0.9,
+           "itl_ms": 0.97, "tps": 1.03}
 PHASES = (("weights_load", "loading the weights", 0.20), ("torch_compile", "torch.compile in total", 0.30),
           ("cuda_graphs", "capturing CUDA graphs", 0.10), ("engine_init", "engine start (profile, KV cache, "
                                                                           "warm-up)", 0.45))
@@ -63,10 +74,76 @@ def _level(rng: random.Random, b: bool, c: int, at: float, seconds: float) -> di
     }
 
 
+def _server(plan: dict, of: str, replica: int, started_at: str) -> dict:
+    spec = plans.side_spec(plan, next(s for s in plan["sides"] if s["key"] == of))
+    scale = plan.get("mode") == plans.SCALEOUT  # docker: the device request each replica got (both on GPU 0)
+    return servers.record(replica, spec.get("command"), spec.get("args") or [], spec.get("env"), "process",
+                          started_at=started_at, image_entrypoint=["vllm", "serve"], image_cmd=None,
+                          gpus="0" if scale else None,
+                          gpu_uuids=["GPU-00000000-0000-0000-0000-000000000000"] if scale else None)
+
+
 def synthesize() -> dict:
     """The whole synthetic results file. Every launch, a twin's too, draws its own noise."""
+    return _synthesize(CONFIG, "openshift")
+
+
+def synthesize_scale_out() -> dict:
+    """A synthetic run in mode scaleout (docker): one surge per scored launch, a second replica at the forced step."""
+    return _synthesize(SCALE_CONFIG, "docker")
+
+
+def _surge(rng: random.Random, b: bool, plan: dict, at: float) -> tuple[dict, dict]:
+    """A launch's surge level and its scale record (made up)."""
+    scale = plan["scale_out"]
+
+    def jitter(key: str) -> float:
+        return SCALE_A[key] * (SCALE_B[key] if b else 1.0) * rng.uniform(0.97, 1.03)
+
+    seconds = scale["surge_s"]
+    sent = int(scale["request_rate"] * seconds)
+    attainment = min(1.0, jitter("attainment"))
+    successful = sent - 12
+    ttft, itl, tps = jitter("ttft_ms"), jitter("itl_ms"), jitter("tps")
+    level = {
+        "concurrency": None, "rate": scale["request_rate"],
+        "started_at": _iso(datetime.fromtimestamp(at, timezone.utc)),
+        "finished_at": _iso(datetime.fromtimestamp(at + seconds, timezone.utc)), "start_epoch": at,
+        "end_epoch": at + seconds, "duration_s": seconds,
+        "requests": {"successful": successful, "errored": 0, "incomplete": 12},
+        "ttft_ms": {"median": ttft, "p90": ttft * 2.5, "mean": ttft * 1.4, "count": successful},
+        "itl_ms": {"median": itl, "p90": itl * 1.6, "mean": itl * 1.1, "count": int(tps * seconds)},
+        "output_tokens": int(tps * seconds), "output_tokens_per_s": tps, "requests_per_s": successful / seconds,
+        "slo_attainment": attainment, "slo_determined_requests": successful,
+        "goodput_rps": attainment * successful / seconds, "usable": True, "note": None,
+        "energy": energy.none_entry("none", "energy is not measured in mode scaleout"),
+    }
+    new_ready, new_first = jitter("new_ready_s"), jitter("new_first_answer_s")
+    step_at = scale["step_after_s"] + rng.uniform(0.0, 0.4)
+    joined = step_at + new_first + 0.1
+    share = jitter("share")
+    second = int(sent * share)
+    record = {
+        "surge_started_at": level["started_at"], "step_after_s": scale["step_after_s"], "step_at_s": round(step_at, 3),
+        "new_replica": {"ready_s": round(new_ready, 3), "first_answer_s": round(new_first, 3),
+                        "joined_at_s": round(joined, 3), "joined_during_surge": True,
+                        "clock": "runner, from just before the second replica was asked for",
+                        "breakdown": [{"phase": key, "label": label, "seconds": round(new_ready * part, 2),
+                                       "at_s": None, "source": "log", "count": 1} for key, label, part in PHASES]},
+        "router": {"policy": "least-busy", "backends": [
+            {"replica": 1, "sent": sent - second, "finished": sent - second - 6, "failed": 0, "cancelled": 6,
+             "max_in_flight": 24, "first_s": 0.0, "last_s": round(seconds - 0.2, 3)},
+            {"replica": 2, "sent": second, "finished": second - 6, "failed": 0, "cancelled": 6, "max_in_flight": 9,
+             "first_s": round(joined + 0.05, 3), "last_s": round(seconds - 0.2, 3)}]},
+        "new_replica_share": round(second / sent, 4), "events": [], "load_triggered_s": None,
+    }
+    return level, record
+
+
+def _synthesize(config: dict, platform: str) -> dict:
     rng = random.Random(SEED)
-    plan = plans.build(CONFIG, "openshift")
+    plan = plans.build(config, platform)
+    scale_mode = plan.get("mode") == plans.SCALEOUT
     clock = START
     launches = []
     for planned in plan["launches"]:
@@ -93,10 +170,23 @@ def synthesize() -> dict:
                         "clock": "runner, from just before the server was asked for", "breakdown": breakdown},
             "levels": [], "values": {"startup/ready_s": ready, "startup/first_answer_s": first},
             "artifacts": {"server_log": f"{folder}/server.log"},
+            "servers": [_server(plan, of, 1, _iso(started))],
             "starts": 1, "start_retries": 0, "load_timeouts": 0, "load_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
-        if planned["kind"] != plans.WARMUP:
+        if planned["kind"] != plans.WARMUP and scale_mode:
+            level, scale = _surge(rng, b, plan, at)
+            record["levels"], record["scale"] = [level], scale
+            at += plan["scale_out"]["surge_s"] + 2
+            asked = datetime.fromtimestamp(level["start_epoch"] + scale["step_at_s"], timezone.utc)
+            record["servers"].append(_server(plan, of, 2, _iso(asked)))
+            record["starts"] = 2
+            record["artifacts"]["server_log_2"] = f"{folder}/server-2.log"
+            record["artifacts"]["load_report"] = f"{folder}/guidellm.json"
+            record["values"].update({"scale/ready_s": scale["new_replica"]["ready_s"],
+                                     "scale/first_answer_s": scale["new_replica"]["first_answer_s"],
+                                     **guidellm.surge_values(level)})
+        elif planned["kind"] != plans.WARMUP:
             seconds = plan["load"]["seconds_per_level"]
             for c in plan["load"]["concurrencies"]:
                 level = _level(rng, b, c, at, seconds)
@@ -114,7 +204,8 @@ def synthesize() -> dict:
         "schema": plans.SCHEMA,
         "run": {"id": plan["run_id"], "name": plan["run_name"], "status": "complete", "error_code": None,
                 "started_at": _iso(START),
-                "finished_at": _iso(clock), "platform": "openshift", "server_restored": True,
+                "finished_at": _iso(clock), "platform": platform,
+                "server_restored": True if platform == "openshift" else None,
                 "server_found_down": None, "synthetic": True,
                 "notes": ["Synthetic: written by notebooks/rhvp_compare/example.py, never measured."], "errors": []},
         "plan": plan,

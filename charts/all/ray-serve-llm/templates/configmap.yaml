@@ -13,8 +13,23 @@ data:
     engine_kwargs:
       {{- toYaml .Values.server.engineKwargs | nindent 6 }}
     accelerator_type: {{ if .Values.server.acceleratorType }}{{ .Values.server.acceleratorType | quote }}{{ else }}null{{ end }}
-    min_replicas: {{ .Values.server.minReplicas | int }}
-    max_replicas: {{ .Values.server.maxReplicas | int }}
+    min_replicas: {{ .Values.server.autoscaling.minReplicas | int }}
+    max_replicas: {{ .Values.server.autoscaling.maxReplicas | int }}
+    {{- /* The keys below are written only when they differ from the server's default
+           (inference-server/serve_app.py, DEFAULTS), so a default install renders the same
+           llm.yaml, and the same checksum/config, as before they existed. */}}
+    {{- $target := .Values.server.autoscaling.targetOngoingRequests }}
+    {{- if include "ray-serve-llm.isNumber" $target }}
+    target_ongoing_requests: {{ $target }}
+    {{- end }}
+    {{- $share := .Values.server.gpuPerReplica }}
+    {{- if and (include "ray-serve-llm.isNumber" $share) (ne (float64 $share) 1.0) }}
+    gpu_per_replica: {{ $share }}
+    {{- end }}
     object_store_memory_gb: {{ .Values.server.objectStoreMemoryGb }}
     http_host: {{ .Values.server.httpHost | quote }}
     http_port: {{ .Values.server.httpPort | int }}
+    {{- $metrics := .Values.server.metricsPort }}
+    {{- if and (include "ray-serve-llm.isNumber" $metrics) (ne (float64 $metrics) 8080.0) }}
+    metrics_port: {{ $metrics | int }}
+    {{- end }}

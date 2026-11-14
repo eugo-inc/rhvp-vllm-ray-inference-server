@@ -10,6 +10,9 @@ global:
     id: qwen2.5-0.5b-instruct
     source: Qwen/Qwen2.5-0.5B-Instruct
     revision: ""
+  # global.scaleOut comes from values-global.yaml; this stub keeps it off.
+  scaleOut:
+    mode: none
 
 # CPU architecture (kubernetes.io/arch) of the node that builds the image and of
 # the GPU node that runs it. The default AWS GPU node (g6.2xlarge) is amd64.
@@ -44,17 +47,45 @@ server:
     gpu_memory_utilization: 0.85
     tensor_parallel_size: 1
   acceleratorType: null
-  minReplicas: 1
-  maxReplicas: 1
+  # Inside the pod: Ray Serve's own autoscaler adds and removes vLLM replicas
+  # in this one server pod. The defaults (1 and 1) keep one replica and no
+  # autoscaling.
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 1
+    # Ongoing requests per replica that Ray Serve aims for. Required when
+    # maxReplicas is above 1: Ray Serve LLM's own default target is 10^9, so
+    # without it the replica count would never grow. null leaves it unset.
+    targetOngoingRequests: null
+  # GPUs each replica asks Ray for. maxReplicas * gpuPerReplica must not
+  # exceed gpuCount. Above 1 only for a replica with several workers, and then
+  # equal to tensor_parallel_size * pipeline_parallel_size (checked). Below 1
+  # (for example 0.5) replicas share one GPU, which adds no GPU compute; that
+  # is for testing only, and has not yet started a replica on a real GPU.
+  # Replicas that share a GPU must each leave 0.025 of the GPU's memory
+  # outside their share, for their CUDA context: engineKwargs.
+  # gpu_memory_utilization at most gpuPerReplica minus 0.025 (checked), such
+  # as 0.4 for 0.5.
+  gpuPerReplica: 1
+  # Ray's Prometheus metrics (vLLM's gauges among them, as ray_vllm_*). The
+  # server always exports them on this port, on every address of the pod, so
+  # other pods can read them at the pod's IP in every mode; the container port
+  # and the Service port, both named "metrics", are rendered only in keda mode.
+  metricsPort: 8080
   objectStoreMemoryGb: 2
   httpHost: 0.0.0.0
   httpPort: 8000
-  # GPUs for the pod; keep equal to engineKwargs.tensor_parallel_size.
+  # GPUs for the pod. With one replica, keep it equal to
+  # engineKwargs.tensor_parallel_size. With more, it must also hold every
+  # replica: maxReplicas * gpuPerReplica (checked here), and with
+  # tensor_parallel_size above 1, maxReplicas * tensor_parallel_size (checked
+  # only by the server when it starts).
   gpuCount: 1
   # Memory-backed /dev/shm for the Ray object store (objectStoreMemoryGb fits in it).
   # It counts against the memory limit below.
   shmSizeLimit: 4Gi
-  # emptyDir for the Triton, vLLM, FlashInfer and XDG compile caches.
+  # emptyDir for the Triton, vLLM, FlashInfer and XDG compile caches, while
+  # compileCache.mode is none.
   cacheSizeLimit: 20Gi
   resources:
     requests:
@@ -95,6 +126,50 @@ modelStorage:
   size: 50Gi
   # Empty uses the cluster's default StorageClass.
   storageClassName: ""
+  # ReadWriteOnce or ReadWriteMany. Server pods on more than one node
+  # (global.scaleOut.mode: keda) need ReadWriteMany.
+  accessMode: ReadWriteOnce
+
+# Where the GPU compile caches (CUDA driver, FlashInfer, vLLM's torch.compile and
+# Triton) live, all under /cache:
+#   none    the pod's own emptyDir (server.cacheSizeLimit), emptied on every new pod
+#   node    PVC ray-serve-llm-compile-cache, ReadWriteOnce: kept for later pods, and
+#           shared by the server pods on the node it is attached to. Every server
+#           pod must run on that node (true for one GPU node, also with time-slicing).
+#   shared  the same PVC, ReadWriteMany, for server pods on several nodes; needs a
+#           StorageClass that offers ReadWriteMany.
+# node and shared also set CUDA_CACHE_PATH=/cache/cuda and CUDA_CACHE_MAXSIZE (4 GiB).
+# A hostPath folder on the node is not offered: OpenShift's restricted-v2 security
+# context constraint, which the server runs under, does not allow hostPath volumes.
+compileCache:
+  mode: none
+  size: 20Gi
+  # Empty uses the cluster's default StorageClass.
+  storageClassName: ""
+
+# Across pods: OpenShift's Custom Metrics Autoscaler (KEDA) adds and removes
+# whole server pods. Used only while global.scaleOut.mode is keda
+# (values-global.yaml); in every other mode none of this is rendered.
+scaleOut:
+  # Server pods, each with server.gpuCount GPUs.
+  minPods: 1
+  maxPods: 2
+  # The per-pod average of waiting requests (vLLM's gauge, exported by Ray as
+  # ray_vllm_num_requests_waiting, summed over the server pods and divided by
+  # their number) above which a pod is added.
+  waitingRequestsPerPod: 4
+  # Only how often KEDA refreshes the ScaledObject's status. Between minPods and
+  # maxPods the HPA that KEDA creates reads the metric on its own sync period
+  # (15 s by default). With Ray's export (every 10 s) and the scrape (every
+  # 15 s) before it, a pod is asked for from a few seconds up to about 40 s
+  # after the waiting requests rise.
+  pollingIntervalSeconds: 15
+  # How long the HPA waits, after the waiting requests drop, before it removes a
+  # pod (its scale-down stabilization window).
+  cooldownSeconds: 300
+  # The monitoring query endpoint: the cluster monitoring's Thanos Querier. Port
+  # 9092 answers queries for one namespace only.
+  thanosUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local:9092
 
 # Route to the OpenAI-compatible API. Off by default: the API has no
 # authentication. The notebook talks to the Service, not to a Route.

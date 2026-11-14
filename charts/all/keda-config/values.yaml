@@ -1,0 +1,15 @@
+# The KedaController that installs KEDA (Red Hat's Custom Metrics Autoscaler).
+# This chart is an app only while global.scaleOut.mode is keda
+# (overrides/values-scaleout-keda.yaml).
+
+# Namespace whose workloads KEDA scales; empty means every namespace, which is
+# Red Hat's default.
+watchNamespace: ""
+
+# Log levels: the operator takes debug, info or error; the metrics server takes
+# "0" (info) or "4" (debug).
+operator:
+  logLevel: info
+  logEncoder: console
+metricsServer:
+  logLevel: "0"

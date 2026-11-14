@@ -13,3 +13,10 @@ spec:
       port: 8000
       targetPort: http
       protocol: TCP
+    {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+    # Ray's Prometheus metrics, scraped through this port (servicemonitor.yaml).
+    - name: metrics
+      port: {{ .Values.server.metricsPort | int }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}

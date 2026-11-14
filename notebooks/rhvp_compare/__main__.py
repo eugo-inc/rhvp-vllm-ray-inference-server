@@ -6,7 +6,8 @@
     python -m rhvp_compare analyze <results.json> [--write]
     python -m rhvp_compare report <results.json>
 
-validate prints the plan: every round's order, the cases, and whether the planned rounds can give a verdict.
+validate prints the plan: every round's order, the servers the launches start, the cases, and whether the planned rounds
+can give a verdict.
 analyze recomputes the verdicts of a results file (after a change to the analysis, or with another tool behind the
 same boundary) and prints them; --write puts them back into the file and rewrites results.md next to it.
 """
@@ -34,8 +35,13 @@ def _validate(args) -> int:
     for r in range(1, the_plan["rounds"] + 1):
         order = [launch["side"] for launch in the_plan["launches"] if launch["round"] == r]
         print(f"round {r}: {' '.join(order)}")
-    print(f"server starts: {len(the_plan['launches'])}")
+    print(f"server starts: {plans.server_starts(the_plan)}")
     print(f"energy: {the_plan['energy']['source']}")
+    scale = the_plan.get("scale_out")
+    if scale:
+        goals = ", ".join(f"{key} {value:g}" for key, value in scale["slo"].items() if value is not None)
+        print(f"mode scaleout: a surge of {scale['request_rate']:g} requests per second for {scale['surge_s']:g} s; "
+              f"the second replica asked for {scale['step_after_s']:g} s after the first request; goals {goals}")
     print(f"cases: {len(the_plan['cases'])}, primary {the_plan['power']['family_size']}; rule "
           f"{the_plan['analysis']['rule']}, alpha {the_plan['analysis']['alpha']}")
     for line in runner.plan_lines(the_plan)[1:]:

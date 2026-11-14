@@ -15,6 +15,16 @@ On a stop it does that first, before the side is taken down: the server's pod wa
 Deployment's replicas (variants/prod), so a sync during the run does not bring the server back onto the GPU. The
 runner also waits until no other GPU pod is left in the namespace before each launch.
 
+The server's autoscaler. With global.scaleOut.mode keda the chart names the server's ScaledObject in
+RHVP_COMPARE_SERVER_SCALED_OBJECT. Before the scale to 0 the runner pauses it (annotation
+autoscaling.keda.sh/paused-replicas: "0"), so the autoscaler cannot bring the server back mid-run, and when the run
+ends it removes the pause before it scales the server back; the scale it reads back may then be above
+RHVP_COMPARE_SERVER_REPLICAS, which the autoscaler is free to choose. A ScaledObject that does not exist is left
+alone.
+
+Mode scaleout (the scale round) is refused on OpenShift until its OpenShift round is built: plan.build refuses it for
+this platform, so the Job ends with PLAN_INVALID before it changes anything.
+
 One run at a time. Before it changes anything the runner lists the runner pods in its own namespace
 (app.kubernetes.io/name=image-compare): when another one is Pending or Running and is older (or as old, with a name
 that sorts first), this run refuses to start. The oldest always wins, and nothing is left behind to go stale.
@@ -76,16 +86,18 @@ RESTORE_BACKOFF_S = (2.0, 4.0, 8.0, 16.0)
 RESTORE_WINDOW_S = 60.0
 #: How long GuideLLM may take to stop (guidellm._stop: SIGTERM, 15 s, SIGKILL, 15 s).
 GUIDELLM_STOP_S = 30.0
+#: The annotation that pauses a KEDA ScaledObject at a fixed replica count.
+KEDA_PAUSED = "autoscaling.keda.sh/paused-replicas"
 
 
 def stop_budget_seconds() -> float:
     """The longest a stop inside a launch can take with every API call at its short timeout: GuideLLM stopped, the
     server scaled back (tries in the window, the last one started at its end, then one more after the teardown;
-    each try a PATCH and a read), the side's teardown (its log, its pod and node, the delete and the wait), two saves
-    with their status writes, and the cleanup's list and delete. terminationGracePeriodSeconds in the notebook chart
-    must be above it (tests/test_charts.py checks)."""
+    each try the autoscaler's unpause, a PATCH and a read), the side's teardown (its log, its pod and node, the delete
+    and the wait), two saves with their status writes, and the cleanup's list and delete.
+    terminationGracePeriodSeconds in the notebook chart must be above it (tests/test_charts.py checks)."""
     t = HURRY_TIMEOUT_S
-    restore = RESTORE_WINDOW_S + 2 * t + 2 * t
+    restore = RESTORE_WINDOW_S + 2 * 3 * t
     teardown = t + 2 * t + t + HURRY_DELETE_WAIT_S + t
     saves = 2 * 2 * t
     cleanup = 2 * t
@@ -181,6 +193,15 @@ class Kube:
         self._call("PATCH", f"/apis/apps/v1/namespaces/{namespace}/deployments/{deployment}/scale",
                    f"scale {deployment} to {replicas}", content=json.dumps({"spec": {"replicas": replicas}}),
                    headers={"Content-Type": "application/merge-patch+json"})
+
+    def pause_scaled_object(self, namespace: str, name: str, paused: bool) -> bool:
+        """Pause a KEDA ScaledObject at 0 replicas, or remove the pause; False when it does not exist."""
+        value = "0" if paused else None
+        response = self._call("PATCH", f"/apis/keda.sh/v1alpha1/namespaces/{namespace}/scaledobjects/{name}",
+                              f"{'pause' if paused else 'resume'} the autoscaler {name}", ok_missing=True,
+                              content=json.dumps({"metadata": {"annotations": {KEDA_PAUSED: value}}}),
+                              headers={"Content-Type": "application/merge-patch+json"})
+        return response is not None
 
     def put_configmap(self, namespace: str, name: str, labels: Mapping[str, str],
                       data: Mapping[str, str | None]) -> None:
@@ -311,6 +332,8 @@ class KubeBackend:
         self.gpu_wait_s = float(env.get("RHVP_COMPARE_GPU_WAIT_SECONDS", "900"))
         self.server_deployment = env.get("RHVP_COMPARE_SERVER_DEPLOYMENT", "ray-serve-llm")
         self.server_replicas = int(env.get("RHVP_COMPARE_SERVER_REPLICAS", "1"))
+        self.scaled_object = env.get("RHVP_COMPARE_SERVER_SCALED_OBJECT", "").strip()
+        self._paused = False
         self.status_namespace = env.get("RHVP_COMPARE_STATUS_NAMESPACE") or _own_namespace()
         self.pod_name = env.get("RHVP_COMPARE_POD_NAME") or socket.gethostname()
         try:
@@ -364,6 +387,9 @@ class KubeBackend:
         self._token = token if self.use_token else None
         if self.server_deployment and self.kube.replicas(self.namespace, self.server_deployment) is not None:
             self._scaled_down = True  # set first: a scale that fails half-way is still undone
+            if self.scaled_object:  # first, or the autoscaler could bring the server back onto the GPU
+                self._paused = True
+                self._paused = self.kube.pause_scaled_object(self.namespace, self.scaled_object, True)
             self.kube.scale(self.namespace, self.server_deployment, 0)
 
     def describe(self) -> dict:
@@ -384,9 +410,13 @@ class KubeBackend:
         waits = iter(RESTORE_BACKOFF_S)
         while True:
             try:
+                if self._paused:  # the autoscaler first, so it does not hold the server at 0
+                    self.kube.pause_scaled_object(self.namespace, self.scaled_object, False)
+                    self._paused = False
                 self.kube.scale(self.namespace, self.server_deployment, self.server_replicas)
                 now = self.kube.replicas(self.namespace, self.server_deployment)
-                if now == self.server_replicas:
+                if now == self.server_replicas or (self.scaled_object and now is not None
+                                                   and now >= self.server_replicas):
                     self._scaled_down, self._restored = False, True
                     return True
                 last = f"its scale reads {now} replicas after the change"
@@ -396,9 +426,11 @@ class KubeBackend:
             if wait is None or self.clock() + wait > self._restore_deadline:
                 break
             self.sleep(wait)
+        resume = (f"oc annotate scaledobject/{self.scaled_object} -n {self.namespace} {KEDA_PAUSED}- && "
+                  if self._paused else "")
         raise runner.RoundError(
             f"could not scale {self.server_deployment} back to {self.server_replicas} ({last}). Bring it back by hand: "
-            f"oc delete pod -n {self.namespace} -l app.kubernetes.io/name={SIDE_APP} && oc scale "
+            f"oc delete pod -n {self.namespace} -l app.kubernetes.io/name={SIDE_APP} && {resume}oc scale "
             f"deployment/{self.server_deployment} --replicas={self.server_replicas} -n {self.namespace}")
 
     def on_stop(self) -> None:

@@ -4,3 +4,23 @@
 global:
   compare:
     enabled: false
+
+# GPU time-slicing (NVIDIA GPU Operator): the device plugin offers each GPU on
+# every GPU node as `replicas` GPUs, and the pods that get them take turns on it.
+# Off by default: every pod that asks for a GPU gets a whole one.
+#
+# It is meant for trying global.scaleOut.mode keda on a node with one GPU: with
+# replicas 2, a second server pod fits. The shares add no GPU compute, and each
+# pod still sees the whole GPU memory, so give each server a memory fraction that
+# leaves room for the others (server.engineKwargs.gpu_memory_utilization in
+# charts/all/ray-serve-llm/values.yaml, at most about 0.9 / replicas: 0.4 with
+# replicas 2), or the second pod fails to start. Nothing checks that setting.
+# A pod that asks for more than one share is refused. Turn it off before an
+# image comparison: the comparison checks only vllm-inference for other GPU
+# pods, and with shares a GPU pod from any namespace can run on the GPU it
+# times.
+# Switching this on or off restarts the device plugin on every GPU node.
+timeSlicing:
+  enabled: false
+  # Shares per GPU, 2 or more.
+  replicas: 2

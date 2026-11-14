@@ -18,6 +18,17 @@ running in this container, and prints one word:
 
 With ``--wait SECONDS`` it checks every 2 seconds until the app is RUNNING or
 DEPLOY_FAILED, or the time is up, and prints the last state.
+
+After that word, one line per Ray Serve deployment of the app gives its replica
+counts, for example::
+
+    RUNNING
+    LLMServer:qwen2_5-0_5b-instruct: running 2, target 2
+    OpenAiIngress: running 1, target 1
+
+``running`` counts the replicas in the RUNNING state; ``target`` is the number
+Ray Serve aims for (the autoscaler's decision). Only the first line decides the
+exit code; the count lines are left out when they cannot be read.
 """
 
 from __future__ import annotations
@@ -36,6 +47,8 @@ from serve_app import (  # noqa: E402
     ConfigError,
     app_status_name,
     load_config,
+    replica_counts,
+    serve_details,
 )
 
 POLL_INTERVAL_S = 2.0
@@ -69,6 +82,18 @@ def check_once(app_name: str, address: str) -> str:
     return app_status_name(serve.status(), app_name)
 
 
+def count_lines(counts) -> list:
+    """``<deployment>: running <n>, target <n>`` for each deployment, in name order."""
+    return [f"{name}: running {c['running']}, target {c['target']}" for name, c in sorted(counts.items())]
+
+
+def replica_lines(app_name: str) -> list:
+    """The replica count lines of the app, read from the Ray cluster ``check_once`` attached to."""
+    from ray import serve
+
+    return count_lines(replica_counts(serve.status(), serve_details(), app_name))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--app", default=None, help="Serve app name (default: app_name from $RHVP_CONFIG, else llm)")
@@ -94,6 +119,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if state in FINAL_STATES or time.monotonic() >= deadline:
                 break
             time.sleep(POLL_INTERVAL_S)
+        lines = []
+        if state != "NO_CONTROLLER":
+            try:
+                lines = replica_lines(app_name)
+            except Exception as exc:  # noqa: BLE001 - the state word is the answer; counts are extra
+                print(f"replica counts not read: {exc}", file=sys.stderr)
     finally:
         try:
             import ray
@@ -104,6 +135,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             pass
 
     print(state)
+    for line in lines:
+        print(line)
     return exit_code(state)
 
 

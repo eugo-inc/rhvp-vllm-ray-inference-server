@@ -344,7 +344,8 @@
         "preset",
         "args",
         "env",
-        "gpu"
+        "gpu",
+        "compile_cache"
       ],
       "properties": {
         "key": {
@@ -386,10 +387,18 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          }
+          },
+          "description": "The side's extra environment variables, as the config gives them (sides[].env). At each start they are set after the preset's own, with {model_id} and the other placeholders filled in; what the server process saw is in each launch's servers."
         },
         "gpu": {
           "type": "boolean"
+        },
+        "compile_cache": {
+          "enum": [
+            "cold",
+            "warm"
+          ],
+          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up launch (its twin's launches use the same volume)."
         }
       }
     },
@@ -455,7 +464,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^(startup/(ready_s|first_answer_s)|c[0-9]+/(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule\\[gpu\\]))$",
+          "pattern": "^(startup/(ready_s|first_answer_s)|c[0-9]+/(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule\\[gpu\\])|scale/(ready_s|first_answer_s|load_triggered_s)|surge/(slo_attainment|goodput_rps|ttft_ms_median|itl_ms_median|output_tokens_per_s))$",
           "description": "<level>/<metric>: startup, or c<concurrency> for a load level. The key in every launch's values map."
         },
         "metric": {
@@ -466,7 +475,8 @@
           "type": "string"
         },
         "unit": {
-          "type": "string"
+          "type": "string",
+          "description": "share is a fraction from 0 to 1."
         },
         "better": {
           "enum": [
@@ -526,6 +536,10 @@
         "power"
       ],
       "properties": {
+        "mode": {
+          "const": "scaleout",
+          "description": "Set only in mode scaleout (the scale round in every scored launch, docker only); a plan without it is mode levels, the default."
+        },
         "model": {
           "type": "object",
           "required": [
@@ -810,6 +824,72 @@
               "type": "string"
             }
           }
+        },
+        "scale_out": {
+          "type": "object",
+          "description": "Mode scaleout only: the scale round's settings, fixed before the first launch.",
+          "required": [
+            "replicas_start",
+            "replicas_end",
+            "request_rate",
+            "surge_s",
+            "step_after_s",
+            "slo",
+            "shared_gpu",
+            "router",
+            "step_rule",
+            "surge_rule"
+          ],
+          "properties": {
+            "replicas_start": {
+              "const": 1
+            },
+            "replicas_end": {
+              "const": 2
+            },
+            "request_rate": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Requests per second of the surge (GuideLLM's constant profile)."
+            },
+            "surge_s": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "step_after_s": {
+              "type": "number",
+              "minimum": 0,
+              "description": "The forced step: the second replica is asked for this long after the surge's first request reached the router."
+            },
+            "slo": {
+              "type": "object",
+              "required": [
+                "ttft_ms",
+                "tpot_ms"
+              ],
+              "properties": {
+                "ttft_ms": {
+                  "$ref": "#/$defs/number_or_null"
+                },
+                "tpot_ms": {
+                  "$ref": "#/$defs/number_or_null"
+                }
+              },
+              "description": "The latency goals GuideLLM scores each request against; tpot_ms is compared with the request's inter-token latency."
+            },
+            "shared_gpu": {
+              "type": "boolean"
+            },
+            "router": {
+              "const": "least-busy"
+            },
+            "step_rule": {
+              "type": "string"
+            },
+            "surge_rule": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -896,7 +976,7 @@
     },
     "level": {
       "type": "object",
-      "description": "One concurrency level of one launch, from GuideLLM's report.",
+      "description": "One concurrency level of one launch, from GuideLLM's report; in mode scaleout, the launch's one surge (concurrency null).",
       "required": [
         "concurrency",
         "started_at",
@@ -980,6 +1060,30 @@
         },
         "energy": {
           "$ref": "#/$defs/energy"
+        },
+        "rate": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "Mode scaleout: the requests per second the surge sent at."
+        },
+        "slo_attainment": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Mode scaleout: GuideLLM's share of the judged requests that met every latency goal (a failed request counts as one that missed them; requests still running at the end are left out); null when it judged none."
+        },
+        "slo_determined_requests": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "goodput_rps": {
+          "$ref": "#/$defs/number_or_null",
+          "description": "Mode scaleout: requests per second that met every latency goal (GuideLLM's request_goodput, mean over the successful requests)."
         }
       }
     },
@@ -1040,7 +1144,8 @@
         "start_retries",
         "starts",
         "load_timeouts",
-        "load_retries"
+        "load_retries",
+        "servers"
       ],
       "properties": {
         "index": {
@@ -1176,17 +1281,33 @@
             "load_report": {
               "type": "string"
             },
+            "server_log_2": {
+              "type": "string",
+              "description": "Mode scaleout: the log of the replica the forced step added."
+            },
             "server_log_attempt_1": {
               "type": "string",
               "description": "The server log of the start that stopped at vLLM's start-up memory check, when the side was started again."
+            },
+            "server_log_2_attempt_1": {
+              "type": "string",
+              "description": "Mode scaleout: the log of that replica's start that stopped at vLLM's start-up memory check, when it was started again."
             },
             "guidellm_try_1": {
               "type": "string",
               "description": "GuideLLM's log of the launch's first try, whose GuideLLM timed out. Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
             },
+            "router_try_1": {
+              "type": "string",
+              "description": "Mode scaleout: the router's log of the first try."
+            },
             "server_log_try_1": {
               "type": "string",
-              "description": "The server log of that first try, taken down before the launch ran again."
+              "description": "The server log of that first try (in mode scaleout, of its first replica), taken down before the launch ran again."
+            },
+            "server_log_2_try_1": {
+              "type": "string",
+              "description": "Mode scaleout: the second replica's log of the first try, taken down before the launch ran again."
             },
             "load_report_try_1": {
               "type": "string",
@@ -1194,7 +1315,11 @@
             },
             "server_log_attempt_1_try_1": {
               "type": "string",
-              "description": "The server log of a start of that first try that stopped at vLLM's start-up memory check."
+              "description": "The server log of a start of that first try (in mode scaleout, of its first replica) that stopped at vLLM's start-up memory check."
+            },
+            "server_log_2_attempt_1_try_1": {
+              "type": "string",
+              "description": "Mode scaleout: the log of a start of the second replica of that first try that stopped at vLLM's start-up memory check."
             }
           }
         },
@@ -1207,7 +1332,7 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started again in this launch after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of the side: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts the side anew, with its own retry, so the count can be 2. The start-up figures are timed from the last start."
+          "description": "How many times a server of this launch was started again after it stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of a server: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts its servers anew, each with its own retry. In mode scaleout this is the sum over the launch's server records, a discarded try's included; each record's start_retries, replica and discarded say which server it was. The start-up figures are timed from the side's last start; the replica the forced step adds is timed from when it was first asked for, so the time its stopped start took counts."
         },
         "values": {
           "type": "object",
@@ -1220,19 +1345,178 @@
         "starts": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started in this launch: 1, plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count."
+          "description": "How many servers this launch started: in mode levels 1, in mode scaleout 2 for a scored launch (the first replica and the one the forced step adds), plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count."
         },
         "load_timeouts": {
           "type": "integer",
           "minimum": 0,
           "maximum": 2,
-          "description": "How many times GuideLLM timed out in this launch. After the first time-out the side is taken down and the launch runs once more from a new start (runner.LOAD_RETRIES), with the same requests; a second time-out fails the launch (LOAD_FAILED). Counted against the side in analysis.load_timeouts, whether or not the launch then finished."
+          "description": "How many times GuideLLM timed out in this launch (in mode scaleout, during the surge, also before its first request). After the first time-out the launch runs once more (runner.LOAD_RETRIES) with the same requests: in mode levels from a new start of the side; in mode scaleout GuideLLM, the router and the replicas that had started are taken down and the launch starts from a new first replica. A second time-out fails the launch (LOAD_FAILED). Counted against the side in analysis.load_timeouts, whether or not the launch then finished."
         },
         "load_retries": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1,
-          "description": "How many times the load ran again after a GuideLLM time-out: set only once the second GuideLLM run has begun, so a launch stopped or failed before that reads 0 here while load_timeouts reads 1. Every figure of a launch whose load ran again comes from that second try, timed from the new start; the first try's files are the *_try_1 artifacts."
+          "description": "How many times the load (in mode scaleout, the surge) ran again after a GuideLLM time-out: set only once the second GuideLLM run has begun, so a launch stopped or failed before that reads 0 here while load_timeouts reads 1. Every figure of a launch whose load ran again comes from that second try, timed from the new start; the first try's files are the *_try_1 artifacts and its server records are marked discarded."
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/server"
+          },
+          "description": "Every server the launch started, as a server record: replica 1 the side (in mode scaleout its first replica), replica 2 the replica the forced step adds. A launch that ran again (load_retries) lists its discarded try's records first."
+        },
+        "scale": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Mode scaleout, a scored launch (a twin's too) that reached the forced step: the step, the second replica, and how the router shared the surge out. Times in seconds are since the surge's first request reached the router, by the runner's clock.",
+          "required": [
+            "surge_started_at",
+            "step_after_s",
+            "step_at_s",
+            "new_replica",
+            "router",
+            "new_replica_share",
+            "events",
+            "load_triggered_s"
+          ],
+          "properties": {
+            "surge_started_at": {
+              "type": "string"
+            },
+            "step_after_s": {
+              "type": "number"
+            },
+            "step_at_s": {
+              "$ref": "#/$defs/number_or_null",
+              "description": "When the second replica was asked for (the plan's step_after_s, plus the runner's own delay)."
+            },
+            "new_replica": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "ready_s",
+                "first_answer_s",
+                "joined_at_s",
+                "joined_during_surge",
+                "clock",
+                "breakdown"
+              ],
+              "properties": {
+                "ready_s": {
+                  "type": "number"
+                },
+                "first_answer_s": {
+                  "type": "number"
+                },
+                "joined_at_s": {
+                  "type": "number",
+                  "description": "When the router started to send it requests."
+                },
+                "joined_during_surge": {
+                  "type": "boolean",
+                  "description": "false when the surge had ended before the replica answered: it got no requests."
+                },
+                "clock": {
+                  "type": "string"
+                },
+                "breakdown": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/breakdown_entry"
+                  }
+                }
+              }
+            },
+            "router": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "policy",
+                "backends"
+              ],
+              "properties": {
+                "policy": {
+                  "const": "least-busy"
+                },
+                "backends": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "replica",
+                      "sent",
+                      "finished",
+                      "failed",
+                      "cancelled",
+                      "max_in_flight",
+                      "first_s",
+                      "last_s"
+                    ],
+                    "properties": {
+                      "replica": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sent": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "finished": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "failed": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "cancelled": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Requests whose client went away, as GuideLLM does with the requests still running when the surge ends."
+                      },
+                      "max_in_flight": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "first_s": {
+                        "$ref": "#/$defs/number_or_null"
+                      },
+                      "last_s": {
+                        "$ref": "#/$defs/number_or_null"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "new_replica_share": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "The second replica's share of the surge's requests through the router."
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The rhvp-scale lines in the first replica's log (servers that write them)."
+            },
+            "load_triggered_s": {
+              "$ref": "#/$defs/number_or_null",
+              "description": "The first scale-up the server itself logged after the surge began (case scale/load_triggered_s)."
+            }
+          }
         }
       },
       "description": "One launch: one start of one server, as measured."
@@ -1896,6 +2180,127 @@
               "error_code"
             ]
           }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "description": "One server a launch started (rhvp_compare/servers.py): what the runner asked for, and the environment the server process saw, for the allow-listed names only.",
+      "required": [
+        "replica",
+        "entrypoint",
+        "command",
+        "args",
+        "env",
+        "env_source",
+        "env_dropped",
+        "start_retries"
+      ],
+      "properties": {
+        "replica": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 for the launch's first server (the side); 2 for the replica the forced step adds in mode scaleout."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When the runner asked for this start."
+        },
+        "entrypoint": {
+          "enum": [
+            "image",
+            "override"
+          ],
+          "description": "image: the image's own entrypoint ran (with no command set, or with a command equal to image_entrypoint); override: the side's command ran in its place, bypassing whatever the entrypoint sets. Where image_entrypoint is null (the image was not read, as on OpenShift), a command counts as override even when it is the image's own entrypoint."
+        },
+        "command": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The command the runner set, or null for the image's own entrypoint."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The arguments the runner passed."
+        },
+        "image_entrypoint": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The image's ENTRYPOINT as its config states it; null when not read."
+        },
+        "image_cmd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The image's CMD as its config states it; null when not read."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment the server process saw: GLIBC_TUNABLES and every name starting with CUDA_, VLLM_, TORCH_ or HF_, minus names that look like secrets."
+        },
+        "env_source": {
+          "enum": [
+            "process",
+            "container",
+            "none"
+          ],
+          "description": "process: read from the server process itself; container: the container's configured environment (image ENV plus the runner's); none: not recorded."
+        },
+        "env_dropped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed names left out because they look like secrets (HF_TOKEN, VLLM_API_KEY, ...); names only, never values."
+        },
+        "start_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How many times this server was started again after it stopped at vLLM's start-up memory check (at most once); the record describes the last start."
+        },
+        "gpus": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The GPU request the platform got for this server: under docker the device request (\"all\" or device ids, from RHVP_COMPARE_GPUS or RHVP_COMPARE_REPLICA_GPUS); a vLLM server uses the first GPU it sees. null: not recorded (OpenShift, or a side without a GPU)."
+        },
+        "gpu_uuids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The UUIDs of the GPUs that request reached, as nvidia-smi's GPU query listed them before the first launch (mode scaleout); for a MIG device, its parent GPU's UUID. null: not read."
+        },
+        "discarded": {
+          "type": "boolean",
+          "description": "true for a server of a launch's first try, taken down when its GuideLLM timed out and the launch ran again (the launch's load_retries; in mode scaleout every replica of that try): none of the launch's figures come from it."
         }
       }
     }

@@ -9,9 +9,10 @@ What ``main()`` does, in order:
 2. Removes a stale ready file left by an earlier run in the same pod.
 3. Reads the config file (``$RHVP_CONFIG``, default ``/config/llm.yaml``)
    and the ``RHVP_*`` environment overrides.
-4. Starts a single-node Ray cluster in this container, starts Ray Serve on
-   ``http_host:http_port``, and deploys one app built by
-   ``ray.serve.llm.build_openai_app``.
+4. Starts a single-node Ray cluster in this container, with Ray's Prometheus
+   metrics on ``metrics_port``; checks that Ray sees enough GPUs for
+   ``max_replicas`` replicas; starts Ray Serve on ``http_host:http_port``; and
+   deploys one app built by ``ray.serve.llm.build_openai_app``.
 5. ``serve.run(..., blocking=False)`` returns only when the app is RUNNING,
    which in Ray 2.60.0 means the model replica has finished starting (weights
    downloaded and loaded into vLLM). Only then is the ready file
@@ -21,6 +22,12 @@ What ``main()`` does, in order:
    when each first answers.
 6. Keeps the ready file in step with the app status (removes it if the app
    stops being RUNNING) until SIGTERM or SIGINT, then shuts Serve and Ray down.
+   Ray Serve's autoscaler adding or removing a replica leaves the app RUNNING,
+   so the ready file stays. On every check it also logs one ``rhvp-scale``
+   line (``rhvp_scale.py``) for each replica count that changed since the last
+   check. The checks run every second while ``max_replicas`` is above
+   ``min_replicas`` (so a line's ``ts`` is at most about a second after the
+   change), and every 10 seconds otherwise.
 
 ``load_config`` and ``build_llm_config_kwargs`` import only the standard
 library and PyYAML, so they can be tested without Ray installed.
@@ -39,6 +46,17 @@ Config file keys (all but ``model_id`` and ``model_source`` are optional)::
     object_store_memory_gb: 2
     http_host: 0.0.0.0
     http_port: 8000
+
+Keys for Ray Serve's autoscaling inside the pod, and their defaults (the chart
+writes each only when it differs from the default)::
+
+    target_ongoing_requests: null  # ongoing requests per replica Ray Serve aims
+                                   # for; required when max_replicas is above 1
+    gpu_per_replica: null          # GPUs one replica asks Ray for; null: one
+                                   # whole GPU per tensor- and pipeline-parallel
+                                   # worker. Below 1 (one worker only), replicas
+                                   # share a GPU.
+    metrics_port: 8080             # Ray's Prometheus metrics (ray.init)
 
 Environment overrides (a variable that is unset or empty changes nothing):
 ``RHVP_MODEL_ID``, ``RHVP_MODEL_SOURCE``, ``RHVP_MODEL_REVISION``,
@@ -62,12 +80,25 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import rhvp_scale  # noqa: E402  (next to this file, in the image and in the repo)
+
 log = logging.getLogger("rhvp.serve")
 
 DEFAULT_CONFIG_PATH = "/config/llm.yaml"
 DEFAULT_RAY_TMPDIR = "/tmp/r"
 READY_FILE_NAME = "rhvp-ready"
 STATUS_POLL_INTERVAL_S = 10.0
+# While Ray Serve may change the replica count: the resolution of the rhvp-scale lines' ts.
+SCALE_POLL_INTERVAL_S = 1.0
+# Replicas that share a GPU each leave this part of the GPU's memory outside their share (gpu_memory_utilization at
+# most gpu_per_replica - 0.025), for what a replica holds outside gpu_memory_utilization, such as its CUDA context:
+# the room left then grows with the number of replicas. The chart and scripts/pattern_settings.py refuse the same
+# before a sync, and the comparison's plan.py (SHARED_GPU_RESERVE) for its two replicas.
+SHARED_GPU_RESERVE = 0.025
+# Replica states that count towards the target when Ray reports no target.
+LIVE_REPLICA_STATES = ("STARTING", "UPDATING", "RECOVERING", "RUNNING", "PENDING_MIGRATION")
 
 REQUIRED_KEYS = ("model_id", "model_source")
 DEFAULTS: Dict[str, Any] = {
@@ -81,9 +112,12 @@ DEFAULTS: Dict[str, Any] = {
     "accelerator_type": None,
     "min_replicas": 1,
     "max_replicas": 1,
+    "target_ongoing_requests": None,
+    "gpu_per_replica": None,
     "object_store_memory_gb": 2,
     "http_host": "0.0.0.0",
     "http_port": 8000,
+    "metrics_port": 8080,
 }
 KNOWN_KEYS = frozenset(DEFAULTS) | frozenset(REQUIRED_KEYS)
 
@@ -272,6 +306,46 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError(f"min_replicas ({min_r}) must not exceed max_replicas ({max_r})")
     out["min_replicas"], out["max_replicas"] = min_r, max_r
 
+    target = cfg.get("target_ongoing_requests")
+    if target is not None and (not _is_number(target) or target <= 0):
+        raise ConfigError(f"target_ongoing_requests must be null or a number above 0, got {target!r}")
+    if max_r > 1 and target is None:
+        # Ray Serve LLM sets its own default target, 10^9 ongoing requests per replica (Ray 2.60.0,
+        # DEFAULT_MAX_TARGET_ONGOING_REQUESTS), so the autoscaler would never add a replica.
+        raise ConfigError(
+            "target_ongoing_requests must be set when max_replicas is above 1: Ray Serve LLM's default "
+            "target is 10^9 ongoing requests per replica, so the replica count would never grow"
+        )
+    out["target_ongoing_requests"] = target
+
+    workers = _workers_per_replica(engine_kwargs)
+    share = cfg.get("gpu_per_replica")
+    if share is None:
+        share = workers
+    elif not _is_number(share) or share <= 0:
+        raise ConfigError(f"gpu_per_replica must be null or a number above 0, got {share!r}")
+    elif workers > 1 and share != workers:
+        # Ray Serve LLM repeats one bundle per worker; two tensor-parallel workers on one GPU cannot run.
+        raise ConfigError(
+            f"gpu_per_replica ({share}) must equal tensor_parallel_size times pipeline_parallel_size "
+            f"({workers}) when that is above 1: each worker needs a whole GPU"
+        )
+    elif workers == 1 and share > 1:
+        raise ConfigError(f"gpu_per_replica ({share}) must be at most 1 for a replica with one worker")
+    gmu = engine_kwargs.get("gpu_memory_utilization")
+    if share < 1 and max_r > 1 and _is_number(gmu) and gmu > share - SHARED_GPU_RESERVE + 1e-9:
+        # vLLM 0.29 refuses to start when the GPU's free memory is below gpu_memory_utilization times its total
+        # memory, and each running replica holds its CUDA context outside that fraction: with k replicas on one
+        # GPU the last one needs (1 - k * gpu_memory_utilization) of the GPU free for k contexts, so a fixed
+        # fraction of the share would leave too little once k grows. A fixed reserve per replica does not.
+        raise ConfigError(
+            f"engine_kwargs.gpu_memory_utilization ({gmu}) must be at most gpu_per_replica ({share}) minus "
+            f"{SHARED_GPU_RESERVE} when up to {max_r} replicas share a GPU: each vLLM replica claims that fraction "
+            f"of the whole GPU's memory when it starts and also holds memory outside it (its CUDA context), so each "
+            f"leaves {SHARED_GPU_RESERVE} of the GPU's memory for that, and a later replica still fits"
+        )
+    out["gpu_per_replica"] = share
+
     osm = cfg.get("object_store_memory_gb")
     if not _is_number(osm) or osm <= 0:
         raise ConfigError(f"object_store_memory_gb must be a positive number, got {osm!r}")
@@ -282,7 +356,40 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not _is_int(port) or not 1 <= port <= 65535:
         raise ConfigError(f"http_port must be an integer in 1..65535, got {port!r}")
     out["http_port"] = port
+    metrics = cfg.get("metrics_port")
+    if not _is_int(metrics) or not 1 <= metrics <= 65535 or metrics == port:
+        raise ConfigError(f"metrics_port must be an integer in 1..65535 other than http_port, got {metrics!r}")
+    out["metrics_port"] = metrics
     return out
+
+
+def _workers_per_replica(engine_kwargs: Mapping[str, Any]) -> int:
+    """vLLM workers in one replica: tensor_parallel_size times pipeline_parallel_size (each 1 when unset)."""
+    count = 1
+    for key in ("tensor_parallel_size", "pipeline_parallel_size"):
+        value = engine_kwargs.get(key, 1)
+        if value is None:
+            continue
+        if not _is_int(value) or value < 1:
+            raise ConfigError(f"engine_kwargs.{key} must be an integer >= 1, got {value!r}")
+        count *= value
+    return count
+
+
+def gpus_per_worker(cfg: Mapping[str, Any]) -> float:
+    """The GPU share of each vLLM worker of one replica: 1 unless replicas share a GPU."""
+    return cfg["gpu_per_replica"] / _workers_per_replica(cfg["engine_kwargs"])
+
+
+def gpu_shortfall(cfg: Mapping[str, Any], ray_gpus: float) -> Optional[str]:
+    """A message when ``max_replicas`` replicas need more GPUs than Ray sees in this container, else None."""
+    need = cfg["max_replicas"] * cfg["gpu_per_replica"]
+    if need <= ray_gpus + 1e-6:
+        return None
+    return (
+        f"max_replicas ({cfg['max_replicas']}) times the GPUs of one replica ({cfg['gpu_per_replica']}) is "
+        f"{need:g}, more than the {ray_gpus:g} GPUs Ray sees in this container"
+    )
 
 
 def build_llm_config_kwargs(cfg: Mapping[str, Any]) -> Dict[str, Any]:
@@ -297,26 +404,144 @@ def build_llm_config_kwargs(cfg: Mapping[str, Any]) -> Dict[str, Any]:
     engine_kwargs = dict(cfg["engine_kwargs"])
     if cfg.get("model_revision"):
         engine_kwargs["revision"] = cfg["model_revision"]
+    autoscaling: Dict[str, Any] = {
+        "min_replicas": cfg["min_replicas"],
+        "max_replicas": cfg["max_replicas"],
+    }
+    if cfg.get("target_ongoing_requests") is not None:
+        autoscaling["target_ongoing_requests"] = cfg["target_ongoing_requests"]
     kwargs: Dict[str, Any] = {
         "model_loading_config": {
             "model_id": cfg["model_id"],
             "model_source": cfg["model_source"],
         },
         "engine_kwargs": engine_kwargs,
-        "deployment_config": {
-            "autoscaling_config": {
-                "min_replicas": cfg["min_replicas"],
-                "max_replicas": cfg["max_replicas"],
-            }
-        },
+        "deployment_config": {"autoscaling_config": autoscaling},
     }
     if cfg.get("accelerator_type"):
         kwargs["accelerator_type"] = cfg["accelerator_type"]
+    if cfg.get("gpu_per_replica") is not None and gpus_per_worker(cfg) < 1:
+        # Ray Serve LLM's default bundle is one whole GPU per worker; this asks for the share instead.
+        share = gpus_per_worker(cfg)
+        kwargs["placement_group_config"] = {"bundle_per_worker": {"GPU": share}}
+        # vLLM 0.29.0 asks Ray for VLLM_RAY_PER_WORKER_GPUS GPUs per worker (default 1.0), read in its engine
+        # process, which the replica starts as a child process. Ray Serve LLM 2.60.0 sets the variable only for
+        # the workers (VLLMEngineConfig.get_runtime_env_with_local_env_vars), so the engine asked for a whole GPU,
+        # which a bundle of the share cannot hold ("Cannot schedule RayWorkerProc with the placement group").
+        # LLMConfig.runtime_env goes on the replica's own runtime_env (LLMServer.get_deployment_options), and the
+        # engine process inherits it.
+        kwargs["runtime_env"] = {"env_vars": {"VLLM_RAY_PER_WORKER_GPUS": str(share)}}
     return kwargs
 
 
 def object_store_bytes(cfg: Mapping[str, Any]) -> int:
     return int(cfg["object_store_memory_gb"] * 1024**3)
+
+
+def ray_init_kwargs(cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """Arguments for ``ray.init``. ``address="local"`` always starts a new single-node cluster in this container,
+    even if RAY_ADDRESS is set; ``_metrics_export_port`` fixes the port of Ray's Prometheus metrics (vLLM's
+    gauges among them, as ``ray_vllm_*``), which is otherwise chosen at random."""
+    return {
+        "address": "local",
+        "object_store_memory": object_store_bytes(cfg),
+        "_metrics_export_port": cfg["metrics_port"],
+    }
+
+
+def poll_interval_s(cfg: Mapping[str, Any]) -> float:
+    """How often the server checks the app: every second while Ray Serve may change the replica count."""
+    return SCALE_POLL_INTERVAL_S if cfg["max_replicas"] > cfg["min_replicas"] else STATUS_POLL_INTERVAL_S
+
+
+# --------------------------------------------------------------------------
+# Replica counts and the rhvp-scale lines: pure functions, no Ray import.
+# --------------------------------------------------------------------------
+
+
+def _state_name(state: Any) -> str:
+    return str(getattr(state, "value", state))
+
+
+def replica_counts(
+    serve_status: Any, details: Optional[Mapping[str, Any]], app_name: str
+) -> Dict[str, Dict[str, int]]:
+    """``{deployment: {"target": n, "running": n}}`` for the app, from a ``serve.status()`` result and, when it
+    could be read, the Serve controller's details (``target_num_replicas``). Empty when the app is not listed.
+
+    ``running`` counts the replicas in the RUNNING state. ``target`` is the number Ray Serve aims for; without the
+    details it is the replicas that are starting or running (``LIVE_REPLICA_STATES``)."""
+    apps = getattr(serve_status, "applications", None) or {}
+    app = apps.get(app_name)
+    if app is None:
+        return {}
+    targets: Dict[str, int] = {}
+    if isinstance(details, Mapping):
+        app_details = (details.get("applications") or {}).get(app_name) or {}
+        for name, deployment in (app_details.get("deployments") or {}).items():
+            value = deployment.get("target_num_replicas") if isinstance(deployment, Mapping) else None
+            if _is_int(value) and value >= 0:
+                targets[name] = value
+    counts: Dict[str, Dict[str, int]] = {}
+    for name, deployment in (getattr(app, "deployments", None) or {}).items():
+        states = {
+            _state_name(state): int(number)
+            for state, number in (getattr(deployment, "replica_states", None) or {}).items()
+        }
+        live = sum(states.get(state, 0) for state in LIVE_REPLICA_STATES)
+        counts[name] = {"target": targets.get(name, live), "running": states.get("RUNNING", 0)}
+    return counts
+
+
+def scale_lines(
+    app_name: str,
+    before: Mapping[str, Mapping[str, int]],
+    after: Mapping[str, Mapping[str, int]],
+    ts: Optional[float] = None,
+) -> List[str]:
+    """One ``rhvp-scale`` line per count that differs between ``before`` and ``after``: deployments in name
+    order, and for each its target before its running count. A deployment missing on one side counts 0."""
+    lines = []
+    for name in sorted(set(before) | set(after)):
+        old, new = before.get(name) or {}, after.get(name) or {}
+        for reason in rhvp_scale.REASONS:
+            was, now = int(old.get(reason, 0)), int(new.get(reason, 0))
+            if was != now:
+                lines.append(rhvp_scale.scale_event(app_name, name, was, now, reason, ts=ts))
+    return lines
+
+
+class ScaleWatch:
+    """Keeps the app's last replica counts and logs an ``rhvp-scale`` line for each change.
+
+    The first counts seen are the starting point and log no ``rhvp-scale`` line. ``update`` never raises: a
+    failure is logged once, until a later update works again, so it cannot change the ready file."""
+
+    def __init__(self, app_name: str, emit: Optional[Callable[[str], None]] = None) -> None:
+        self.app_name = app_name
+        self.counts: Optional[Dict[str, Dict[str, int]]] = None
+        self.emit = emit or (lambda line: log.info("%s", line))
+        self.failing = False
+
+    def update(self, serve_status: Any, details: Optional[Mapping[str, Any]], ts: Optional[float] = None) -> List[str]:
+        try:
+            counts = replica_counts(serve_status, details, self.app_name)
+            lines: List[str] = []
+            if counts:
+                if self.counts is None:
+                    log.info("replica counts at start: %s", json.dumps(counts, sort_keys=True))
+                else:
+                    lines = scale_lines(self.app_name, self.counts, counts, ts=time.time() if ts is None else ts)
+                self.counts = counts
+            for line in lines:
+                self.emit(line)
+        except Exception as exc:  # noqa: BLE001 - the counts must never stop the server or its ready file
+            if not self.failing:
+                log.warning("replica count check failed (rhvp-scale lines may be missing): %s", exc)
+            self.failing = True
+            return []
+        self.failing = False
+        return lines
 
 
 # --------------------------------------------------------------------------
@@ -416,6 +641,54 @@ def watch_ready_file(
             last = state
 
 
+def serve_details() -> Optional[Dict[str, Any]]:
+    """The Serve controller's details (the source of ``serve.status()``, plus each deployment's
+    ``target_num_replicas``), or None when they cannot be read. It goes through Ray Serve's private client
+    (Ray 2.60.0), so any failure only drops the targets back to the starting plus running replicas."""
+    try:
+        from ray.serve.context import _get_global_client
+
+        client = _get_global_client(raise_if_no_controller_running=False)
+        details = client.get_serve_details() if client is not None else None
+        return details if isinstance(details, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def serve_and_watch(
+    app_name: str,
+    ready_path: str,
+    stop: threading.Event,
+    interval_s: float,
+    get_status: Optional[Callable[[], Any]] = None,
+    get_details: Optional[Callable[[], Optional[Mapping[str, Any]]]] = None,
+) -> ScaleWatch:
+    """Once ``serve.run`` has returned with the app RUNNING: take the first replica counts, write the ready
+    file, then keep the ready file in step with the app status and log the replica count changes, every
+    ``interval_s``, until ``stop`` is set. Each check reads ``serve.status()`` once and the controller's details
+    once. ``get_status`` and ``get_details`` replace those two reads (tests, and checks of a stub app)."""
+    if get_status is None:
+        from ray import serve
+
+        get_status = serve.status
+    get_details = get_details or serve_details
+    watch = ScaleWatch(app_name)
+
+    def check() -> str:
+        status = get_status()
+        watch.update(status, get_details())
+        return app_status_name(status, app_name)
+
+    try:
+        check()
+    except Exception as exc:  # noqa: BLE001 - the first counts are taken again on the next check
+        log.warning("first status check failed: %s", exc)
+    write_ready_file(ready_path)
+    log.info("ready file written: %s", ready_path)
+    watch_ready_file(ready_path, stop, check, interval_s=interval_s)
+    return watch
+
+
 # --------------------------------------------------------------------------
 # Entry point.
 # --------------------------------------------------------------------------
@@ -466,17 +739,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         cfg["model_revision"] or "(latest)",
         json.dumps(cfg["engine_kwargs"], sort_keys=True),
     )
+    log.info(
+        "replicas %d to %d, target_ongoing_requests=%s, gpu_per_replica=%s, metrics_port=%d",
+        cfg["min_replicas"],
+        cfg["max_replicas"],
+        cfg["target_ongoing_requests"],
+        cfg["gpu_per_replica"],
+        cfg["metrics_port"],
+    )
 
     import ray
     from ray import serve
     from ray.serve.llm import LLMConfig, build_openai_app
 
-    # address="local" always starts a new single-node cluster in this
-    # container, even if RAY_ADDRESS is set. ray.init installs a SIGTERM
-    # handler that raises SystemExit; the finally block below cleans up.
-    ray.init(address="local", object_store_memory=object_store_bytes(cfg))
+    # ray.init installs a SIGTERM handler that raises SystemExit; the finally
+    # block below cleans up.
+    ray.init(**ray_init_kwargs(cfg))
     stop = threading.Event()
     try:
+        shortfall = gpu_shortfall(cfg, float(ray.cluster_resources().get("GPU", 0)))
+        if shortfall and cfg["max_replicas"] > 1:
+            log.error("%s; lower max_replicas or gpu_per_replica", shortfall)
+            return 2
+        if shortfall:
+            log.warning("%s; the replica waits until Ray sees a GPU", shortfall)
         serve.start(http_options={"host": cfg["http_host"], "port": cfg["http_port"]})
         app = build_openai_app({"llm_configs": [LLMConfig(**llm_kwargs)]})
         started = time.monotonic()
@@ -490,13 +776,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         signal.signal(signal.SIGTERM, _on_signal)
         signal.signal(signal.SIGINT, _on_signal)
-        write_ready_file(ready_path)
-        log.info("ready file written: %s", ready_path)
-        watch_ready_file(
-            ready_path,
-            stop,
-            lambda: app_status_name(serve.status(), cfg["app_name"]),
-        )
+        serve_and_watch(cfg["app_name"], ready_path, stop, poll_interval_s(cfg))
         return 0
     except Exception:
         log.exception("the server failed")

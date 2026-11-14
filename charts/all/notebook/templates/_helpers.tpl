@@ -23,9 +23,18 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- if (.Values.global.compare | default dict).enabled }}true{{ end }}
 {{- end }}
 
-{{/* The comparison's config file: global.compare without "enabled", plus global.model. */}}
+{{/* The comparison's config file: global.compare without "enabled", plus global.model.
+     "mode" is left out when it is levels, the default, so a levels run keeps the config,
+     and so the run id, it had before the setting existed. */}}
 {{- define "notebook.compareConfig" -}}
 {{- $cfg := omit (.Values.global.compare | default dict) "enabled" -}}
+{{- if hasKey $cfg "mode" -}}
+{{- if not (and (kindIs "string" $cfg.mode) (has $cfg.mode (list "levels" "scaleout"))) -}}
+{{- $msg := "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got %v" -}}
+{{- fail (printf $msg $cfg.mode) -}}
+{{- end -}}
+{{- if eq $cfg.mode "levels" }}{{ $cfg = omit $cfg "mode" }}{{ end -}}
+{{- end -}}
 {{- $_ := set $cfg "model" (pick .Values.global.model "id" "source" "revision") -}}
 {{- toPrettyJson $cfg -}}
 {{- end }}
@@ -47,6 +56,15 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
      release (GUIDELLM_IMAGE in notebooks/rhvp_compare/plan.py; a test keeps them equal). */}}
 {{- define "notebook.compareLoadImage" -}}
 {{- ((.Values.global.compare | default dict).load | default dict).image | default "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081" -}}
+{{- end }}
+
+{{/* The server's ScaledObject that the runner pauses for a run: compare.serverScaledObject while
+     global.scaleOut.mode is keda and the runner manages the server (compare.serverDeployment); empty
+     otherwise. */}}
+{{- define "notebook.compareScaledObject" -}}
+{{- if and (eq (toString (.Values.global.scaleOut | default dict).mode) "keda") .Values.compare.serverDeployment -}}
+{{- .Values.compare.serverScaledObject -}}
+{{- end -}}
 {{- end }}
 
 {{/* The energy source the config asks for (auto when not set). */}}

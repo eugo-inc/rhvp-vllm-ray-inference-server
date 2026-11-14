@@ -1,3 +1,4 @@
+{{- /* Also added: the opt-in GPU time-slicing (timeSlicing in values.yaml), in devicePlugin.config. */ -}}
 # Adapted from validatedpatterns-sandbox/ai-quickstart-rag, Apache-2.0
 # (charts/nvidia-config/templates/config.yaml). Added: the SkipDryRunOnMissingResource
 # sync option, so Argo CD can sync this before the GPU Operator has installed its CRD.
@@ -73,8 +74,14 @@ spec:
       config: ''
   devicePlugin:
     config:
+      {{- if .Values.timeSlicing.enabled }}
+      # Opt-in time-slicing (values.yaml, time-slicing-config.yaml).
+      default: any
+      name: time-slicing-config
+      {{- else }}
       default: ''
       name: ''
+      {{- end }}
     enabled: true
   mig:
     strategy: single

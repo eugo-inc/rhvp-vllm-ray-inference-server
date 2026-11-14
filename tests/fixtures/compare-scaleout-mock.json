@@ -1,0 +1,16 @@
+{
+  "runName": "mock-scale-out",
+  "mode": "scaleout",
+  "model": {"id": "qwen2.5-0.5b-instruct", "source": "Qwen/Qwen2.5-0.5B-Instruct", "revision": ""},
+  "sides": [
+    {"name": "mock-slow-start", "image": "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081",
+     "preset": "guidellm-mock", "command": ["sh", "-c", "sleep 20 && exec guidellm mock-server \"$@\"", "mock-server"],
+     "args": ["--ttft-ms", "40", "--itl-ms", "8", "--max-concurrent-requests", "2"]},
+    {"name": "mock-fast-start", "image": "ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081",
+     "preset": "guidellm-mock", "command": ["sh", "-c", "sleep 8 && exec guidellm mock-server \"$@\"", "mock-server"],
+     "args": ["--ttft-ms", "40", "--itl-ms", "8", "--max-concurrent-requests", "2"]}
+  ],
+  "rounds": {"count": 7, "warmup": false, "twins": "both"},
+  "load": {"promptTokens": 64, "outputTokens": 32},
+  "scaleOut": {"requestRate": 10, "surgeSeconds": 40, "stepAfterSeconds": 5, "ttftMs": 500, "tpotMs": 50}
+}

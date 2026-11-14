@@ -8,7 +8,8 @@
 #
 # The config file is JSON with the keys of global.compare in values-global.yaml, plus "model" (the keys of
 # global.model). tests/fixtures/compare-local-mock.json is a small one that needs no GPU: two GuideLLM mock
-# servers with different speeds.
+# servers with different speeds. tests/fixtures/compare-scaleout-mock.json is the same in mode scaleout: mock
+# servers that take a while to start, one surge per scored launch, and a second replica at the forced step.
 #
 # What it does:
 #   1. Creates the docker network $NETWORK if it is missing.
@@ -25,7 +26,14 @@
 # short, takes its side down and saves the results as partial, within STOP_TIMEOUT.
 #
 # Each side runs as an arbitrary UID in group 0 (as on OpenShift), with its caches on a fresh tmpfs and the model
-# weights on the docker volume $MODELS_VOLUME, kept between runs (remove it with docker volume rm).
+# weights on the docker volume $MODELS_VOLUME, kept between runs (remove it with docker volume rm). A side with
+# compileCache: warm gets its own cache volume instead (named after $CACHE_VOLUME and the run), filled by its warm-up
+# launch and removed when the run ends.
+#
+# Mode scaleout (mode: scaleout in the config): each scored launch starts a second container of the side, named
+# like the first plus -2, at the forced step; the runner puts a small router in front of the two (router.py, a child
+# process of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is
+# refused when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
@@ -33,6 +41,12 @@
 #   NETWORK         docker network (default rhvp-compare)
 #   MODELS_VOLUME   docker volume for /models (default rhvp-compare-models)
 #   GPUS            "all" (default) or a device id such as 0; give one id on a machine with several GPUs
+#   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1, or two MIG
+#                   devices such as 0:0,0:1), for scaleOut.sharedGpu: false; default empty, every replica gets
+#                   GPUS (one GPU shared, as scaleOut.sharedGpu: true expects)
+#   CPUSET          CPUs the runner and every container it starts may use, as docker writes them (for example
+#                   0-3; default all)
+#   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)
 #   HF_TOKEN        passed on when it starts with hf_ (gated models)
 #   RUNNER_MEMORY   memory limit of the runner container, GuideLLM included (default 8g)
 #   SIDE_MEMORY     memory limit of each side's container, as docker writes it (default none, for example 32g)
@@ -42,7 +56,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
-  sed -n '2,11p' "$0" >&2
+  sed -n '2,13p' "$0" >&2
   exit 2
 fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,6 +66,9 @@ RESULTS="$(cd "$2" && pwd)"
 NETWORK="${NETWORK:-rhvp-compare}"
 MODELS_VOLUME="${MODELS_VOLUME:-rhvp-compare-models}"
 GPUS="${GPUS:-all}"
+REPLICA_GPUS="${REPLICA_GPUS:-}"
+CPUSET="${CPUSET:-}"
+CACHE_VOLUME="${CACHE_VOLUME:-rhvp-compare-cache}"
 RUNNER_MEMORY="${RUNNER_MEMORY:-8g}"
 SIDE_MEMORY="${SIDE_MEMORY:-}"
 SERVER_CONTAINER="${SERVER_CONTAINER:-}"
@@ -68,9 +85,12 @@ docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NET
 
 token_env=()
 case "${HF_TOKEN:-}" in hf_*) token_env=(-e HF_TOKEN) ;; esac
+cpuset_flag=()
+[ -z "$CPUSET" ] || cpuset_flag=(--cpuset-cpus "$CPUSET")
 
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
+  "${cpuset_flag[@]}" \
   --user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$SOCKET")" \
   -v "$SOCKET:/var/run/docker.sock" \
   -v "$RESULTS:/results" \
@@ -84,6 +104,9 @@ docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   -e RHVP_COMPARE_HOST_RESULTS="$RESULTS" \
   -e RHVP_COMPARE_MODELS_VOLUME="$MODELS_VOLUME" \
   -e RHVP_COMPARE_GPUS="$GPUS" \
+  -e RHVP_COMPARE_REPLICA_GPUS="$REPLICA_GPUS" \
+  -e RHVP_COMPARE_CPUSET="$CPUSET" \
+  -e RHVP_COMPARE_CACHE_VOLUME="$CACHE_VOLUME" \
   -e RHVP_COMPARE_MEMORY="$SIDE_MEMORY" \
   -e RHVP_COMPARE_SERVER_CONTAINER="$SERVER_CONTAINER" \
   -e RHVP_COMPARE_RUNNER_NAME="$RUNNER_NAME" \

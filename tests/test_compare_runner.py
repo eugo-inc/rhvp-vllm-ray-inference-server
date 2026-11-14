@@ -5,7 +5,8 @@ results file against results.schema.json, the analysis, the markdown report and 
 The fake backend hands out one in-process server per launch (httpx.MockTransport) and a GuideLLM report made from
 the fixture. Every launch draws its own noise of about 1 % (seeded by its index), so a side and its twin land a
 little apart, as two launches of one image do; side B's inter-token latency is 20 % higher and its throughput 20 %
-lower. GPU power is a constant 100 W.
+lower. GPU power is a constant 100 W. Mode scaleout has a fake backend of its own, at the end: two replicas per scored
+launch, a router and a background surge, on a clock that moves only when the runner sleeps.
 
 Run with: python -m pytest -q tests/test_compare_runner.py
 """
@@ -333,6 +334,102 @@ def test_plan_takes_a_declared_primary_list():
             plans.build(config(analysis={"primary": bad}), "docker")
 
 
+def scale_config(**extra) -> dict:
+    """A scaleout config; a `scaleOut` map in `extra` is merged into the one here."""
+    scale = {"requestRate": 10, "surgeSeconds": 40, "stepAfterSeconds": 5, "ttftMs": 200, "tpotMs": 20}
+    if isinstance(extra.get("scaleOut"), dict):
+        extra["scaleOut"] = {**scale, **extra["scaleOut"]}
+    out = config(mode="scaleout", scaleOut=scale)
+    out.update(extra)
+    return out
+
+
+def test_plan_scale_out_mode():
+    plan = plans.build(scale_config(), "docker")
+    assert plan["mode"] == "scaleout" and "mode" not in plans.build(config(), "docker")
+    assert plans.build(config(mode="levels"), "docker")["run_id"] == plans.build(config(), "docker")["run_id"]
+    assert plan["analysis"]["primary"] == ["scale/first_answer_s", "surge/slo_attainment"]
+    assert [c["id"] for c in plan["cases"] if c["role"] == "primary"] == plan["analysis"]["primary"]
+    # Holm over the two primaries: 7 rounds are the fewest that can give a verdict, and at 8 every round must agree.
+    assert (plan["power"]["family_size"], plan["power"]["min_rounds"], plan["power"]["must_agree"]) == (2, 7, 8)
+    assert plans.build(scale_config(rounds={"count": 7}), "docker")["power"]["must_agree"] == 7
+    assert plans.build(scale_config(rounds={"count": 16}), "docker")["power"]["must_agree"] == 13
+    assert not plans.build(scale_config(rounds={"count": 6}), "docker")["power"]["reachable"]
+    # Each scale case has a metric of its own, so each is its own floor group.
+    groups = [c["group"] for c in plan["cases"]]
+    assert len(set(groups)) == len(groups)
+    assert {c["id"] for c in plan["cases"]} >= {"scale/ready_s", "scale/first_answer_s", "scale/load_triggered_s",
+                                                "surge/slo_attainment", "surge/goodput_rps"}
+    assert plan["energy"]["source"] == "none" and plan["load"]["concurrencies"] == []
+    assert plan["load"]["seconds_per_level"] == 40 and plan["load"]["timeout_s"] == 40 * 1.5 + 300
+    assert plan["server"]["gpu_memory_utilization"] == plans.SHARED_GPU_MEMORY_UTILIZATION  # two replicas, one GPU
+    scale = plan["scale_out"]
+    assert (scale["request_rate"], scale["surge_s"], scale["step_after_s"], scale["slo"], scale["router"]) == (
+        10, 40, 5, {"ttft_ms": 200, "tpot_ms": 20}, "least-busy")
+    assert (scale["replicas_start"], scale["replicas_end"], scale["shared_gpu"]) == (1, 2, True)
+    # Written before the run, so it names no reason: more than one node or a side that failed can come first.
+    assert scale["surge_rule"].endswith("the case gets NO VERDICT") and "nonpositive_value" not in scale["surge_rule"]
+    assert all(c["concurrency"] is None for c in plan["cases"])
+    # Two servers in each scored launch, twins included; one in each warm-up launch.
+    assert len(plan["launches"]) == 34 and plans.server_starts(plan) == 66
+    assert plans.server_starts(plans.build(config(), "docker")) == 34
+    assert any("34 launches, 66 server starts" in line for line in runner.plan_lines(plan))
+    assert plans.build(scale_config(server={"gpuMemoryUtilization": 0.3}), "docker")["server"][
+        "gpu_memory_utilization"] == 0.3
+    assert plans.build(scale_config(scaleOut={"sharedGpu": False}), "docker")["server"][
+        "gpu_memory_utilization"] == 0.85
+    assert plans.build(scale_config(scaleOut={"tpotMs": None}), "docker")["scale_out"]["slo"] == {
+        "ttft_ms": 200, "tpot_ms": None}
+    assert plans.build(config(), "docker")["sides"][0]["compile_cache"] == "cold"
+    assert "servers" in SCHEMA["$defs"]["launch"]["required"]  # every launch of every mode writes it
+
+
+@pytest.mark.parametrize("extra, platform, message", [
+    ({}, "openshift", "mode scaleout runs on the docker backend only"),
+    ({"scaleOut": {"stepAfterSeconds": 40}}, "docker", "must be less than scaleOut.surgeSeconds"),
+    ({"scaleOut": {"ttftMs": None, "tpotMs": None}}, "docker", "at least one latency goal"),
+    ({"scaleOut": "fast"}, "docker", "scaleOut must be a map"),
+    ({"scaleOut": {"sharedGpu": "yes"}}, "docker", "sharedGpu must be true or false"),
+    ({"server": {"gpuMemoryUtilization": 0.6}}, "docker", "two of them need it at most 0.475"),
+    ({"energy": {"source": "nvidia-smi"}}, "docker", "is not measured in mode scaleout"),
+    ({"analysis": {"primary": ["c4/ttft_ms_median"]}}, "docker", "does not have: c4/ttft_ms_median"),
+    ({"mode": "pairs"}, "docker", "mode pairs is no longer read"),
+    ({"mode": "surge"}, "docker", "mode must be one of levels, scaleout"),
+])
+def test_plan_scale_out_mode_refusals(extra, platform, message):
+    with pytest.raises(plans.PlanError, match=re.escape(message)):
+        plans.build(scale_config(**extra), platform)
+
+
+def test_plan_warm_compile_cache_runs_on_docker_after_a_warm_up():
+    warm = config(sides=[{"name": "old", "image": "registry.example/server:1", "compileCache": "warm"},
+                         {"name": "new", "image": "registry.example/server:2"}])
+    assert [s["compile_cache"] for s in plans.build(warm, "docker")["sides"]] == ["warm", "cold"]
+    with pytest.raises(plans.PlanError, match="compileCache warm runs on the docker backend only"):
+        plans.build(warm, "openshift")
+    with pytest.raises(plans.PlanError, match="needs rounds.warmup: true"):
+        plans.build({**warm, "rounds": {"count": 8, "warmup": False}}, "docker")
+    with pytest.raises(plans.PlanError, match="compileCache must be one of cold, warm"):
+        plans.build(config(sides=[{"name": "a", "image": "x:1", "compileCache": "hot"}, {"name": "b", "image": "x:2"}]),
+                    "docker")
+
+
+def test_the_scale_out_mock_config_builds_on_docker_only():
+    """tests/fixtures/compare-scaleout-mock.json, the config of the docker mock run (scripts/compare-local.sh)."""
+    mock = json.loads((FIXTURES / "compare-scaleout-mock.json").read_text())
+    plan = plans.build(mock, "docker")
+    assert plan["mode"] == "scaleout" and plan["rounds"] == 7 and plan["power"]["reachable"]
+    assert plan["twins"] == ["A", "B"] and plans.server_starts(plan) == 56
+    assert [c["id"] for c in plan["cases"] if c.get("role", "primary") == "primary"] == list(plans.SCALE_PRIMARY)
+    assert plan["scale_out"]["step_after_s"] < plan["scale_out"]["surge_s"] == plan["load"]["seconds_per_level"]
+    spec = plans.side_spec(plan, plan["sides"][0])
+    assert spec["command"][:2] == ["sh", "-c"] and spec["gpu"] is False
+    assert spec["args"][-2:] == ["--max-concurrent-requests", "2"] and "--port" in spec["args"]
+    assert plan["sides"][0]["image"] == plan["sides"][1]["image"] == plans.GUIDELLM_IMAGE
+    with pytest.raises(plans.PlanError, match="docker backend only"):
+        plans.build(mock, "openshift")
+
+
 def test_a_full_run(tmp_path):
     results, backend, the_runner = run(tmp_path)
     jsonschema.validate(results, SCHEMA)
@@ -556,6 +653,7 @@ def test_a_hung_load_runs_the_launch_once_more_from_a_new_start(tmp_path, monkey
     assert (first["starts"], first["start_retries"]) == (2, 0)
     assert [x["load_retries"] for x in results["launches"]] == [1, 0, 0, 0]
     assert backend.started.count((1, "A")) == 2 and backend.stopped.count(1) == 2
+    assert [(s["replica"], s["discarded"]) for s in first["servers"]] == [(1, True), (1, False)]
     assert [load for load in backend.loads if load[0] == 1] == [(1, 1), (1, 2)]  # the second load: the second start
     assert backend.gpu_checks == [0, 1, 2, 3, 4]  # every start, the second try's too, waits for the GPU first
     assert 99 < first["startup"]["ready_s"] < 150  # the second start's figure, not the first's (about 0 s)
@@ -629,6 +727,8 @@ def test_each_try_of_a_retried_launch_gets_its_own_memory_check_retry(tmp_path):
     l3 = next(x for x in results["launches"] if x["index"] == 3)
     assert (l3["status"], l3["starts"], l3["start_retries"], l3["load_retries"]) == ("ok", 4, 2, 1)
     assert backend.started.count((3, "A")) == 4 and backend.stopped.count(3) == 4
+    assert [(s["replica"], s["discarded"], s["start_retries"]) for s in l3["servers"]] == [(1, True, 1),
+                                                                                          (1, False, 1)]
     assert [load for load in backend.loads if load[0] == 3] == [(3, 2), (3, 4)]
     first, second = l3["artifacts"]["server_log_attempt_1_try_1"], l3["artifacts"]["server_log_attempt_1"]
     assert first == "launches/03-A-scored/server.attempt-1.try-1.log"
@@ -675,13 +775,31 @@ def test_a_launch_cut_short_between_its_tries_keeps_none_of_the_first_try(tmp_pa
     assert failed["startup"] is None and failed["levels"] == [] and failed["values"] == {}
     assert any("did not finish within 1 s" in note for note in failed["notes"])
     assert backend.started.count((1, "A")) == 1 and backend.stopped.count(1) == 2  # the launch's end tore it down
+    assert [(s["replica"], s["discarded"]) for s in failed["servers"]] == [(1, True)]  # one record for one start
     assert "server_log" not in failed["artifacts"] and "server_log_try_1" in failed["artifacts"]
     assert results["analysis"]["load_timeouts"]["A"] == 1
     text = (the_runner.dir / "results.md").read_text()
     assert f"- launch 1 (A): timed out 1 time, did not run again, then {code}" in text
     assert "ran again" not in text.split("- launch 1 (A): timed out", 1)[1].splitlines()[0]
+    assert "every figure of such a launch" not in text and "none of them" not in text
+    assert "(it failed before its second try sent a request, so it has no figures" in text
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_NONE not in head
+    assert words.LOAD_RETRIED_HOW not in head
     if code == "STOPPED":
         assert results["run"]["error_code"] == "STOPPED" and [x["index"] for x in results["launches"]] == [1]
+
+
+def test_two_timed_out_launches_that_did_not_run_again_are_named_as_more_than_one(tmp_path):
+    """One timed-out launch that did not run again is "it"; two are "none of them", in results.md and the notebook."""
+    results, _, _ = run(tmp_path, StopFailsOnce(hang_once=True), rounds=ONE_ROUND)
+    second = results["launches"][1]
+    second.update(status="failed", error_code="LOAD_FAILED", load_timeouts=1, load_retries=0)
+    text = report.markdown(results)
+    assert "(none of them ran again: each failed before its second try sent a request" in text
+    assert "(it failed before" not in text
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_NONE in head and words.LOAD_RETRIED_NONE_ONE not in head
 
 
 class SamplerFailsFirst(FakeBackend):
@@ -1053,6 +1171,15 @@ def test_the_pinned_guidellm_image_is_the_same_everywhere():
     assert plans.GUIDELLM_IMAGE in helpers and plans.GUIDELLM_IMAGE in script
 
 
+def test_compare_local_passes_on_settings_the_docker_backend_reads():
+    script = (ROOT / "scripts/compare-local.sh").read_text()
+    backend = (ROOT / "notebooks/rhvp_compare/dockerapi.py").read_text()
+    passed = set(re.findall(r"-e (RHVP_COMPARE_[A-Z_]+)=", script))
+    read = set(re.findall(r'env\.get\("(RHVP_COMPARE_[A-Z_]+)"', backend))
+    assert {"RHVP_COMPARE_REPLICA_GPUS", "RHVP_COMPARE_CPUSET", "RHVP_COMPARE_CACHE_VOLUME"} <= passed
+    assert passed <= read
+    assert '"${cpuset_flag[@]}"' in script  # the runner container itself stays on the CPU set
+
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
     """main_run with the fake server; returns (exit code, the results root, the termination message file)."""
     path = tmp_path / "compare.json"
@@ -1122,6 +1249,7 @@ def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):
     l3 = next(x for x in results["launches"] if x["index"] == 3)
     assert (l3["side"], l3["kind"], l3["status"], l3["start_retries"]) == ("A", "scored", "ok", 1)
     assert backend.started.count((3, "A")) == 2 and backend.stopped.count(3) == 2  # the first try, then the launch
+    assert [(s["replica"], s["start_retries"]) for s in l3["servers"]] == [(1, 1)]  # one record, of the last start
     first_try = the_runner.dir / l3["artifacts"]["server_log_attempt_1"]
     assert "Error in memory profiling" in first_try.read_text()
     assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log"]).read_text()
@@ -1289,3 +1417,593 @@ def test_a_server_that_comes_back_on_the_last_try_is_back(tmp_path):
     assert not [e for e in results["run"]["errors"] if e.startswith(runner.NOT_RESTORED)]
     assert [n for n in results["run"]["notes"] if "a later try brought it back" in n]
     assert runner.exit_code(results) == runner.EXIT_PARTIAL
+
+
+# ---- the scale round (mode scaleout) ----
+
+SLO_REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1-slo.json").read_text())
+
+
+def surge_report(rate: float, attainment: float | None, goodput: float | None, successful: int = 40,
+                 errored: int = 0, noise: float = 1.0) -> dict:
+    """A surge's GuideLLM report. The fixture is a real GuideLLM v0.8.1 report with latency goals, of a concurrent
+    run; a constant-rate run differs in its strategy block, which is written here by hand. `noise` scales its
+    latencies and throughput, so a side and its twin land a little apart."""
+    data = json.loads(json.dumps(SLO_REPORT))
+    bench = data["benchmarks"][0]
+    bench["config"]["strategy"] = {"type_": "constant", "rate": rate, "max_concurrency": None, "rampup_duration": 0.0}
+    metrics = bench["metrics"]
+    metrics["request_totals"].update(successful=successful, errored=errored, total=successful + errored + 1)
+    metrics["slo_attainment"] = attainment
+    metrics["slo_determined_requests"] = successful + errored if attainment is not None else 0
+    if goodput is None:
+        del metrics["request_goodput"]
+    else:
+        metrics["request_goodput"]["successful"]["mean"] = goodput
+    metrics["time_to_first_token_ms"]["successful"]["median"] *= noise
+    metrics["inter_token_latency_ms"]["successful"]["median"] *= noise
+    metrics["output_tokens_per_second"]["total"]["mean"] /= noise
+    return data
+
+
+class FakeClock:
+    """The runner's wall clock: moves only when the runner sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1_794_000_000.0
+
+    def wall(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeRunning:
+    """GuideLLM started in the background: ends when the runner asks for its report. `stalls`: it hangs at the end of
+    the surge, so finish() times out; `ended`: it has already ended (with `stalls`, a time-out before the forced
+    step)."""
+
+    def __init__(self, path: Path, data: dict, ended=lambda: False, stalls: bool = False, on_stop=None) -> None:
+        self.path, self.data, self.ended, self.code, self.stopped = path, data, ended, None, False
+        self.stalls, self.on_stop = stalls, on_stop
+        path.parent.mkdir(parents=True, exist_ok=True)
+        (path.parent / "guidellm.log").write_text(f"surge {'stalled' if stalls else 'finished'}\n")
+
+    def poll(self):
+        return 0 if self.ended() else self.code
+
+    def finish(self):
+        if self.stalls:
+            self.stop()
+            raise guidellm.LoadError("GuideLLM did not finish within 1 s and was stopped; see guidellm.log",
+                                     timed_out=True)
+        self.path.write_text(json.dumps(self.data))
+        self.code = 0
+        return self.path
+
+    def stop(self):
+        self.stopped, self.code = True, -15
+        if self.on_stop:
+            self.on_stop()
+
+
+class FakeRouter:
+    """The router: the first stats call sees the surge's first request; the replica added later gets `share`."""
+
+    def __init__(self, targets, clock: FakeClock, share: float, out_dir: Path, on_stop=None) -> None:
+        self.url, self.clock, self.share, self.stopped = "http://router.test:8787", clock, share, False
+        self.targets, self.first_at, self.joined, self.on_stop = list(targets), None, None, on_stop
+        (out_dir / "router.log").write_text("router\n")
+
+    def stats(self):
+        self.first_at = self.first_at or self.clock.wall()
+        sent2 = round(40 * self.share) if self.joined else 0
+        backends = [{"url": self.targets[0], "sent": 40 - sent2, "finished": 40 - sent2, "failed": 0, "cancelled": 1,
+                     "max_in_flight": 12, "first_at": self.first_at, "last_at": self.first_at + 39}]
+        if self.joined:
+            backends.append({"url": self.targets[1], "sent": sent2, "finished": sent2, "failed": 0, "cancelled": 0,
+                             "max_in_flight": 3, "first_at": self.joined + 0.1, "last_at": self.first_at + 39})
+        return {"policy": "least-busy", "first_request_at": self.first_at, "backends": backends}
+
+    def add(self, target):
+        self.targets.append(target)
+        self.joined = self.clock.wall()
+        return {"url": target, "joined_at": self.joined}
+
+    def stop(self):
+        if self.on_stop:
+            self.on_stop(self)
+        self.stopped = True
+
+
+class ScaleBackend(FakeBackend):
+    """Two replicas per scored launch, a router and a background surge. Side B (and its twin) meets the goals more
+    often; every launch draws its own noise. `empty`: launch indexes whose surge had no request finish; `late`: the
+    surge has ended before replica 2 answers; `never_ready`: replica 2 of that launch never lists the model, and the
+    runner's clock jumps back once its surge starts, so its time limit has passed at once. `dies`: (launch index,
+    replica) -> how many of that replica's starts exit at vLLM's start-up memory check. `stalls`: launch index -> how
+    many of its surges' GuideLLM runs time out at the end; `early`: launch indexes whose first surge's GuideLLM times
+    out before the forced step."""
+
+    def __init__(self, clock: FakeClock, empty: tuple = (), late: bool = False, never_ready: int | None = None,
+                 dies: dict | None = None, stalls: dict | None = None, early: tuple = ()):
+        super().__init__(dies=dies)
+        self.clock, self.empty, self.late, self.never_ready = clock, empty, late, never_ready
+        self.stalls, self.early, self.surges = stalls or {}, early, {}
+        self.routers, self.loads, self.replica2_started = [], [], False
+        self.rewind = False
+
+    def start(self, plan, launch, side, spec, replica=1):
+        self.started.append((launch["index"], launch["side"], replica))
+        self.replica2_started = replica == 2
+        key = (launch["index"], replica)
+        tries = self.attempts[key] = self.attempts.get(key, 0) + 1
+        return {"launch": launch, "side": side["key"], "replica": replica, "dies": tries <= self.dies.get(key, 0)}
+
+    def endpoint(self, handle, deadline):
+        return "http://dead.test:8000" if handle["dies"] else f"http://side-{handle['replica']}.test:8000"
+
+    def router(self, plan, targets, out_dir):
+        self.routers.append(FakeRouter(targets, self.clock, 0.25 if not self.late else 0.0, out_dir))
+        return self.routers[-1]
+
+    def start_load(self, plan, launch, target, out_dir):
+        assert target == "http://router.test:8787"
+        if launch["index"] == self.never_ready:
+            self.rewind = True  # from here the runner's deadlines lie behind the probe's clock
+        rng = random.Random(launch["index"])
+        good = (0.9 if launch["of"] == "B" else 0.6) * (1.0 + rng.gauss(0.0, 0.01))
+        data = (surge_report(10, None, None, successful=0) if launch["index"] in self.empty
+                else surge_report(10, good, 10 * good, noise=1.0 + rng.gauss(0.0, 0.01)))
+        surge = self.surges[launch["index"]] = self.surges.get(launch["index"], 0) + 1
+        early = launch["index"] in self.early and surge == 1
+        self.loads.append(FakeRunning(out_dir / "guidellm.json", data,
+                                      ended=(lambda: True) if early else (lambda: self.late and self.replica2_started),
+                                      stalls=early or surge <= self.stalls.get(launch["index"], 0)))
+        return self.loads[-1]
+
+    def server_facts(self, handle):
+        return {"env": {"VLLM_X": "1", "HF_TOKEN": "hf_secret", "PATH": "/usr/bin"}, "env_source": "process",
+                "image_entrypoint": ["/usr/bin/tini", "--"], "image_cmd": None}
+
+    def logs(self, handle):
+        if handle["dies"]:
+            return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n" + PROFILING_LOG
+        if handle["replica"] == 1 and handle["launch"]["kind"] == "scored" and self.routers:
+            ts = self.routers[-1].first_at + 12.5
+            return ("2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
+                    f'2026-01-01T00:00:01Z {{"event":"rhvp-scale","ts":{ts},"app":"llm","deployment":"d",'
+                    '"from":1,"to":2,"reason":"target"}\n')
+        return "2026-01-01T00:00:00Z vLLM API server version 0.0.1\n"
+
+    def stop(self, handle):
+        self.stopped.append((handle["launch"]["index"], handle["replica"]))
+
+
+def scale_run(tmp_path, backend: ScaleBackend, clock: FakeClock, **extra):
+    plan = plans.build(scale_config(**extra), "docker")
+    mono = time.monotonic
+    the_runner = runner.Runner(plan, backend, tmp_path, wall=clock.wall, sleep=clock.sleep,
+                               clock=lambda: -1e9 if backend.rewind else mono(),
+                               client=lambda url: httpx.Client(base_url=url, transport=server(
+                                   "another-model" if backend.rewind and "side-2" in url else "m")))
+    return the_runner.run(), the_runner
+
+
+def _servers(launch: dict, *keys: str) -> list[tuple]:
+    return [tuple(item[key] for key in ("replica", *keys)) for item in launch["servers"]]
+
+
+def test_a_scale_out_run(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock)
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    assert results["run"]["status"] == "complete" and results["plan"]["mode"] == "scaleout"
+    warm, scored = results["launches"][0], results["launches"][2]
+    assert warm["kind"] == "warmup" and "scale" not in warm and _servers(warm) == [(1,)] and warm["starts"] == 1
+    assert [(i, r) for i, _, r in backend.started[:4]] == [(1, 1), (2, 1), (3, 1), (3, 2)]
+    assert sorted(backend.stopped) == sorted({(i, 1) for i in range(1, 35)} | {(i, 2) for i in range(3, 35)})
+    assert all(r.stopped for r in backend.routers) and len(backend.routers) == 32
+    assert [x["starts"] for x in results["launches"]] == [1, 1] + [2] * 32  # twins too: 66 server starts
+
+    scale = scored["scale"]
+    assert scale["step_after_s"] == 5 and 5 <= scale["step_at_s"] < 5.5  # the forced step, on the runner's clock
+    assert scale["new_replica"]["joined_during_surge"] is True and scale["new_replica"]["joined_at_s"] >= 5
+    assert scale["new_replica_share"] == 0.25
+    assert [b["replica"] for b in scale["router"]["backends"]] == [1, 2]
+    assert scale["router"]["backends"][1]["sent"] == 10 and scale["router"]["backends"][0]["first_s"] == 0
+    assert scale["load_triggered_s"] == 12.5 and scored["values"]["scale/load_triggered_s"] == 12.5
+    assert [(e["from"], e["to"], e["reason"]) for e in scale["events"]] == [(1, 2, "target")]
+    level = scored["levels"][0]
+    assert level["concurrency"] is None and level["rate"] == 10 and level["energy"]["source"] == "none"
+    assert 0.55 < level["slo_attainment"] < 0.65
+    assert set(scored["values"]) == {"startup/ready_s", "startup/first_answer_s", "scale/ready_s",
+                                     "scale/first_answer_s", "scale/load_triggered_s", "surge/slo_attainment",
+                                     "surge/goodput_rps", "surge/ttft_ms_median", "surge/itl_ms_median",
+                                     "surge/output_tokens_per_s"}
+    assert scored["artifacts"] == {"server_log": "launches/03-A-scored/server.log",
+                                   "server_log_2": "launches/03-A-scored/server-2.log",
+                                   "load_report": "launches/03-A-scored/guidellm.json"}
+    twin = results["launches"][3]
+    assert twin["side"] == "A~same" and twin["scale"]["new_replica"] and _servers(twin) == [(1,), (2,)]
+    first, second = scored["servers"]
+    assert (first["replica"], second["replica"]) == (1, 2) and first["entrypoint"] == "image"
+    assert first["env"] == {"VLLM_X": "1"} and first["env_dropped"] == ["HF_TOKEN"] and first["env_source"] == "process"
+    assert first["image_entrypoint"] == ["/usr/bin/tini", "--"] and "hf_secret" not in the_runner.path.read_text()
+
+    rows = rows_of(results)
+    attained = rows["surge/slo_attainment"]
+    assert attained["role"] == "primary" and attained["verdict"] == "BETTER" and attained["n_rounds"] == 8
+    assert attained["p_corrected"] == pytest.approx(2 * 2 ** -7)  # all 8 rounds agree; Holm over the 2 primaries
+    assert rows["surge/goodput_rps"]["verdict"] == "BETTER" and rows["surge/goodput_rps"]["role"] == "secondary"
+    assert rows["scale/first_answer_s"]["role"] == "primary" and rows["scale/first_answer_s"]["n_rounds"] == 8
+    floors = {(t["side"], t["case"]) for t in results["analysis"]["same_vs_same"]}
+    assert {("A", "surge/slo_attainment"), ("B", "scale/first_answer_s")} <= floors  # the twins' scale rounds
+    text = (the_runner.dir / "results.md").read_text()
+    assert "34 launches, which start 66 servers (two in each scored launch)" in text
+    # The fake backend gives no GPU and reads no UUID: the GPU line says so, and names a MIG device's UUID.
+    assert ("GPUs: declared, both replicas of a side share one GPU (scaleOut.sharedGpu true). Given to each "
+            "replica's container") in text and ": not recorded. For a MIG device the UUID is its parent GPU's." in text
+
+
+def test_a_surge_in_which_nothing_finished_gives_no_verdict(tmp_path):
+    # Launch 5 is side B in round 1: no request finished in its surge, so its attainment and goodput are 0, which is
+    # not a ratio: those cases get NO VERDICT (nonpositive_value), never a round left out unseen.
+    clock = FakeClock()
+    results, the_runner = scale_run(tmp_path, ScaleBackend(clock, empty=(5,)), clock)
+    jsonschema.validate(results, SCHEMA)
+    empty = results["launches"][4]
+    assert (empty["index"], empty["side"], empty["round"]) == (5, "B", 1)
+    assert empty["values"]["surge/slo_attainment"] == 0 and empty["values"]["surge/goodput_rps"] == 0
+    assert "surge/ttft_ms_median" not in empty["values"] and empty["levels"][0]["usable"] is False
+    assert "count as 0" in empty["levels"][0]["note"]
+    rows = rows_of(results)
+    for case in ("surge/slo_attainment", "surge/goodput_rps"):
+        assert (rows[case]["verdict"], rows[case]["reason"]) == ("NO VERDICT", "nonpositive_value"), case
+    assert rows["surge/ttft_ms_median"]["verdict"] == "NO VERDICT"  # the surge's medians are left out: a lost round
+    assert rows["scale/first_answer_s"]["lost"]["B"] == 0
+    assert results["run"]["status"] == "partial" and results["run"]["error_code"] == "REQUESTS_FAILED"
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 5 (B): 0 requests failed, 0 succeeded" in text
+    # Another reason (two nodes, a side that failed) can come before the 0, so this line names none; the table does.
+    assert "a figure of 0 gives its case NO VERDICT:" in text and "NO VERDICT (nonpositive_value):" not in text
+    head = "".join(show._head(results, [], []))
+    assert "launch 5 (B): 0 failed, 0 finished" in head
+
+
+def test_a_twins_zero_attainment_gives_that_case_no_verdict(tmp_path):
+    # Launch 4 is A~same in round 1: a 0 in side A's comparison with its twin leaves side A no floor on that case.
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, empty=(4,)), clock)
+    rows = rows_of(results)
+    assert (rows["surge/slo_attainment"]["verdict"], rows["surge/slo_attainment"]["reason"]) == (
+        "NO VERDICT", "nonpositive_value")
+    [zero] = [t for t in results["analysis"]["nonpositive_twins"] if t["case"] == "surge/slo_attainment"]
+    assert (zero["side"], zero["twin_rounds"], zero["cases"]) == ("A", [1], ["surge/slo_attainment"])
+    assert rows["scale/first_answer_s"]["reason"] != "nonpositive_value"  # its own floor group
+
+
+def test_a_new_replica_that_answers_after_the_surge_is_timed_with_a_share_of_0(tmp_path):
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, late=True), clock, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    scored = results["launches"][0]
+    assert scored["status"] == "ok" and scored["scale"]["new_replica"]["joined_during_surge"] is False
+    assert scored["scale"]["new_replica_share"] == 0 and "scale/first_answer_s" in scored["values"]
+
+
+def test_a_new_replica_that_never_answers_fails_the_launch(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, never_ready=1)
+    results, _ = scale_run(tmp_path, backend, clock, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    assert failed["status"] == "failed" and failed["error_code"] == "SIDE_NEVER_READY"
+    assert backend.loads[0].stopped and backend.routers[0].stopped  # the surge and the router were stopped
+    assert sorted(backend.stopped)[:2] == [(1, 1), (1, 2)]  # both replicas taken down
+    assert _servers(failed) == [(1,), (2,)] and failed["starts"] == 2
+
+
+def test_a_surge_whose_guidellm_timed_out_runs_the_launch_once_more_and_the_launch_counts(tmp_path):
+    # Launch 3 (side A, round 1): GuideLLM hangs at the end of the first surge. As in mode levels, one stall of the
+    # load tool is tried once more, but from a new first replica: the old one has served that surge, and its prefix
+    # cache would hold the same requests. The launch starts both replicas again, and every figure comes from the
+    # second try.
+    clock = FakeClock()
+    backend = ScaleBackend(clock, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["index"], l3["status"], l3["error_code"], l3["load_timeouts"], l3["load_retries"]) == (
+        3, "ok", None, 1, 1)
+    assert l3["starts"] == 4 and all(x["load_retries"] == 0 for x in results["launches"] if x["index"] != 3)
+    assert backend.surges[3] == 2 and backend.loads[0].stopped  # the stalled GuideLLM was stopped
+    assert [s for s in backend.started if s[0] == 3] == [(3, "A", 1), (3, "A", 2), (3, "A", 1), (3, "A", 2)]
+    assert [s for s in backend.stopped if s[0] == 3][:2] == [(3, 2), (3, 1)]  # the first try, before the second
+    assert backend.stopped.count((3, 1)) == 2 and backend.stopped.count((3, 2)) == 2
+    assert all(r.stopped for r in backend.routers)
+    assert {"startup/ready_s", "scale/first_answer_s", "surge/slo_attainment"} <= set(l3["values"])
+    assert l3["startup"]["ready_s"] >= 0 and 5 <= l3["scale"]["step_at_s"] < 5.5
+    assert l3["scale"]["new_replica_share"] == 0.25
+    assert any("both replicas are to be taken down and the launch run once more from a new first replica with the "
+               "same requests" in note for note in l3["notes"])
+    assert any("the launch ran once more from a new first replica, with the same requests" in note
+               for note in l3["notes"])
+    assert "stalled" in (the_runner.dir / l3["artifacts"]["guidellm_try_1"]).read_text()
+    assert "finished" in (the_runner.dir / "launches/03-A-scored/guidellm.log").read_text()
+    for key in ("server_log_try_1", "server_log_2_try_1", "router_try_1", "server_log", "server_log_2",
+                "load_report"):
+        assert (the_runner.dir / l3["artifacts"][key]).is_file(), key
+    assert l3["artifacts"]["server_log_try_1"] == "launches/03-A-scored/server.try-1.log"
+    assert _servers(l3, "discarded") == [(1, True), (2, True), (1, False), (2, False)]
+    assert l3["start_retries"] == 0 and "started again after vLLM" not in (the_runner.dir / "results.md").read_text()
+    rows = rows_of(results)
+    assert rows["surge/slo_attainment"]["verdict"] == "BETTER" and rows["surge/slo_attainment"]["n_rounds"] == 8
+    assert all(not any(row["lost"].values()) for row in rows.values())
+    assert results["analysis"]["load_timeouts"] == {"A": 1, "B": 0}
+    assert results["run"]["status"] == "complete" and results["run"]["error_code"] is None
+    text = (the_runner.dir / "results.md").read_text()
+    assert ("after a time-out GuideLLM, the router and the replicas that had started were taken down, and the launch "
+            "ran again from a new first replica") in text
+    assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
+    assert "a launch that did not run again" not in text
+    head = "".join(show._head(results, [], []))
+    assert "Launches whose GuideLLM timed out: 3 (A): ran again." in head and words.LOAD_RETRIED_SCALE in head
+    assert words.LOAD_RETRIED_SOME not in head
+
+
+def test_the_time_out_list_says_which_launches_ran_again(tmp_path):
+    # Launch 3 timed out and ran again; launch 7 is made one that timed out and failed before its second try. Only a
+    # launch that ran again is said to have its figures from its second try.
+    clock = FakeClock()
+    results, _ = scale_run(tmp_path, ScaleBackend(clock, stalls={3: 1}), clock)
+    l7 = results["launches"][6]
+    assert (l7["index"], l7["side"]) == (7, "A~same")
+    l7.update(status="failed", error_code="RUNNER_ERROR", load_timeouts=1, load_retries=0, values={})
+    text = report.markdown(results)
+    assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
+    assert "- launch 7 (A~same): timed out 1 time, did not run again, then RUNNER_ERROR" in text
+    assert ("; a launch that did not run again failed before its second try sent a request, so it has no figures):"
+            in text)
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_SCALE in head and words.LOAD_RETRIED_SOME in head
+    assert words.LOAD_RETRIED_NONE not in head
+
+
+def test_a_time_out_before_the_forced_step_takes_down_only_the_first_replica(tmp_path):
+    # Launch 3's first GuideLLM ends with a time-out before the forced step: only replica 1 had started, and the
+    # note says so.
+    clock = FakeClock()
+    backend = ScaleBackend(clock, early=(3,))
+    results, _ = scale_run(tmp_path, backend, clock)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["load_timeouts"], l3["load_retries"], l3["starts"]) == ("ok", 1, 1, 3)
+    assert [s for s in backend.started if s[0] == 3] == [(3, "A", 1), (3, "A", 1), (3, "A", 2)]
+    assert _servers(l3, "discarded") == [(1, True), (1, False), (2, False)]
+    [why] = [n for n in l3["notes"] if "to be taken down" in n]
+    assert "the side is to be taken down and the launch run once more from a new first replica" in why
+    assert "both replicas" not in why
+
+
+def test_a_memory_check_retry_of_a_discarded_try_is_named_as_that_replica(tmp_path):
+    # Launch 3: replica 2's first start stops at vLLM's memory check, its second start works, then GuideLLM stalls
+    # and the launch runs again. Only the discarded replica 2 was started again, and the reports say so.
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 2): 1}, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["load_retries"]) == ("ok", 5, 1, 1)
+    assert _servers(l3, "discarded", "start_retries") == [(1, True, 0), (2, True, 1), (1, False, 0), (2, False, 0)]
+    assert all(item["gpus"] is None and item["env"] == {"VLLM_X": "1"} for item in l3["servers"])
+    path = l3["artifacts"]["server_log_2_attempt_1_try_1"]
+    assert "Error in memory profiling" in (the_runner.dir / path).read_text()
+    assert "server_log_2_attempt_1" not in l3["artifacts"]
+    text = (the_runner.dir / "results.md").read_text()
+    assert ("- launch 3 (A): started 5 servers in all (replica 2 of the discarded try started again), then finished"
+            in text)
+    assert "3 (A, 5 servers; replica 2 of the discarded try started again)" in "".join(show._head(results, [], []))
+
+
+class DiesTwice(ScaleBackend):
+    """Replica 2 of launch 3 stops at vLLM's memory check on its 1st and 3rd starts (one in each try)."""
+
+    def start(self, plan, launch, side, spec, replica=1):
+        handle = super().start(plan, launch, side, spec, replica)
+        handle["dies"] = (launch["index"], replica) == (3, 2) and self.attempts[(3, 2)] in (1, 3)
+        return handle
+
+
+def test_each_tries_memory_check_log_is_kept(tmp_path):
+    clock = FakeClock()
+    backend = DiesTwice(clock, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["starts"], l3["start_retries"]) == ("ok", 6, 2)
+    assert _servers(l3, "discarded", "start_retries") == [(1, True, 0), (2, True, 1), (1, False, 0), (2, False, 1)]
+    first, second = l3["artifacts"]["server_log_2_attempt_1_try_1"], l3["artifacts"]["server_log_2_attempt_1"]
+    assert first == "launches/03-A-scored/server-2.attempt-1.try-1.log"
+    assert second == "launches/03-A-scored/server-2.attempt-1.log"
+    assert all("Error in memory profiling" in (the_runner.dir / path).read_text() for path in (first, second))
+    text = (the_runner.dir / "results.md").read_text()
+    assert ("- launch 3 (A): started 6 servers in all (replica 2 of the discarded try started again, replica 2 "
+            "started again), then finished") in text
+    head = "".join(show._head(results, [], []))
+    assert "3 (A, 6 servers; replica 2 of the discarded try, replica 2 started again)" in head
+
+
+@pytest.mark.parametrize("make, retried, kept", [
+    (lambda clock: ScaleBackend(clock, dies={(3, 2): 1}, stalls={3: 1}), "replica 2 was started once more",
+     ["server-2.attempt-1.try-1.log"]),
+    (lambda clock: ScaleBackend(clock, dies={(3, 1): 1}, stalls={3: 1}), "the side was started once more",
+     ["server.attempt-1.try-1.log"]),
+    (lambda clock: DiesTwice(clock, stalls={3: 1}), "replica 2 was started once more",
+     ["server-2.attempt-1.try-1.log", "server-2.attempt-1.log"]),
+])
+def test_the_notes_of_a_discarded_try_name_its_kept_files(tmp_path, make, retried, kept):
+    # The discard renames the try's files to *.try-1.*; the notes written during that try (a memory-check retry, the
+    # time-out) name the files by their new names and start with "try 1:".
+    clock = FakeClock()
+    results, the_runner = scale_run(tmp_path, make(clock), clock)
+    l3 = results["launches"][2]
+    assert l3["status"] == "ok" and l3["load_retries"] == 1
+    named = [name for note in l3["notes"] for name in re.findall(r"[\w.-]+\.log\b", note)]
+    assert named and all((the_runner.dir / "launches/03-A-scored" / name).is_file() for name in named), named
+    assert [name for name in named if ".attempt-" in name] == kept
+    assert "guidellm.try-1.log" in named and "guidellm.log" not in named  # the time-out's "see guidellm.log"
+    assert any(note.startswith("try 1:") and retried in note for note in l3["notes"])
+
+
+def test_a_surge_whose_guidellm_timed_out_twice_is_load_failed(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, stalls={1: 2})
+    results, _ = scale_run(tmp_path, backend, clock, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    assert (failed["status"], failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == (
+        "failed", "LOAD_FAILED", 2, 1)
+    assert backend.surges[1] == 2 and backend.started.count((1, "A", 2)) == 2
+    assert backend.started.count((1, "A", 1)) == 2 and failed["starts"] == 4
+    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 1), (1, 2), (1, 2)]
+
+
+class StopFailsInDiscard(ScaleBackend):
+    """The stop of launch 3's replica `which` fails once while the launch's first try is being discarded; with `term`,
+    a SIGTERM arrives during that stop instead, before the container is stopped, or with `after` once it is."""
+
+    def __init__(self, *args, which: int = 2, term: bool = False, after: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.which, self.term, self.after, self.fired = which, term, after, False
+
+    def stop(self, handle):
+        if (handle["launch"]["index"], handle["replica"]) == (3, self.which) and self.surges.get(3) == 1 \
+                and self.loads[-1].stopped and not self.fired:
+            self.fired = True
+            if self.after:
+                super().stop(handle)
+            if self.term:
+                os.kill(os.getpid(), signal.SIGTERM)  # the runner's handler raises Stopped here
+                time.sleep(30)
+                raise AssertionError("SIGTERM did not cut the discard short")
+            raise runner.RoundError("docker stop failed: 500")
+        super().stop(handle)
+
+
+@pytest.mark.parametrize("which, term, after", [(2, False, False), (1, False, False), (2, True, False),
+                                                (1, True, False), (1, True, True), (2, True, True)])
+def test_a_discard_cut_short_records_each_server_once_as_discarded(tmp_path, which, term, after):
+    # Launch 3: replica 2's first start stops at vLLM's memory check and is started again, GuideLLM stalls, and the
+    # try is discarded; then the stop of one of its replicas fails, or a SIGTERM lands during it (before or after the
+    # container stopped). The launch fails, its teardown finishes the discard, and the launch still says what
+    # happened: one server record per server, all marked discarded, the time-out counted, every container stopped,
+    # and the run ends with the launch's record (never RUNNER_FAILED).
+    clock = FakeClock()
+    backend = StopFailsInDiscard(clock, which=which, term=term, after=after, dies={(3, 2): 1}, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["error_code"]) == ("failed", "STOPPED" if term else "RUNNER_ERROR")
+    assert [s for s in backend.started if s[0] == 3] == [(3, "A", 1), (3, "A", 2), (3, "A", 2)]  # no second try
+    assert _servers(l3, "discarded", "start_retries") == [(1, True, 0), (2, True, 1)]
+    assert sum(item["start_retries"] for item in l3["servers"]) == l3["start_retries"] == 1
+    assert (l3["load_timeouts"], l3["load_retries"], l3["starts"]) == (1, 0, 3)  # the surge never ran again
+    assert any("both replicas are to be taken down" in note for note in l3["notes"])
+    stops = {1: backend.stopped.count((3, 1)), 2: backend.stopped.count((3, 2)) - 1}  # less the retried start's
+    assert stops == {which: 2 if after else 1, 3 - which: 1}
+    assert l3["startup"] is None and l3["values"] == {} and "scale" not in l3
+    assert l3["artifacts"] and all(key.endswith("_try_1") for key in l3["artifacts"]), l3["artifacts"]
+    assert all((the_runner.dir / path).is_file() for path in l3["artifacts"].values())
+    assert results["run"]["error_code"] == ("STOPPED" if term else "LAUNCHES_FAILED")
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): timed out 1 time, did not run again, then " in text
+    # The launch never ran again: nothing says it did, or that its figures come from a second try.
+    assert "(it failed before its second try sent a request, so it has no figures" in text
+    assert "every figure of such a launch" not in text and "none of them" not in text
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_SCALE not in head
+
+
+class TermInRouterStop(ScaleBackend):
+    """A SIGTERM lands while the router of launch 3's first try is stopped, before that try's files are renamed."""
+
+    def router(self, plan, targets, out_dir):
+        made = super().router(plan, targets, out_dir)
+        if len(self.routers) == 1:
+            made.on_stop = lambda router: (None if router.stopped else os.kill(os.getpid(), signal.SIGTERM))
+        return made
+
+
+def test_a_stop_during_the_discard_still_renames_every_file_of_the_try(tmp_path):
+    clock = FakeClock()
+    backend = TermInRouterStop(clock, stalls={3: 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["error_code"], l3["load_retries"]) == ("failed", "STOPPED", 0)
+    folder = the_runner.dir / "launches/03-A-scored"
+    names = {p.name for p in folder.iterdir()}
+    assert {"guidellm.try-1.log", "router.try-1.log", "server.try-1.log", "server-2.try-1.log"} <= names
+    assert not names & {"guidellm.log", "router.log", "server.log", "server-2.log"}
+    assert all(key.endswith("_try_1") for key in l3["artifacts"]) and "router_try_1" in l3["artifacts"]
+    named = [name for note in l3["notes"] for name in re.findall(r"[\w.-]+\.log\b", note)]
+    assert named and all((folder / name).is_file() for name in named), named
+    assert _servers(l3, "discarded") == [(1, True), (2, True)] and backend.routers[0].stopped
+
+
+def test_a_scale_launch_starts_its_new_replica_once_more_after_vllms_memory_check(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 2): 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["index"], l3["status"], l3["starts"], l3["start_retries"]) == (3, "ok", 3, 1)
+    assert _servers(l3, "start_retries") == [(1, 0), (2, 1)]
+    assert backend.started.count((3, "A", 2)) == 2 and backend.stopped.count((3, 2)) == 2
+    assert backend.stopped.count((3, 1)) == 1  # the first replica kept serving the surge
+    assert 5 <= l3["scale"]["step_at_s"] < 5.5  # the first ask, not the second start
+    assert "Error in memory profiling" in (the_runner.dir / l3["artifacts"]["server_log_2_attempt_1"]).read_text()
+    assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log_2"]).read_text()
+    assert "server_log_attempt_1" not in l3["artifacts"]
+    assert any("replica 2 was started once more" in note and "first asked for" in note for note in l3["notes"])
+    assert "scale/first_answer_s" in l3["values"]
+    assert all(x["start_retries"] == 0 for x in results["launches"] if x["index"] != 3)
+    assert results["run"]["status"] == "complete"
+    assert ("- launch 3 (A): started 3 servers in all (replica 2 started again), then finished"
+            in (the_runner.dir / "results.md").read_text())
+    head = "".join(show._head(results, [], []))
+    assert "started again after vLLM" in head and "3 (A, 3 servers; replica 2 started again)" in head
+    # The count is the launch's own `starts`: without its server records the launch says the same number.
+    del l3["servers"]
+    assert "- launch 3 (A): started 3 servers in all, then finished" in report.markdown(results)
+    assert "3 (A, 3 servers)" in "".join(show._head(results, [], []))
+
+
+def test_a_scale_launch_starts_its_first_replica_once_more_after_vllms_memory_check(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(3, 1): 1})
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["starts"], l3["start_retries"]) == ("ok", 3, 1)
+    assert _servers(l3, "start_retries") == [(1, 1), (2, 0)]
+    assert backend.stopped.count((3, 1)) == 2 and backend.stopped.count((3, 2)) == 1  # nothing stopped twice
+    assert "Error in memory profiling" in (the_runner.dir / l3["artifacts"]["server_log_attempt_1"]).read_text()
+    assert "- launch 3 (A): started 3 servers in all, then finished" in (the_runner.dir / "results.md").read_text()
+    assert "3 (A, 3 servers)" in "".join(show._head(results, [], []))
+
+
+def test_a_second_memory_check_failure_of_the_new_replica_fails_the_launch(tmp_path):
+    clock = FakeClock()
+    backend = ScaleBackend(clock, dies={(1, 2): 2})
+    results, _ = scale_run(tmp_path, backend, clock, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    failed = results["launches"][0]
+    assert (failed["status"], failed["error_code"], failed["start_retries"], failed["starts"]) == (
+        "failed", "SIDE_FAILED", 1, 3)
+    assert backend.started.count((1, "A", 2)) == 2
+    assert sorted(s for s in backend.stopped if s[0] == 1) == [(1, 1), (1, 2), (1, 2)]  # both tries, and replica 1
+    assert backend.loads[0].stopped and backend.routers[0].stopped
+    assert _servers(failed, "start_retries") == [(1, 0), (2, 1)]
