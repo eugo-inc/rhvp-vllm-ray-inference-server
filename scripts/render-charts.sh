@@ -12,6 +12,11 @@
 #   charts/<chart>.yaml          each charts/all/<chart>, as Argo CD renders it
 #   charts/<chart>-variant.yaml  ray-serve-llm and notebook with image.override set,
 #                                plus route.enabled=true / notebook.internal=true
+#   charts/notebook-compare*.yaml the notebook chart with global.compare.enabled=true
+#                                (also with energy.source=none and image.override, and with
+#                                bigger side pods: a new Job with the same config)
+#   charts/nvidia-gpu-config-compare*.yaml the ClusterPolicy with global.compare.enabled=true
+#                                (a 2 s DCGM interval), and with energy.source=none (none)
 #   clustergroup/<case>.yaml     the clustergroup chart (the app of apps) for:
 #                                  default    AWS, global.gpuMachineSet from values-global.yaml
 #                                  none       AWS, global.gpuMachineSet=none
@@ -143,7 +148,25 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
   --set image.override=quay.io/example/notebook:1.0 --set notebook.internal=true \
   --set notebook.replay=/opt/app-root/notebooks/replay/example \
   > "${RENDER_DIR}/charts/notebook-variant.yaml"
-echo "rendered charts/*-variant.yaml"
+# The image comparison switched on (global.compare.enabled), with and without energy.
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true > "${RENDER_DIR}/charts/notebook-compare.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true --set global.compare.energy.source=none \
+  --set image.override=quay.io/example/notebook:1.0 \
+  > "${RENDER_DIR}/charts/notebook-compare-noenergy.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true --set compare.side.resources.limits.memory=32Gi \
+  > "${RENDER_DIR}/charts/notebook-compare-sides.yaml"
+helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]}" "${SETS[@]}" \
+  --set global.compare.enabled=true --set image.pullPolicy=Always \
+  > "${RENDER_DIR}/charts/notebook-compare-pull.yaml"
+helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
+  "${SETS[@]}" --set global.compare.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-compare.yaml"
+helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
+  "${SETS[@]}" --set global.compare.enabled=true --set global.compare.energy.source=none \
+  > "${RENDER_DIR}/charts/nvidia-gpu-config-compare-noenergy.yaml"
+echo "rendered charts/*-variant.yaml, charts/notebook-compare*.yaml and charts/nvidia-gpu-config-compare*.yaml"
 
 # ---- clustergroup chart (app of apps) ---------------------------------------------
 render_clustergroup() {

@@ -1,7 +1,8 @@
 ---
-# The sample notebook: the committed notebook, prompt set and synthetic recording must be what
-# notebooks/make_notebook.py writes, and the notebook's rules and measurement tests must pass. The rule tests also run
-# the whole notebook headless in REPLAY mode against the stand-in server, so no GPU is needed.
+# The sample notebook and the image comparison's notebook: the committed notebooks, prompt set and synthetic files
+# must be what notebooks/make_notebook.py writes, and the notebooks' rules and measurement tests must pass. The tests
+# also run both notebooks headless in REPLAY mode (the timing notebook against the stand-in server), so no GPU is
+# needed.
 name: Notebook check
 
 on:
@@ -31,10 +32,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest==9.2.0 nbformat==5.11.1 nbclient==0.11.0 nbconvert==7.17.2 \
-            ipykernel==7.4.0 httpx==0.28.1
+            ipykernel==7.4.0 httpx==0.28.1 jsonschema==4.26.0
 
       - name: The committed notebook is what make_notebook.py writes
         run: python notebooks/make_notebook.py --check
 
       - name: Notebook rules and measurement tests
         run: python -m pytest -q tests/test_notebook_rules.py tests/test_measure.py
+
+      - name: The image comparison's notebook (REPLAY, a results volume, no results)
+        run: python -m pytest -q tests/test_compare_notebook.py

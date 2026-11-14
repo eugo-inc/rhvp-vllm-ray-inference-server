@@ -27,6 +27,9 @@ one OpenShift cluster:
   one GPU node (see above).
 - **Secrets.** HashiCorp Vault plus the External Secrets Operator carry an optional Hugging Face token.
 - **A notebook.** A small JupyterLab behind OpenShift login. Its notebook times the server.
+- **An image comparison**, off by default (`global.compare`). A Job compares two inference-server images on the
+  server's GPU and takes the server down while it runs (README, "Compare two images"; here, "How the image
+  comparison runs").
 
 ### Names that must stay in sync
 
@@ -50,6 +53,11 @@ one, change it everywhere and run the tests.
 | Notebook build | BuildConfig and ImageStream `notebook`, `contextDir: notebooks`, `dockerfilePath: Containerfile` |
 | Notebook ServiceAccount | `notebook`, with a Role and RoleBinding `notebook-read-pods` in `vllm-inference` that allow get/list/watch on pods |
 | Rebuild permission | Role and RoleBinding `rebuild-on-commit` in both namespaces, for ServiceAccount `imperative/imperative-sa`; the namespaces and BuildConfig names are also listed in `ansible/rebuild-on-commit.yaml` |
+| Image comparison runner | Job `compare-<runName>-<hash of the pod template>` in `vllm-notebook` (pod label `app.kubernetes.io/name=image-compare`), ServiceAccount `image-compare`, config ConfigMap `image-compare-config-<hash of the config>` (key `compare.json`) |
+| Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`) |
+| Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
+| Image comparison sides | Pods `cmp-<last 8 characters of the run id>-<NN, the launch>-<a, a-same, b or b-same>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side`, `rhvp-compare/run=<run id>`, `rhvp-compare/side` (`A`, `A-same`, `B`, `B-same`), `rhvp-compare/launch` and `rhvp-compare/round` (a number, or `warmup`) |
+| DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s` |
 
 ## Repo map
 
@@ -63,11 +71,13 @@ overrides/values-gpu-machineset-create-AWS.yaml   create-gpu-machineset imperati
 ansible/rebuild-on-commit.yaml   imperative job: start a build when that build's source folder changed
 ansible/rebuild_on_commit.py     the rebuild decision (which BuildConfigs to start), tested in tests/test_charts.py
 charts/all/nfd-config/         NodeFeatureDiscovery instance
-charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint)
+charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint; a 2 s DCGM interval
+                               while the comparison is on)
 charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Route (off by default), PVC,
                                ConfigMap, ExternalSecret
 charts/all/notebook/           BuildConfig, ImageStream, Deployment (JupyterLab + oauth-proxy), Service, Route,
-                               ServiceAccount and RBAC
+                               ServiceAccount and RBAC; compare-job.yaml, compare-config.yaml (ConfigMap, PVC)
+                               and compare-rbac.yaml, rendered only while global.compare.enabled is true
 inference-server/              Containerfile, requirements.in, requirements-pip.lock (pip itself),
                                requirements-x86_64.lock, requirements-aarch64.lock, serve_app.py, entrypoint.sh,
                                rhvp_status.py
@@ -75,9 +85,15 @@ notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requ
                                make_notebook.py, rhvp_bench/ (words, draw, showing, measure, replay, prompts,
                                run), prompts.jsonl, recordings/synthetic.json,
                                inference_timings.ipynb (generated)
-scripts/                       render-charts.sh, validate-values.sh, local-smoke.sh
+notebooks/rhvp_compare/        the image comparison: plan, runner, probe, guidellm, logs, energy, stats, analyze,
+                               report, summary, kube (OpenShift backend), dockerapi (docker backend), example,
+                               words, show, cells; results.schema.json. compare_images.ipynb and
+                               compare-recordings/synthetic.json are generated by make_notebook.py
+scripts/                       render-charts.sh, validate-values.sh, local-smoke.sh, compare-local.sh
 tests/                         test_serve_config.py, test_secrets_template.py, test_charts.py,
-                               test_notebook_rules.py, test_measure.py
+                               test_notebook_rules.py, test_measure.py, test_compare_stats.py,
+                               test_compare_parsers.py, test_compare_runner.py, test_compare_notebook.py,
+                               fixtures/ (a trimmed GuideLLM report, the mock config for compare-local.sh)
 .github/workflows/             lint.yml, jsonschema.yaml, notebook-check.yml
 pattern.sh  Makefile  Makefile-common  ansible.cfg  .claude/skills/pattern-author/  .cursor/skills/pattern-author/
 ```
@@ -141,6 +157,79 @@ The notebook image bakes in the `notebooks/` folder at `/opt/app-root/notebooks`
 When the pod starts, it copies that folder into a writable emptyDir at `/work`. It then runs JupyterLab on
 `127.0.0.1:8888` with `root_dir` `/work`, behind an OpenShift oauth-proxy sidecar. The sidecar listens on port 8443
 and uses a serving certificate; the Route uses `reencrypt` termination.
+
+### How the image comparison runs
+
+- Off by default. `global.compare` in `values-global.yaml` is the config; the notebook chart renders it, plus
+  `global.model`, into ConfigMap `image-compare-config-<hash>`, and renders the Job and its RBAC.
+- The Job's pod runs on the pinned GuideLLM image (`ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b...`); an init
+  container copies `notebooks/rhvp_compare` into it from the notebook image. It runs on the notebook pod's node,
+  because the results PVC is ReadWriteOnce and the notebook mounts it too.
+- The runner (`python -m rhvp_compare run --backend kube`) first lists the runner pods in `vllm-notebook`
+  (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
+  older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each launch creates a
+  side pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs
+  GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
+  `results.json`. A round launches A, A~same, B and B~same once each (`plan.launch_order`, rotate-reverse); a twin
+  (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
+  (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
+  (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the
+  launch's `start_retries`). A GuideLLM time-out runs the launch once more from a new start of the side, timed from
+  that start, with the same requests (`runner.LOAD_RETRIES`). The launch's `load_timeouts` is counted when the
+  time-out happens and `load_retries` only once the second load begins; the first try's files are kept as
+  `*.try-1.*`, its notes are marked `try 1:`, and its figures are cleared before the teardown. Time-outs count
+  against their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it scales the server
+  back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and records
+  `run.server_restored`; a server that did not come back is exit 4.
+- The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
+  sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
+- SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current launch short and asks the server back at once,
+  before the side is taken down (its pod waits for the GPU); every API call then gets a 10 s timeout. The pod's
+  `terminationGracePeriodSeconds` (300) is above the worst case of that path (`kube.stop_budget_seconds()`, checked
+  by `tests/test_charts.py`).
+- A Job's pod template cannot change, so the Job's name carries a hash of the whole rendered pod template
+  (`notebook.comparePodTemplate`, hashed by `notebook.compareJobHash`). The run id carries a hash of the config
+  only, so a new Job with the same config finds its run complete and exits at once, or refuses while the first
+  still runs.
+- The verdict rule (`stats.grade`, applied by `analyze._decide`): per case, the median over the rounds of B/A. Each
+  side's noise floor is the largest `abs(median(side / twin) - 1)` over the cases of one metric and role
+  (`case.group`); the bar is B's floor plus A's. The test is the exact two-sided sign test over the untied rounds,
+  with Holm's correction over the primary cases only ("corrected for testing N cases at once"); a secondary case is
+  graded on its uncorrected p-value. Outside the bar and p below alpha: `better` / `worse` (FASTER or SLOWER for
+  times, BETTER or WORSE for rates and tokens per joule); inside and not significant: `tie`; otherwise `unresolved`
+  (`inside_noise`, `not_significant`, or `order_unbalanced` when one side ran first more than 3 times as often).
+  `no_verdict` comes first when a case cannot be graded, checked in this order: `more_than_one_node`, `side_failed`
+  (a launch of A or B failed on its own account where the other did not; pattern-only, like the node check),
+  `nonpositive_value` (a 0 on A or B in any round, paired or not, or in a side's pair with its twin, which takes the
+  side's floor on that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary
+  family, or of one case for a secondary), `no_floor`, `one_sided_floor`, `zero_floor`. There is no fixed tie band.
+- `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
+  `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
+  `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
+  `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can
+  replace `analyze.py` and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a
+  file of another version with a notice.
+- Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, an estimate of about 4 to
+  6 hours (16 rounds: 66 starts, about 8 to 12 hours). Unmeasured on any cluster. The Job's
+  `activeDeadlineSeconds` (48 h) and the per-launch side deadline (`kube.side_deadline`) and stop budget do not
+  depend on the number of launches.
+- Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
+
+Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
+to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-launch). That run
+came before the refusal of a second run, the scale read-back, the early restore on a stop and the twins, which on
+Kubernetes are covered by unit tests only (under docker, the refusal and the stop path have run against the mock
+server). Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`), under the earlier rule (A
+and B only, no twins): two 2-pair smoke runs of the example's two vLLM images with smaller settings. The second
+finished all 6 launches, measured by GuideLLM, with tokens per joule from nvidia-smi, one of them after a second
+start past vLLM's start-up memory check (README, "On one machine"); the first, from before that second start, lost a
+launch to that check.
+Not checked yet: the twin rule with any real server (it has run against fakes only); the Kubernetes backend with a
+real server; tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label
+names it matches on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a
+run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the
+example's own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); and a launch
+whose GuideLLM timed out and ran again, which only the fake backend of the unit tests has gone through.
 
 ## How to deploy
 
@@ -442,8 +531,10 @@ Then run these, all from the repo root:
 | `scripts/render-charts.sh` | renders every local chart and the clustergroup chart with the values the operator injects | needs docker or podman; uses the utility container |
 | `scripts/validate-values.sh` | schema-checks the merged values (global, then `prod`, then each override) and the secrets template | anywhere |
 | `python3.12 -m pytest -q tests/` | runs the unit tests | anywhere; the chart tests in `tests/test_charts.py` are skipped without docker or podman and access to charts.validatedpatterns.io |
-| `python3.12 notebooks/make_notebook.py --check` | regenerates the notebook and fails if it differs from the committed file | anywhere |
+| `python3.12 notebooks/make_notebook.py --check` | regenerates both notebooks and their synthetic files and fails if one differs from the committed file | anywhere |
 | `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
+| `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker; GPU sides need an NVIDIA GPU |
+| `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints every round's order, the server starts and whether the rounds can give a verdict | anywhere |
 
 ## Bumping Ray and vLLM
 
@@ -479,11 +570,18 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
    - Validated Patterns charts.
 
    Never add Eugo packages, Eugo images or Eugo registries, and never add a private package index.
-2. **Notebook.** `notebooks/inference_timings.ipynb` is generated by `notebooks/make_notebook.py` and is
-   committed without outputs. Never hand-edit the `.ipynb`: change `make_notebook.py` or `rhvp_bench/`,
-   regenerate, and run `--check`. It times the stock server only. Its results are given in seconds and tokens
-   per second, never as a ratio, and no sentence gives a cause for a result; `tests/test_notebook_rules.py` checks
-   this.
+
+   The image comparison also runs GuideLLM's public release image, pinned by digest, and the two side images the
+   user puts in `global.compare.sides`. Examples, defaults and tests use only public upstream images (two vLLM
+   releases) or made-up `registry.example/...` names.
+2. **Notebooks.** `notebooks/inference_timings.ipynb` and `notebooks/compare_images.ipynb` are generated by
+   `notebooks/make_notebook.py` and are committed without outputs. Never hand-edit an `.ipynb`: change
+   `make_notebook.py`, `rhvp_bench/` or `rhvp_compare/`, regenerate, and run `--check`.
+   - `inference_timings.ipynb` times the stock server only. Its results are given in seconds and tokens per
+     second, never as a ratio; `tests/test_notebook_rules.py` checks this.
+   - `compare_images.ipynb` shows B/A ratios and the verdicts of the comparison's pre-declared rule, and nothing
+     else that ranks the two images; `tests/test_compare_notebook.py` checks it.
+   - In both, no sentence gives a cause for a result.
 3. **Telemetry stays off.** Keep these settings in the server image: `RAY_USAGE_STATS_ENABLED=0`,
    `VLLM_NO_USAGE_STATS=1`, `DO_NOT_TRACK=1`, `RAYLLM_ENABLE_REQUEST_PROMPT_LOGS=0`.
 4. **Installer name limit.** `len(global.pattern) + 2 * len(variant)` must be under 47. Today it is

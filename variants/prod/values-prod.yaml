@@ -12,6 +12,11 @@ clusterGroup:
     external-secrets:
     openshift-nfd:
     nvidia-gpu-operator:
+      # Lets the cluster's own monitoring scrape the GPU Operator's DCGM exporter
+      # (its ServiceMonitor), as NVIDIA's OpenShift guide says. The image
+      # comparison reads GPU power from there.
+      labels:
+        openshift.io/cluster-monitoring: "true"
     vllm-inference:
     vllm-notebook:
 
@@ -80,6 +85,13 @@ clusterGroup:
           name: ray-serve-llm
           jqPathExpressions:
             - '.spec.template.spec.containers[] | select(.name == "server") | .image'
+        # The image comparison's runner scales the server to 0 for a run and back
+        # when it ends; a sync during a run must not bring it back onto the GPU.
+        - group: apps
+          kind: Deployment
+          name: ray-serve-llm
+          jsonPointers:
+            - /spec/replicas
         - group: build.openshift.io
           kind: BuildConfig
           jqPathExpressions:

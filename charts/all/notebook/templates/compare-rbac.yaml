@@ -1,0 +1,169 @@
+{{- if include "notebook.compareEnabled" . }}
+# The image comparison's runner (compare-job.yaml) runs as this ServiceAccount. It
+# creates and deletes one side pod at a time in the server namespace, reads their
+# logs, scales the pattern's server Deployment to 0 and back, reads the Hugging
+# Face Secret there (to decide whether a side gets the token, by reference, and to
+# give GuideLLM the tokenizer of a gated model), writes its status ConfigMap in
+# this namespace, lists the runner pods here (one run at a time), reads the GPU
+# node's labels and the cluster version for the results' provenance, and reads GPU
+# power from the cluster's monitoring.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-compare
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: image-compare-sides
+  namespace: {{ .Values.notebook.serverNamespace }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods/log
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ .Values.compare.side.hfSecretName }}
+    verbs:
+      - get
+{{- if .Values.compare.serverDeployment }}
+  - apiGroups:
+      - apps
+    resources:
+      - deployments/scale
+    resourceNames:
+      - {{ .Values.compare.serverDeployment }}
+    verbs:
+      - get
+      - patch
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: image-compare-sides
+  namespace: {{ .Values.notebook.serverNamespace }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: image-compare-sides
+subjects:
+  - kind: ServiceAccount
+    name: image-compare
+    namespace: {{ .Release.Namespace }}
+---
+# The run's status, ConfigMap compare-<run id>, in this namespace. Its name comes
+# from the run, so the rule cannot name it. The runner also lists the runner pods
+# here: it refuses to start while an older one is still going.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: image-compare-status
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+      - get
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: image-compare-status
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: image-compare-status
+subjects:
+  - kind: ServiceAccount
+    name: image-compare
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-image-compare
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - clusterversions
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-image-compare
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-image-compare
+subjects:
+  - kind: ServiceAccount
+    name: image-compare
+    namespace: {{ .Release.Namespace }}
+{{- if ne (include "notebook.compareEnergy" .) "none" }}
+---
+# GPU power (DCGM) from the Thanos Querier of the cluster's monitoring.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-image-compare-monitoring
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: image-compare
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

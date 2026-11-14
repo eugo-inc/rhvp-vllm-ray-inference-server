@@ -1,0 +1,184 @@
+{{/* The runner pod's template. The Job's name carries its hash (notebook.compareJobHash): a
+     Job's pod template cannot be changed, so any change to it is a new Job. */}}
+{{- define "notebook.comparePodTemplate" -}}
+{{- $hash := include "notebook.compareHash" . }}
+{{- $side := .Values.compare.side -}}
+metadata:
+  labels:
+    app.kubernetes.io/name: image-compare
+    app.kubernetes.io/part-of: vllm-ray-inference-server
+spec:
+  serviceAccountName: image-compare
+  restartPolicy: Never
+  terminationGracePeriodSeconds: {{ .Values.compare.terminationGracePeriodSeconds }}
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector:
+    kubernetes.io/arch: {{ .Values.arch | quote }}
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: notebook
+          topologyKey: kubernetes.io/hostname
+  initContainers:
+    - name: copy-runner
+      image: {{ include "notebook.image" . | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command:
+        - cp
+        - -R
+        - /opt/app-root/notebooks/rhvp_compare
+        - /runner/
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+      volumeMounts:
+        - name: runner
+          mountPath: /runner
+  containers:
+    - name: runner
+      image: {{ include "notebook.compareLoadImage" . | quote }}
+      imagePullPolicy: IfNotPresent
+      workingDir: /runner
+      command:
+        - python
+        - -m
+        - rhvp_compare
+        - run
+        - --backend
+        - kube
+        - --config
+        - /config/compare.json
+        - --results
+        - /results
+      terminationMessagePolicy: FallbackToLogsOnError
+      env:
+        - name: PYTHONPATH
+          value: /runner
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        - name: HOME
+          value: /cache/home
+        - name: USER
+          value: runner
+        - name: LOGNAME
+          value: runner
+        - name: HF_HOME
+          value: /cache/hf
+        - name: RHVP_COMPARE_NAMESPACE
+          value: {{ .Values.notebook.serverNamespace | quote }}
+        - name: RHVP_COMPARE_ARCH
+          value: {{ $side.arch | quote }}
+        - name: RHVP_COMPARE_MODELS_PVC
+          value: {{ $side.modelsClaimName | quote }}
+        - name: RHVP_COMPARE_LLM_CONFIGMAP
+          value: {{ $side.llmConfigMap | quote }}
+        - name: RHVP_COMPARE_HF_SECRET
+          value: {{ $side.hfSecretName | quote }}
+        - name: RHVP_COMPARE_HF_KEY
+          value: {{ $side.hfSecretKey | quote }}
+        - name: RHVP_COMPARE_GPU_RESOURCE
+          value: {{ $side.gpuResourceName | quote }}
+        - name: RHVP_COMPARE_GPU_TAINT_KEY
+          value: {{ $side.gpuTaintKey | quote }}
+        - name: RHVP_COMPARE_SHM
+          value: {{ $side.shmSizeLimit | quote }}
+        - name: RHVP_COMPARE_CACHE
+          value: {{ $side.cacheSizeLimit | quote }}
+        - name: RHVP_COMPARE_PENDING_SECONDS
+          value: {{ $side.pendingSeconds | quote }}
+        - name: RHVP_COMPARE_SIDE_RESOURCES
+          value: {{ $side.resources | toJson | quote }}
+        - name: RHVP_COMPARE_SERVER_DEPLOYMENT
+          value: {{ .Values.compare.serverDeployment | quote }}
+        - name: RHVP_COMPARE_SERVER_REPLICAS
+          value: {{ .Values.compare.serverReplicas | quote }}
+        - name: RHVP_COMPARE_STATUS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RHVP_COMPARE_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RHVP_COMPARE_DEADLINE_SECONDS
+          value: {{ .Values.compare.activeDeadlineSeconds | quote }}
+        - name: RHVP_COMPARE_TERMINATION_LOG
+          value: /dev/termination-log
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        {{- toYaml .Values.compare.runnerResources | nindent 12 }}
+      volumeMounts:
+        - name: runner
+          mountPath: /runner
+          readOnly: true
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: results
+          mountPath: /results
+        - name: cache
+          mountPath: /cache
+  volumes:
+    - name: runner
+      emptyDir:
+        sizeLimit: 64Mi
+    - name: cache
+      emptyDir:
+        sizeLimit: 2Gi
+    - name: config
+      configMap:
+        name: image-compare-config-{{ $hash }}
+    - name: results
+      persistentVolumeClaim:
+        claimName: image-compare-results
+{{- end }}
+{{- if include "notebook.compareEnabled" . }}
+{{- $hash := include "notebook.compareHash" . }}
+# The image comparison's runner: one Job per pod template (the name carries its
+# hash, and the template the config's). It scales the pattern's server to 0,
+# starts the sides one at a time (each side and its twin once per round), each as
+# a pod in the server namespace, with GuideLLM as its own child process, writes
+# the results to the PVC image-compare-results and a short status to ConfigMap
+# compare-<run id>, and scales the server back when it ends. A run whose results.json is complete is not
+# run again, so a Job that Argo CD creates a second time exits at once; a runner
+# that finds an older runner pod still going refuses to start (exit 5) and changes
+# nothing. Exit 1 (the Job reads Failed) means a partial run, 3 a run that failed
+# outside a launch, 4 a server that could not be scaled back; the termination
+# message and the log's last lines summarise it.
+#
+# The container is the pinned GuideLLM image; an init container copies the
+# rhvp_compare package into it from the notebook image. The PVC is ReadWriteOnce
+# and the notebook mounts it too, so the pod runs on the notebook pod's node.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: compare-{{ required "global.compare.runName is required" .Values.global.compare.runName }}-{{ include "notebook.compareJobHash" . }}
+  labels:
+    {{- include "notebook.labels" . | nindent 4 }}
+    rhvp-compare/config: {{ $hash | quote }}
+  annotations:
+    # The rendered config, readable without the ConfigMap.
+    rhvp-compare/config: {{ include "notebook.compareConfig" . | fromJson | toJson | quote }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.compare.activeDeadlineSeconds }}
+  template:
+    {{- include "notebook.comparePodTemplate" . | nindent 4 }}
+{{- end }}
