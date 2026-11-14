@@ -1,9 +1,9 @@
 """The scale-out settings contract: the keys and their defaults, the rules both the values check and the charts
-apply, the rhvp-scale log line, the per-start launch record and the comparison's mode. None of them need Ray, a GPU
+apply, the rhvp-scale log line, the per-server record and the comparison's mode. None of them need Ray, a GPU
 or a cluster; the render tests use the one render of tests/conftest.py and are skipped the same way.
 
 These tests hold only what stays true once the scale-out work is built: what the comparison refuses until then,
-and whether a round must carry `launches`, are tested in test_compare_runner.py."""
+and whether a launch must carry `servers`, are tested in test_compare_runner.py."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO / "notebooks"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 import pattern_settings  # noqa: E402
-from rhvp_compare import launch, logs, plan as plans  # noqa: E402
+from rhvp_compare import logs, plan as plans, servers  # noqa: E402
 
 SERVER_VALUES = yaml.safe_load((REPO / "charts/all/ray-serve-llm/values.yaml").read_text())
 SCHEMA = json.loads((REPO / "notebooks/rhvp_compare/results.schema.json").read_text())
@@ -71,13 +71,13 @@ def test_defaults_change_nothing():
                                               "cooldownSeconds", "thanosUrl"}
     assert SERVER_VALUES["global"]["scaleOut"]["mode"] == "none"
     assert GLOBAL["global"]["scaleOut"]["mode"] == "none"
-    assert GLOBAL["global"]["compare"]["mode"] == "pairs"
+    assert GLOBAL["global"]["compare"]["mode"] == "levels"
     assert pattern_settings.check(chart_values()) == []
 
 
 def test_values_check_names_every_mode():
     assert pattern_settings.SCALE_OUT_MODES == ("none", "keda")
-    assert pattern_settings.COMPARE_MODES == plans.MODES == ("pairs", "scaleout")
+    assert pattern_settings.COMPARE_MODES == plans.MODES == ("levels", "scaleout")
     assert pattern_settings.COMPILE_CACHE_MODES == ("none", "node", "shared")
 
 
@@ -87,7 +87,8 @@ def test_values_check_names_every_mode():
 @pytest.mark.parametrize("over, message", [
     ({"global": {"scaleOut": {"mode": "hpa"}}}, "global.scaleOut.mode must be none or keda; got hpa"),
     ({"global": {"scaleOut": {"mode": False}}}, "global.scaleOut.mode must be none or keda"),
-    ({"global": {"compare": {"mode": "surge"}}}, "global.compare.mode must be pairs or scaleout; got surge"),
+    ({"global": {"compare": {"mode": "surge"}}},
+     "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got surge"),
     ({"server": {"minReplicas": 2}}, pattern_settings.MOVED),
     ({"server": {"autoscaling": {"minReplicas": 0}}}, "server.autoscaling.minReplicas must be a whole number"),
     ({"server": {"autoscaling": {"maxReplicas": 1.5}}}, "server.autoscaling.maxReplicas must be a whole number"),
@@ -216,7 +217,8 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
     ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
     ("replicas-moved", pattern_settings.MOVED),
-    ("compare-mode-unknown", "global.compare.mode must be pairs or scaleout; got surge"),
+    ("compare-mode-unknown",
+     "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got surge"),
 ])
 def test_charts_refuse_with_the_values_check_message(render, case, message):
     assert message in (render / f"refused/{case}.txt").read_text()
@@ -289,45 +291,45 @@ def test_scale_line_refuses_values_outside_the_shape(args):
         rhvp_scale.scale_event("llm", "d", 1, 2, "target", ts=float("nan"))
 
 
-# ---- the per-start launch record --------------------------------------------------------------
+# ---- the per-server record ---------------------------------------------------------------------
 
 
-def test_launch_env_keeps_the_allow_list_only():
+def test_server_env_keeps_the_allow_list_only():
     env = {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=0", "CUDA_VISIBLE_DEVICES": "0", "VLLM_CACHE_ROOT": "/cache/vllm",
            "TORCH_CUDA_ARCH_LIST": "8.9", "HF_HOME": "/models/hf", "HF_TOKEN": "hf_x", "HF_TOKEN_PATH": "/x",
            "VLLM_API_KEY": "k", "VLLM_TOKENIZER_POOL_SIZE": "0", "HUGGING_FACE_HUB_TOKEN": "hf_y", "PATH": "/usr/bin",
            "LD_PRELOAD": "x.so", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True", "HOME": "/cache/home"}
-    kept, dropped = launch.recorded_env(env)
+    kept, dropped = servers.recorded_env(env)
     assert kept == {"CUDA_VISIBLE_DEVICES": "0", "GLIBC_TUNABLES": "glibc.malloc.hugetlb=0", "HF_HOME": "/models/hf",
                     "TORCH_CUDA_ARCH_LIST": "8.9", "VLLM_CACHE_ROOT": "/cache/vllm",
                     "VLLM_TOKENIZER_POOL_SIZE": "0"}
     assert dropped == ["HF_TOKEN", "HF_TOKEN_PATH", "VLLM_API_KEY"]
-    assert "hf_x" not in json.dumps(launch.record(1, None, [], env, "process"))
+    assert "hf_x" not in json.dumps(servers.record(1, None, [], env, "process"))
 
 
-def test_launch_record_matches_the_schema():
-    override = launch.record(1, ["/opt/app-root/src/entrypoint.sh"], ["--x"], {"VLLM_FOO": "1"}, "container",
-                             started_at="2026-11-13T06:10:00Z", image_entrypoint=["/usr/bin/tini"],
-                             image_cmd=None)
+def test_server_record_matches_the_schema():
+    override = servers.record(1, ["/opt/app-root/src/entrypoint.sh"], ["--x"], {"VLLM_FOO": "1"}, "container",
+                              started_at="2026-11-13T06:10:00Z", image_entrypoint=["/usr/bin/tini"],
+                              image_cmd=None)
     assert override["entrypoint"] == "override" and override["env"] == {"VLLM_FOO": "1"}
-    image = launch.record(2, None, ["--model", "m"], None, "process")
+    image = servers.record(2, None, ["--model", "m"], None, "process")
     assert image["entrypoint"] == "image" and image["env_source"] == "none" and image["env"] == {}
     # Preset ray-serve-llm sets the server image's own ENTRYPOINT as its command: that runs the image's entrypoint.
-    own = launch.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none",
-                        image_entrypoint=["/opt/app-root/src/entrypoint.sh"])
+    own = servers.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none",
+                         image_entrypoint=["/opt/app-root/src/entrypoint.sh"])
     assert own["entrypoint"] == "image"
-    unknown = launch.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none")
+    unknown = servers.record(1, ["/opt/app-root/src/entrypoint.sh"], [], None, "none")
     assert unknown["entrypoint"] == "override"
-    validator = jsonschema.Draft202012Validator({"$defs": SCHEMA["$defs"], "$ref": "#/$defs/launch"})
+    validator = jsonschema.Draft202012Validator({"$defs": SCHEMA["$defs"], "$ref": "#/$defs/server"})
     for item in (override, image):
         validator.validate(item)
-    assert set(SCHEMA["$defs"]["launch"]["required"]) <= set(override)
-    assert set(SCHEMA["$defs"]["launch"]["properties"]) == set(override)
-    assert SCHEMA["$defs"]["round"]["properties"]["launches"]["items"] == {"$ref": "#/$defs/launch"}
+    assert set(SCHEMA["$defs"]["server"]["required"]) <= set(override)
+    assert set(SCHEMA["$defs"]["server"]["properties"]) == set(override)
+    assert SCHEMA["$defs"]["launch"]["properties"]["servers"]["items"] == {"$ref": "#/$defs/server"}
     with pytest.raises(ValueError):
-        launch.record(0, None, [], None, "none")
+        servers.record(0, None, [], None, "none")
     with pytest.raises(ValueError):
-        launch.record(1, None, [], {}, "proc")
+        servers.record(1, None, [], {}, "proc")
 
 
 def test_side_extra_env_is_in_the_plan():
@@ -341,13 +343,13 @@ def test_side_extra_env_is_in_the_plan():
 # ---- the comparison's mode --------------------------------------------------------------------
 
 
-def test_compare_mode_pairs_keeps_the_run_id():
+def test_compare_mode_levels_keeps_the_run_id():
     config = json.loads((REPO / "tests/fixtures/compare-local-mock.json").read_text())
     assert "mode" not in config
-    assert plans.build(config, "docker")["run_id"] == plans.build({**config, "mode": "pairs"}, "docker")["run_id"]
+    assert plans.build(config, "docker")["run_id"] == plans.build({**config, "mode": "levels"}, "docker")["run_id"]
 
 
 def test_compare_mode_unknown_refused():
     config = json.loads((REPO / "tests/fixtures/compare-local-mock.json").read_text())
-    with pytest.raises(plans.PlanError, match="mode must be one of pairs, scaleout"):
+    with pytest.raises(plans.PlanError, match="mode must be one of levels, scaleout"):
         plans.build({**config, "mode": "surge"}, "docker")

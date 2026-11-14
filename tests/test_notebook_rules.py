@@ -26,7 +26,8 @@ sys.path.insert(0, str(NOTEBOOKS))
 
 from rhvp_bench import draw, showing, words  # noqa: E402
 
-CAUSE_PHRASES = ("because", "due to", "thanks to", "as a result", "owing to", "which is why", "the reason", "so that")
+CAUSE_PHRASES = ("because", "due to", "thanks to", "as a result", "owing to", "which is why", "the reason", "so that",
+                 "is biasing", "caused by")
 CAUSE = re.compile(r"\b(?:" + "|".join(p.replace(" ", r"\s+") for p in CAUSE_PHRASES) + r")\b", re.IGNORECASE)
 RATIO = re.compile(r"×|\b\d+(?:\.\d+)?\s?x\b|\bx\s+(?:faster|slower)\b|\btimes\s+(?:faster|slower|quicker|as\s+fast)\b",
                    re.IGNORECASE)

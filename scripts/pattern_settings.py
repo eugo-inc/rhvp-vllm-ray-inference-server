@@ -18,8 +18,8 @@ from collections.abc import Mapping
 
 #: global.scaleOut.mode values; none is the default.
 SCALE_OUT_MODES = ("none", "keda")
-#: global.compare.mode values; pairs is the default.
-COMPARE_MODES = ("pairs", "scaleout")
+#: global.compare.mode values; levels is the default (mode pairs is its earlier name, no longer read).
+COMPARE_MODES = ("levels", "scaleout")
 #: compileCache.mode values; none is the default.
 COMPILE_CACHE_MODES = ("none", "node", "shared")
 #: modelStorage.accessMode values; ReadWriteOnce is the default.
@@ -98,7 +98,8 @@ def check_global(values: Mapping) -> list[str]:
         out.append(f"global.scaleOut.mode must be none or keda; got {_show(mode)}")
     compare = (values.get("global") or {}).get("compare") or {}
     if "mode" in compare and not (isinstance(compare["mode"], str) and compare["mode"] in COMPARE_MODES):
-        out.append(f"global.compare.mode must be pairs or scaleout; got {_show(compare['mode'])}")
+        out.append(f"global.compare.mode must be levels or scaleout (mode pairs is now called levels); got "
+                   f"{_show(compare['mode'])}")
     return out
 
 

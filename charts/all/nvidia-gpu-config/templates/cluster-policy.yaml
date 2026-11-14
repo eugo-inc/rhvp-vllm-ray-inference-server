@@ -30,8 +30,22 @@ spec:
     config:
       name: ''
     enabled: true
+    {{- $compare := .Values.global.compare | default dict }}
+    {{- $energy := ($compare.energy | default dict).source | default "auto" }}
+    {{- if and $compare.enabled (ne $energy "none") }}
+    # While the image comparison is on, GPU power is read every 2 s instead of
+    # the exporter's default 30 s: a comparison needs at least 10 power samples
+    # (energy.minSamples) in each load level's window (60 s by default).
+    env:
+      - name: DCGM_EXPORTER_INTERVAL
+        value: "2000"
     serviceMonitor:
       enabled: true
+      interval: 2s
+    {{- else }}
+    serviceMonitor:
+      enabled: true
+    {{- end }}
   driver:
     certConfig:
       name: ''

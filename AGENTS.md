@@ -59,8 +59,8 @@ one, change it everywhere and run the tests.
 | Image comparison runner | Job `compare-<runName>-<hash of the pod template>` in `vllm-notebook` (pod label `app.kubernetes.io/name=image-compare`), ServiceAccount `image-compare`, config ConfigMap `image-compare-config-<hash of the config>` (key `compare.json`) |
 | Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`); in keda mode also get and patch on ScaledObject `ray-serve-llm` (`scaledobjects.keda.sh`) in `image-compare-sides` |
 | Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
-| Image comparison sides | Pods `cmp-<last 8 characters of the run id>-r<NN>-<a or b>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side` and `rhvp-compare/run=<run id>` |
-| DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`) |
+| Image comparison sides | Pods `cmp-<last 8 characters of the run id>-<NN, the launch>-<a, a-same, b or b-same>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side`, `rhvp-compare/run=<run id>`, `rhvp-compare/side` (`A`, `A-same`, `B`, `B-same`), `rhvp-compare/launch` and `rhvp-compare/round` (a number, or `warmup`) |
+| DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s` |
 | Server metrics | Ray's Prometheus metrics on port `8080` (`server.metricsPort`, `metrics_port` in `llm.yaml`, `ray.init(_metrics_export_port=...)`) in every install; container port and Service port named `metrics` only in keda mode; vLLM's waiting-request gauge is `ray_vllm_num_requests_waiting` |
 | Replica count log line | one JSON line `{"event":"rhvp-scale",...}` per change (`inference-server/rhvp_scale.py` defines it; `notebooks/rhvp_compare/logs.py` keeps its own copy of the names); deployments as Ray Serve LLM names them, `LLMServer:<model id, "/" as "--" and "." as "_">` and `OpenAiIngress` |
 | Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
@@ -68,7 +68,7 @@ one, change it everywhere and run the tests.
 | Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
 | GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
-| Comparison with docker, scale-out mode | second replica container `<first replica's name>-2`; warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per round `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` (nvidia-smi, before the first round); launch-record fields `gpus` and `gpu_uuids` |
+| Comparison with docker, scale-out mode | second replica container `<first replica's name>-2` (a twin's: `rhvp-cmp-<id>-<NN>-a-same-2`); warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per scored launch `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` and `...-gpu-mig-<1 or 2>` (nvidia-smi, before the first launch); server-record fields `gpus` and `gpu_uuids` (in each launch's `servers`, `$defs/server`) |
 
 ## Repo map
 
@@ -84,8 +84,8 @@ overrides/values-scaleout-keda.yaml   keda mode: the Custom Metrics Autoscaler's
 ansible/rebuild-on-commit.yaml   imperative job: start a build when that build's source folder changed
 ansible/rebuild_on_commit.py     the rebuild decision (which BuildConfigs to start), tested in tests/test_charts.py
 charts/all/nfd-config/         NodeFeatureDiscovery instance
-charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint); time-slicing-config.yaml
-                               (opt-in GPU time-slicing)
+charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gpu taint; a 2 s DCGM interval
+                               while the comparison is on); time-slicing-config.yaml (opt-in GPU time-slicing)
 charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Route (off by default), PVC,
                                ConfigMap, ExternalSecret; compile-cache-pvc.yaml (compileCache node or shared);
                                scaledobject.yaml, triggerauthentication.yaml, servicemonitor.yaml (keda mode
@@ -104,7 +104,7 @@ notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requ
                                inference_timings.ipynb (generated)
 notebooks/rhvp_compare/        the image comparison: plan, runner, probe, guidellm, logs, energy, stats, analyze,
                                report, summary, kube (OpenShift backend), dockerapi (docker backend), example,
-                               words, show, cells, launch (what each server start ran with), router (the
+                               words, show, cells, servers (what each server start ran with), router (the
                                scale-out mode's request router, docker only); results.schema.json.
                                compare_images.ipynb and
                                compare-recordings/synthetic.json are generated by make_notebook.py
@@ -116,7 +116,7 @@ tests/                         test_serve_config.py, test_secrets_template.py, t
                                test_notebook_rules.py, test_measure.py, test_compare_stats.py,
                                test_compare_parsers.py, test_compare_runner.py, test_compare_notebook.py,
                                test_compare_router.py, fixtures/ (trimmed GuideLLM reports, one with latency
-                               goals; the mock configs for compare-local.sh, pairs and scaleout)
+                               goals; the mock configs for compare-local.sh, levels and scaleout)
 .github/workflows/             lint.yml, jsonschema.yaml, notebook-check.yml
 pattern.sh  Makefile  Makefile-common  ansible.cfg  .claude/skills/pattern-author/  .cursor/skills/pattern-author/
 ```
@@ -212,20 +212,26 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   because the results PVC is ReadWriteOnce and the notebook mounts it too.
 - The runner (`python -m rhvp_compare run --backend kube`) first lists the runner pods in `vllm-notebook`
   (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
-  older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each round creates a side
-  pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs GuideLLM
-  as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves `results.json`. A
-  side whose server exits at vLLM's start-up memory check (`Error in memory profiling` in its log) is started once
-  more in the same round (`runner.START_RETRIES`, the round's `start_retries`, and the launch record's own
-  `start_retries`); in mode `scaleout` the second replica gets the same one retry, timed from its first ask. A
-  GuideLLM time-out runs the round once more with the same requests (`runner.LOAD_RETRIES`, the round's
-  `load_retries`): in mode pairs from a new start of the side, timed from that start, in mode `scaleout` from a new
-  first replica (the first try's files are kept as `*.try-1.*`, its launch records marked `discarded`). When the run
-  ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale
-  back, and records `run.server_restored`; a server that did not come back is exit 4.
+  older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each launch creates a
+  side pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs
+  GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
+  `results.json`. A round launches A, A~same, B and B~same once each (`plan.launch_order`, rotate-reverse); a twin
+  (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
+  (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
+  (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the
+  launch's `start_retries`, and the server record's own `start_retries`); in mode `scaleout` the second replica gets
+  the same one retry, timed from its first ask. A GuideLLM time-out runs the launch once more with the same requests
+  (`runner.LOAD_RETRIES`): in mode `levels` from a new start of the side, timed from that start; in mode `scaleout`
+  from a new first replica, after GuideLLM, the router and the replicas that had started are taken down. The launch's `load_timeouts` is counted when the
+  time-out happens and `load_retries` only once the second load begins; the first try's files are kept as
+  `*.try-1.*`, its notes are marked `try 1:`, its server records are marked `discarded`, and its figures are cleared
+  before the teardown. Time-outs count
+  against their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it scales the server
+  back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and records
+  `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
   sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
-- SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current round short and asks the server back at once,
+- SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current launch short and asks the server back at once,
   before the side is taken down (its pod waits for the GPU); every API call then gets a 10 s timeout. The pod's
   `terminationGracePeriodSeconds` (300) is above the worst case of that path (`kube.stop_budget_seconds()`, checked
   by `tests/test_charts.py`).
@@ -233,27 +239,44 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   (`notebook.comparePodTemplate`, hashed by `notebook.compareJobHash`). The run id carries a hash of the config
   only, so a new Job with the same config finds its run complete and exits at once, or refuses while the first
   still runs.
-- The verdict rule (`stats.verdict`, then `analyze.py`): TIE needs the median ratio and its whole interval inside
-  the tie band; FASTER or SLOWER needs the corrected p-value at most alpha and the test leaning the same way as the
-  median; a metric that lost a pair to one side failing on its own account (a value of 0, which gives no ratio,
-  counts as such a loss), and every metric of a run whose rounds used more than one node, is INCONCLUSIVE.
-- `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: it reads `plan` and `rounds` of the results
-  file and writes `analysis`. Another tool that writes the same `analysis` shape can replace `analyze.py` and
-  `stats.py`.
+- The verdict rule (`stats.grade`, applied by `analyze._decide`): per case, the median over the rounds of B/A. Each
+  side's noise floor is the largest `abs(median(side / twin) - 1)` over the cases of one metric and role
+  (`case.group`); the bar is B's floor plus A's. The test is the exact two-sided sign test over the untied rounds,
+  with Holm's correction over the primary cases only ("corrected for testing N cases at once"); a secondary case is
+  graded on its uncorrected p-value. Outside the bar and p below alpha: `better` / `worse` (FASTER or SLOWER for
+  times, BETTER or WORSE for rates and tokens per joule); inside and not significant: `tie`; otherwise `unresolved`
+  (`inside_noise`, `not_significant`, or `order_unbalanced` when one side ran first more than 3 times as often).
+  `no_verdict` comes first when a case cannot be graded, checked in this order: `more_than_one_node`, `side_failed`
+  (a launch of A or B failed on its own account where the other did not; pattern-only, like the node check),
+  `nonpositive_value` (a 0 on A or B in any round, paired or not, or in a side's pair with its twin, which takes the
+  side's floor on that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary
+  family, or of one case for a secondary), `no_floor`, `one_sided_floor`, `zero_floor`. There is no fixed tie band.
+- `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
+  `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
+  `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
+  `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can
+  replace `analyze.py` and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a
+  file of another version with a notice.
+- Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, an estimate of about 4 to
+  6 hours (16 rounds: 66 starts, about 8 to 12 hours). Unmeasured on any cluster. The Job's
+  `activeDeadlineSeconds` (48 h) and the per-launch side deadline (`kube.side_deadline`) and stop budget do not
+  depend on the number of launches.
 - Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
 
 Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
-to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-round). That run
-came before the refusal of a second run, the scale read-back and the early restore on a stop, which on Kubernetes
-are covered by unit tests only (under docker, the refusal and the stop path have run against the mock server).
-Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`): two 2-pair smoke runs of the
-example's two vLLM images with smaller settings. The second finished all 6 rounds, measured by GuideLLM, with tokens
-per joule from nvidia-smi, one of them after a second start past vLLM's start-up memory check (README, "On one
-machine"); the first, from before that second start, lost a round to that check.
-Not checked yet: the Kubernetes backend with a real server; tokens per joule from DCGM (its reader is tested only
-against hand-written answers, and the DCGM label names it matches on have not been checked against a real DCGM
-exporter); a run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the
-Job); the example's own settings; the length of a run (an estimate of 2 to 3 hours with the defaults); and a round
+to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-launch). That run
+came before the refusal of a second run, the scale read-back, the early restore on a stop and the twins, which on
+Kubernetes are covered by unit tests only (under docker, the refusal and the stop path have run against the mock
+server). Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`), under the earlier rule (A
+and B only, no twins): two 2-pair smoke runs of the example's two vLLM images with smaller settings. The second
+finished all 6 launches, measured by GuideLLM, with tokens per joule from nvidia-smi, one of them after a second
+start past vLLM's start-up memory check (README, "On one machine"); the first, from before that second start, lost a
+launch to that check.
+Not checked yet: the twin rule with any real server (it has run against fakes only); the Kubernetes backend with a
+real server; tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label
+names it matches on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a
+run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the
+example's own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); and a launch
 whose GuideLLM timed out and ran again, which only the fake backend of the unit tests has gone through.
 
 ### How scale out works
@@ -290,12 +313,17 @@ Three parts, each off by default. With every default, the local charts render ex
   `PLAN_INVALID`). `scaleOut.sharedGpu` only sets the memory default and the 0.475 refusal; the docker backend places
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
   anything changes, a plan whose `sharedGpu` does not match (`DockerBackend.check_plan`); `prepare()` reads each
-  replica's GPUs with nvidia-smi into the launch records (`gpus`, `gpu_uuids`, both shown in `results.md` and the
-  notebook), and refuses two requests that reach one GPU while `sharedGpu` is false. Two MIG requests (`0:0`,
-  `MIG-...`; `dockerapi.is_mig_request`) are not compared: nvidia-smi in a container given a MIG device lists its
-  parent GPU, so two MIG devices of one GPU share a UUID; a MIG device and a whole GPU still are.
+  replica's GPUs with nvidia-smi into the server records (`gpus`, `gpu_uuids`, both shown in `results.md` and the
+  notebook), and refuses two requests that reach one GPU while `sharedGpu` is false. nvidia-smi's GPU query in a
+  container given a MIG device lists its parent GPU, so two MIG devices of one GPU share that UUID, and the records
+  show the parent's. Two MIG requests (`0:0`, `MIG-...`; `dockerapi.is_mig_request`) are compared instead by the MIG
+  device UUIDs `nvidia-smi -L` lists through each (`DockerBackend._compare_mig`, helper containers `gpu-mig-<n>`), so
+  one device written two ways is refused; when it lists none, the run goes on with a note in `run.notes`. A MIG device
+  and a whole GPU are compared by the parent's UUID. Each scored launch starts two servers (`plan.server_starts`: 66
+  at the defaults, an estimate of about 5 to 7 hours, never timed on a GPU or a cluster); each case is a floor group of
+  its own, the two primaries need 7 rounds, and at 8 all 8 must agree.
   `scaleOut.requestRate`'s default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a
-  pairs run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
+  levels run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
   surge of both sides met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at
   most 5% within the goals (`SURGE_MET_SHARE_LOW`). In keda mode, the OpenShift runner pauses the ScaledObject before it
   scales the server to 0 (annotation `autoscaling.keda.sh/paused-replicas: "0"`; its Role allows get and patch on that
@@ -331,8 +359,10 @@ a waiting count above the threshold, held at 0 by the pause for a minute, back t
 every query carried the bearer token, the namespace and the rendered query. Through a Service, a new pod got none
 of the requests of a client that kept 8 connections open; through `rhvp_compare/router.py`, it got a share. The
 comparison's mode ran end to end with docker against GuideLLM mock servers
-(`tests/fixtures/compare-scaleout-mock.json`): schema-valid results, the second replica took part of every surge,
-and the notebook rendered.
+(`tests/fixtures/compare-scaleout-mock.json`, 7 rounds with twins, 56 server starts): schema-valid results, the
+second replica took part of every surge, and the notebook rendered. With real vLLM servers it ran only in an earlier
+version, under the earlier rule (rounds of A and B, no twins), on one machine with one GPU: three runs of one round
+each, one complete, two partial because nearly every request missed the goals at the rate they used.
 
 Not checked yet:
 
@@ -353,13 +383,14 @@ Not checked yet:
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
-- A surge in which some requests miss the latency goals, end to end (unit tests and a trimmed report only); the
-  OpenShift scale round of the comparison, which is not built; the launch records of OpenShift sides carry no
-  server environment (`env_source: "none"`).
+- The current scale-out mode (with twins) on a GPU or a cluster, and so its run length; the OpenShift scale round
+  of the comparison, which is not built; the server records of OpenShift sides carry no server environment
+  (`env_source: "none"`).
 - An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
   and take the one serving replica out of the Service.
-- The comparison's scale-out mode on MIG devices: that nvidia-smi lists the parent GPU's UUID in a container given a
-  MIG device is from NVIDIA's documented output, not from a run.
+- The comparison's scale-out mode on MIG devices: that nvidia-smi's GPU query lists the parent GPU's UUID in a
+  container given a MIG device, and that `nvidia-smi -L` lists the device's own UUID, is from NVIDIA's documented
+  output, not from a run.
 
 ## How to deploy
 
@@ -664,7 +695,7 @@ Then run these, all from the repo root:
 | `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
 | `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker; GPU sides need an NVIDIA GPU |
 | `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker; no GPU |
-| `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints its rounds and whether the pairs can reach alpha | anywhere |
+| `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints every round's order, the server starts and whether the rounds can give a verdict | anywhere |
 
 ## Bumping Ray and vLLM
 

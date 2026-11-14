@@ -1,15 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-"""GuideLLM (https://github.com/vllm-project/guidellm): the command line for one round, and the round's figures out
-of its JSON report. Written against GuideLLM v0.8.1's `guidellm run` and its report (metadata.version 2).
+"""GuideLLM (https://github.com/vllm-project/guidellm): the command line for one launch, and the launch's figures
+out of its JSON report. Written against GuideLLM v0.8.1's `guidellm run` and its report (metadata.version 2).
 
 GuideLLM runs as a child process of the runner: the runner's container is the GuideLLM image, with this package
 added (on OpenShift an init container copies it from the notebook image; under docker it is mounted from the repo).
 So the load comes from the same place on both platforms, and the report lands straight in the results folder.
 
-One run of GuideLLM per round measures every concurrency level in turn (the `concurrent` profile with one
+One run of GuideLLM per launch measures every concurrency level in turn (the `concurrent` profile with one
 `profile.streams` override per level). Each level runs for a fixed time; requests still running when the time is up
 are "incomplete", which is expected. A level with any errored request is kept in the results file but marked not
 usable, and its figures stay out of the comparison: an average over failed requests would compare failures.
+
+The figures are GuideLLM's own per-level medians. The report keeps a timing record for every request
+(benchmarks[].requests.successful, .errored and .incomplete, with time to first token, inter-token latency and token
+counts): `--metrics sample_size=0` drops only each request's prompt and output text (GuideLLM v0.8.1 keeps the timing
+of every request whatever the sample size), so per-request statistics can be worked out again from the raw report
+in each launch's folder.
 
 In mode scaleout one run is one surge instead: GuideLLM's `constant` profile (requests sent at a fixed rate whether
 or not earlier ones have finished) for scaleOut.surgeSeconds, with the latency goals passed to `--metrics` as JSON
@@ -17,8 +23,7 @@ or not earlier ones have finished) for scaleOut.surgeSeconds, with the latency g
 then reports `slo_attainment` (the share of finished and failed requests that met every goal; a failed request
 counts as one that missed them, a request still running at the end is left out) and `request_goodput` (the rate of
 the requests that met them). The runner starts that run in the background (`start`), because it starts the second
-replica while the surge runs.
-Standard library only.
+replica while the surge runs. Standard library only.
 """
 
 from __future__ import annotations
@@ -35,8 +40,8 @@ from collections.abc import Mapping
 
 
 def command(plan: Mapping, target: str, output_path: str) -> list[str]:
-    """The arguments after `guidellm` for one round against the server at `target`: every concurrency level in
-    mode pairs, the surge (`surge_command`) in mode scaleout."""
+    """The arguments after `guidellm` for one launch against the server at `target`: every concurrency level in
+    mode levels, the surge (`surge_command`) in mode scaleout."""
     if plan.get("mode") == "scaleout":
         return surge_command(plan, target, output_path)
     load = plan["load"]
@@ -51,7 +56,7 @@ def command(plan: Mapping, target: str, output_path: str) -> list[str]:
 
 
 def surge_command(plan: Mapping, target: str, output_path: str) -> list[str]:
-    """The arguments after `guidellm` for one scaleout round's surge: requests at scaleOut.requestRate per second
+    """The arguments after `guidellm` for one scale launch's surge: requests at scaleOut.requestRate per second
     for scaleOut.surgeSeconds, scored against the latency goals."""
     scale = plan["scale_out"]
     slo = {key: value for key, value in scale["slo"].items() if value is not None}
@@ -121,12 +126,18 @@ class Running:
 
     def finish(self) -> Path:
         """Wait until GuideLLM ends, at most until plan.load.timeout_s after its start, and return the report's
-        path; LoadError when it failed or ran out of time (then it is stopped)."""
+        path; LoadError when it failed or ran out of time (then it is stopped). A stop of the runner that lands
+        while a timed-out GuideLLM is being stopped carries `load_timed_out`, so the runner still counts the
+        time-out."""
         remaining = max(0.0, self.timeout_s - (time.monotonic() - self.started))
         try:
             code = self.process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            self.stop()
+            try:
+                self.stop()
+            except BaseException as error:  # the runner was told to stop while GuideLLM was taken down
+                error.load_timed_out = True  # the time-out happened all the same: the runner counts it
+                raise
             raise LoadError(f"GuideLLM did not finish within {self.timeout_s:g} s and was stopped; see guidellm.log",
                             timed_out=True) from None
         except BaseException:  # the runner was told to stop: take GuideLLM down with it
@@ -138,9 +149,15 @@ class Running:
         return self.report
 
     def stop(self) -> None:
-        """Stop GuideLLM's whole process group (SIGTERM, then SIGKILL) and close its log."""
-        _stop(self.process)
-        self._log.close()
+        """Stop GuideLLM's whole process group (SIGTERM, then SIGKILL) and close its log. A stop of the runner
+        that lands while this waits kills the group at once, then goes on."""
+        try:
+            _stop(self.process)
+        except BaseException:
+            _kill(self.process)
+            raise
+        finally:
+            self._log.close()
 
 
 def start(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | None = None,
@@ -157,6 +174,14 @@ def start(plan: Mapping, target: str, out_dir: Path, env: Mapping[str, str] | No
         log.close()
         raise
     return Running(process, log, report, plan["load"]["timeout_s"], time.monotonic())
+
+
+def _kill(process: subprocess.Popen) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        pass
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -225,19 +250,20 @@ def levels(report: Mapping) -> list[dict]:
     return out
 
 
-def flat_metrics(level_list: list[Mapping]) -> dict[str, float]:
-    """The comparison's per-round figures from the usable levels (keys as in plan.metric_family). A figure of 0 is
-    kept (a level whose requests finished without one output token has 0 tokens per second): the analysis counts it
-    as a pair lost to that side instead of leaving the pair out unseen."""
+def flat_values(level_list: list[Mapping]) -> dict[str, float]:
+    """The comparison's per-launch figures from the usable levels (case ids as in plan.case_family). A figure of 0
+    is kept (a level whose requests finished without one output token has 0 tokens per second): on side A or B the
+    analysis gives that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen; in a side's
+    comparison with its twin, every case whose floor uses that comparison gets it too, with a note."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")
         if c is None or not level.get("usable"):
             continue
-        pairs = {f"c{c}.ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
-                 f"c{c}.itl_ms_median": (level.get("itl_ms") or {}).get("median"),
-                 f"c{c}.output_tokens_per_s": level.get("output_tokens_per_s"),
-                 f"c{c}.tokens_per_joule": (level.get("energy") or {}).get("tokens_per_joule")}
+        pairs = {f"c{c}/ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
+                 f"c{c}/itl_ms_median": (level.get("itl_ms") or {}).get("median"),
+                 f"c{c}/output_tokens_per_s": level.get("output_tokens_per_s"),
+                 f"c{c}/tokens_per_joule[gpu]": (level.get("energy") or {}).get("tokens_per_joule")}
         out.update({k: float(v) for k, v in pairs.items()
                     if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0})
     return out
@@ -250,8 +276,8 @@ def _finite(value) -> float | None:
 
 
 def surge_level(report: Mapping) -> dict:
-    """The surge of a scaleout round, from the report's one benchmark: the fields `levels` gives (with concurrency
-    None and the rate the profile sent), plus GuideLLM's SLO figures: `slo_attainment` (0 to 1, None when no request
+    """The surge of a scale launch, from the report's one benchmark: the fields `levels` gives (with concurrency None
+    and the rate the profile sent), plus GuideLLM's SLO figures: `slo_attainment` (0 to 1, None when no request
     could be judged), `slo_determined_requests` (the requests it judged) and `goodput_rps` (requests per second
     that met every goal, the mean of request_goodput over the successful requests)."""
     level = levels(report)[0]
@@ -277,14 +303,15 @@ def surge_level(report: Mapping) -> dict:
     return level
 
 
-def surge_metrics(level: Mapping) -> dict[str, float]:
-    """The scaleout round's surge.* figures (keys as in plan.scale_metric_family).
+def surge_values(level: Mapping) -> dict[str, float]:
+    """The scale launch's surge/* figures (case ids as in plan.scale_case_family).
 
-    - surge.slo_attainment and surge.goodput_rps are kept whenever GuideLLM gives them, failed requests included
+    - surge/slo_attainment and surge/goodput_rps are kept whenever GuideLLM gives them, failed requests included
       (they count as requests that missed the goals). When no request finished or failed in the whole surge,
-      GuideLLM gives no attainment; both are then 0, so the analysis counts the pair as lost to that side
-      instead of leaving it out unseen. A goodput GuideLLM leaves out when the attainment is 0 is 0 too.
-    - surge.ttft_ms_median, surge.itl_ms_median and surge.output_tokens_per_s follow the rule of a load level: only
+      GuideLLM gives no attainment; both are then 0, a figure the analysis does not take as a ratio, so the case
+      gets NO VERDICT (nonpositive_value) instead of losing the round unseen. A goodput GuideLLM leaves out when the
+      attainment is 0 is 0 too.
+    - surge/ttft_ms_median, surge/itl_ms_median and surge/output_tokens_per_s follow the rule of a load level: only
       when no request failed and at least one finished."""
     requests = level.get("requests") or {}
     nothing_finished = not requests.get("successful") and not requests.get("errored")
@@ -294,10 +321,10 @@ def surge_metrics(level: Mapping) -> dict[str, float]:
         attainment = goodput = 0.0
     elif goodput is None and attainment == 0:
         goodput = 0.0
-    pairs = {"surge.slo_attainment": attainment, "surge.goodput_rps": goodput}
+    found = {"surge/slo_attainment": attainment, "surge/goodput_rps": goodput}
     if level.get("usable"):
-        pairs.update({"surge.ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
-                      "surge.itl_ms_median": (level.get("itl_ms") or {}).get("median"),
-                      "surge.output_tokens_per_s": level.get("output_tokens_per_s")})
-    return {k: float(v) for k, v in pairs.items()
+        found.update({"surge/ttft_ms_median": (level.get("ttft_ms") or {}).get("median"),
+                      "surge/itl_ms_median": (level.get("itl_ms") or {}).get("median"),
+                      "surge/output_tokens_per_s": level.get("output_tokens_per_s")})
+    return {k: float(v) for k, v in found.items()
             if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0}

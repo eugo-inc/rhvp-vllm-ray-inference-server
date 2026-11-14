@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The OpenShift backend: each round's side is a pod in the server namespace; the runner is a Job in the notebook
+"""The OpenShift backend: each launch's side is a pod in the server namespace; the runner is a Job in the notebook
 namespace (charts/all/notebook/templates/compare-*.yaml) and talks to the Kubernetes API with its service account
 token through plain httpx (no Kubernetes client package).
 
 A side pod runs like the pattern's own server: the restricted SCC's arbitrary UID in group 0, one GPU (request =
 limit) with a toleration for the GPU taint, the CPU type's nodeSelector, the model PVC at /models, fresh emptyDirs
 at /cache and /tmp/r, a memory-backed /dev/shm, and its own time limit (activeDeadlineSeconds), so a side outlives a
-runner that was killed outright by one round at most.
+runner that was killed outright by one launch at most.
 
-The live server. Before the first round the runner scales the pattern's own server Deployment to 0, so the GPU and
+The live server. Before the first launch the runner scales the pattern's own server Deployment to 0, so the GPU and
 the ReadWriteOnce model PVC are free, and when the run ends (complete, partial, stopped or failed) it scales it back
 (to RHVP_COMPARE_SERVER_REPLICAS, default 1), trying again for about a minute and reading the scale back to check.
 On a stop it does that first, before the side is taken down: the server's pod waits for the GPU. Argo CD ignores the
 Deployment's replicas (variants/prod), so a sync during the run does not bring the server back onto the GPU. The
-runner also waits until no other GPU pod is left in the namespace before each round.
+runner also waits until no other GPU pod is left in the namespace before each launch.
 
 The server's autoscaler. With global.scaleOut.mode keda the chart names the server's ScaledObject in
 RHVP_COMPARE_SERVER_SCALED_OBJECT. Before the scale to 0 the runner pauses it (annotation
@@ -30,9 +30,10 @@ One run at a time. Before it changes anything the runner lists the runner pods i
 that sorts first), this run refuses to start. The oldest always wins, and nothing is left behind to go stale.
 
 One node. Every side pod after the first is pinned to the node the first one ran on (its kubernetes.io/hostname
-label), so all rounds use the same GPU node; the results record every node a round ran on.
+label), so all launches use the same GPU node; the results record every node a launch ran on. A twin's pod is its
+side's pod under another name (cmp-<run>-<NN>-a-same).
 
-Progress. After every round the runner writes ConfigMap compare-<run id> in its own namespace: status.json (see
+Progress. After every launch the runner writes ConfigMap compare-<run id> in its own namespace: status.json (see
 summary.py) and result.json, the whole results file while it fits.
 
 The runner reaches a side by its pod IP (no Service). GuideLLM runs as a child process of the runner (see
@@ -90,7 +91,7 @@ KEDA_PAUSED = "autoscaling.keda.sh/paused-replicas"
 
 
 def stop_budget_seconds() -> float:
-    """The longest a stop inside a round can take with every API call at its short timeout: GuideLLM stopped, the
+    """The longest a stop inside a launch can take with every API call at its short timeout: GuideLLM stopped, the
     server scaled back (tries in the window, the last one started at its end, then one more after the teardown;
     each try the autoscaler's unpause, a PATCH and a read), the side's teardown (its log, its pod and node, the delete
     and the wait), two saves with their status writes, and the cleanup's list and delete.
@@ -262,11 +263,16 @@ def node_facts(node: Mapping) -> dict:
 
 
 def image_digest(pod: Mapping) -> str | None:
-    """repository@sha256:... of the side's container, as the node pulled it."""
+    """repository@sha256:... of the side's container, as the node pulled it. When the runtime reports no repository
+    digest (an imageID without "@sha256:"), the image the pod asked for, if that is pinned by digest; else None."""
     image_id = _container_status(pod).get("imageID") or ""
     for prefix in ("docker-pullable://", "docker://"):
         image_id = image_id.removeprefix(prefix)
-    return image_id if "@sha256:" in image_id else None
+    if "@sha256:" in image_id:
+        return image_id
+    asked = next((c.get("image") or "" for c in (pod.get("spec") or {}).get("containers") or []
+                  if c.get("name") == "server"), "")
+    return asked if "@sha256:" in asked else None
 
 
 def _own_namespace() -> str | None:
@@ -274,11 +280,13 @@ def _own_namespace() -> str | None:
     return path.read_text(encoding="utf-8").strip() if path.is_file() else None
 
 
-def side_deadline(plan: Mapping, round_: Mapping) -> int:
-    """A side pod's own time limit: the start, GuideLLM twice (it is retried once on a hang), the energy settle time
-    and ten minutes more. The runner takes every side down itself; this only bounds a side whose runner was killed."""
+def side_deadline(plan: Mapping, launch: Mapping) -> int:
+    """A side pod's own time limit: the start, twice GuideLLM's time limit, the energy settle time and ten minutes
+    more. A pod serves one load: after a GuideLLM time-out the runner takes it down and the launch's second try starts
+    a new pod, so the second load time is slack. The runner takes every side down itself; this only bounds a side
+    whose runner was killed."""
     server, load = plan["server"], plan["load"]
-    start = server["warmup_timeout_s"] if round_["kind"] == "warmup" else server["ready_timeout_s"]
+    start = server["warmup_timeout_s"] if launch["kind"] == "warmup" else server["ready_timeout_s"]
     return int(start + 2 * load["timeout_s"] + plan["energy"]["settle_s"] + 600)
 
 
@@ -444,7 +452,7 @@ class KubeBackend:
                                  "app.kubernetes.io/part-of": PART_OF},
                                 {"status.json": status_text, "result.json": result_text})
 
-    # ---- one round ----
+    # ---- one launch ----
 
     def _requests_gpu(self, pod: Mapping) -> bool:
         for container in (pod.get("spec") or {}).get("containers") or []:
@@ -470,8 +478,9 @@ class KubeBackend:
                                         runner.GPU_NOT_FREE)
             self.sleep(10)
 
-    def pod_body(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
-        name = f"cmp-{self.run_id[-8:]}-r{round_['index']:02d}-{round_['side'].lower()}"
+    def pod_body(self, plan: Mapping, launch: Mapping, side: Mapping, spec: Mapping) -> dict:
+        key = launch["side"].replace("~", "-")  # plan.token: a pod name and a label value take no "~"
+        name = f"cmp-{self.run_id[-8:]}-{launch['index']:02d}-{key.lower()}"
         env = [{"name": k, "value": v} for k, v in spec["env"].items()]
         if self.use_token:
             env.append({"name": "HF_TOKEN", "valueFrom": {"secretKeyRef": {"name": self.hf_secret, "key": self.hf_key,
@@ -503,10 +512,11 @@ class KubeBackend:
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": name, "labels": {
                 "app.kubernetes.io/name": SIDE_APP, "app.kubernetes.io/part-of": PART_OF, LABEL_RUN: self.run_id,
-                "rhvp-compare/side": round_["side"], "rhvp-compare/round": str(round_["index"])}},
+                "rhvp-compare/side": key, "rhvp-compare/launch": str(launch["index"]),
+                "rhvp-compare/round": str(launch["round"]) if launch.get("round") else "warmup"}},
             "spec": {
                 "restartPolicy": "Never", "terminationGracePeriodSeconds": 30, "automountServiceAccountToken": False,
-                "activeDeadlineSeconds": side_deadline(plan, round_),
+                "activeDeadlineSeconds": side_deadline(plan, launch),
                 "enableServiceLinks": False,
                 "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
                 "nodeSelector": {"kubernetes.io/arch": self.arch,
@@ -516,8 +526,8 @@ class KubeBackend:
             },
         }
 
-    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping) -> dict:
-        body = self.pod_body(plan, round_, side, spec)
+    def start(self, plan: Mapping, launch: Mapping, side: Mapping, spec: Mapping) -> dict:
+        body = self.pod_body(plan, launch, side, spec)
         name = body["metadata"]["name"]
         if self.kube.pod(self.namespace, name) is not None:  # left from an earlier attempt
             self._delete_and_wait(name)
@@ -575,7 +585,7 @@ class KubeBackend:
     def alive(self, handle: dict) -> str | None:
         return self._problem(handle, self._pod(handle))
 
-    def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path:
+    def run_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> Path:
         # GuideLLM downloads the model's tokenizer, which needs the token for a gated model (never "none")
         return guidellm.run(plan, target, out_dir, env={"HF_TOKEN": self._token} if self._token else None)
 
@@ -615,5 +625,5 @@ class KubeBackend:
             self.sleep(2.0)
 
     def stop(self, handle: dict) -> None:
-        """Delete the side and wait until it is gone, so the GPU and the model PVC are free for the next round."""
+        """Delete the side and wait until it is gone, so the GPU and the model PVC are free for the next launch."""
         self._delete_and_wait(handle["name"])

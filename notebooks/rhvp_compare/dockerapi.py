@@ -7,12 +7,12 @@ docker client is needed. Every side joins the runner's user-defined network, so 
 process of the runner) reach it by its container name.
 
 Like OpenShift, each side runs as an arbitrary UID in group 0 by default (RHVP_COMPARE_USER), with its caches on a
-fresh tmpfs at /cache and the model weights on a named volume at /models, kept between rounds. GPU power comes from
+fresh tmpfs at /cache and the model weights on a named volume at /models, kept between launches. GPU power comes from
 nvidia-smi in a small container that sees the same GPU (DCGM is not there).
 
 One run at a time: the runner container carries the label rhvp-compare.runner (compare-local.sh sets it); a run
 refuses to start while an older runner container is running. A server container that normally holds the GPU can be
-named in RHVP_COMPARE_SERVER_CONTAINER: the runner stops it before the first round, once both images are pulled, and
+named in RHVP_COMPARE_SERVER_CONTAINER: the runner stops it before the first launch, once both images are pulled, and
 starts it again when the run ends, however it ends (the docker counterpart of scaling the pattern's server on
 OpenShift). A stop during the pulls leaves it running. One that was running when the run began but has stopped by
 itself by then (exited, or removed) is left as it is; the run records that (run.server_found_down) and does not start
@@ -38,22 +38,25 @@ Settings (environment variables):
 - DOCKER_SOCKET: the Engine API socket (default /var/run/docker.sock)
 
 A side with `compileCache: warm` gets its own volume at /cache for the whole run (`<prefix>-<last 8 characters of
-the run id>-<a or b>`) in place of the tmpfs, so its warm-up round fills the compile caches its scored rounds find;
-the volumes are removed when the run ends. In mode scaleout both replicas of a round share it.
+the run id>-<a or b>`) in place of the tmpfs, so its warm-up launch fills the compile caches its scored launches find
+(a twin's launches use its side's volume);
+the volumes are removed when the run ends. In mode scaleout both replicas of a launch share it.
 
 The scale round (mode scaleout): the second replica is a container named like the first plus `-2`; the router
 (router.py) and GuideLLM run as child processes of the runner, GuideLLM against the router. Where each replica runs is
 set by RHVP_COMPARE_REPLICA_GPUS (else RHVP_COMPARE_GPUS), and it must agree with the plan's scaleOut.sharedGpu
 (`check_plan`, before anything changes): sharedGpu true needs both replicas on the same GPUs, false needs a GPU id of
 its own for each. prepare() then reads, with nvidia-smi, the GPUs each replica's device request reaches (a request for
-a GPU this machine lacks fails there, before the first round, and so do two requests that reach the same GPU when
-sharedGpu is false, such as an index and that GPU's UUID), and every launch record keeps the request (`gpus`) and
-those GPUs' UUIDs (`gpu_uuids`), which results.md and the notebook show. Two MIG device requests (`0:0`, `MIG-...`)
-are not compared: nvidia-smi in a container given a MIG device lists that device's parent GPU, so two MIG devices of
-one GPU show the same UUID, and their launch records name the parent GPU's UUID. A MIG device and a whole GPU are
-still compared.
+a GPU this machine lacks fails there, before the first launch, and so do two requests that reach the same GPU when
+sharedGpu is false, such as an index and that GPU's UUID), and every server record keeps the request (`gpus`) and
+those GPUs' UUIDs (`gpu_uuids`), which results.md and the notebook show. A MIG device request (`0:0`, `MIG-...`) is
+told apart by its MIG device's own UUID: nvidia-smi's GPU query in a container given a MIG device lists that device's
+parent GPU, so two MIG devices of one GPU show the same GPU UUID there, and their server records name that parent
+GPU's UUID. Two MIG requests are compared by the MIG UUIDs `nvidia-smi -L` lists (so `0:0` and that device's
+`MIG-...` id are the same device); a MIG device and a whole GPU, by the GPU UUIDs (one of that GPU's MIG devices
+shares the GPU).
 
-Launch records (`launch_facts`): the environment of the side's largest process (by resident memory, which is the
+Server records (`server_facts`): the environment of the side's largest process (by resident memory, which is the
 server even when an entrypoint script or an init process is PID 1), read with docker exec once the server has
 answered; "container" (the configured environment: the image's ENV plus the runner's) when that cannot be read.
 """
@@ -259,6 +262,10 @@ def environ(text: str) -> dict[str, str]:
 MIG_DEVICE = re.compile(r"\d+:\d+|MIG-\S+", re.IGNORECASE)
 
 
+#: A MIG device's UUID as `nvidia-smi -L` lists it, on the line under its parent GPU: `(UUID: MIG-...)`.
+MIG_UUID = re.compile(r"\(UUID:\s*(MIG-[^)\s]+)\)")
+
+
 def is_mig_request(gpus: str) -> bool:
     """True when every device id of a GPU request (comma-separated) names a MIG device."""
     ids = [g.strip() for g in gpus.split(",") if g.strip()]
@@ -334,6 +341,7 @@ class DockerBackend:
         self.run_id = ""
         self._gpu_facts: dict | None = None
         self._gpu_uuids: dict[str, list[str]] = {}  # device request -> the UUIDs nvidia-smi saw through it
+        self._mig_uuids: dict[str, list[str]] = {}  # MIG device request -> the MIG UUIDs `nvidia-smi -L` listed
         self._server_stopped = False
         self._restored = False
         self._stop_requested = False
@@ -341,6 +349,8 @@ class DockerBackend:
         #: first read but not any more ("exited", or "gone" once removed), also in a run stopped during the pulls; the
         #: runner records it in run.server_found_down.
         self.server_found_down: str | None = None
+        #: What prepare() could not do and did not need to; the runner keeps each as a note of the run.
+        self.notes: list[str] = []
         self.log_timeout_s, self.stop_grace_s = 300.0, 30
 
     restore_before_teardown = False  # no scheduler: the server would take the GPU from the side still on it
@@ -389,7 +399,7 @@ class DockerBackend:
 
     def _probe_replica_gpus(self, plan: Mapping) -> None:
         """Mode scaleout: read the GPUs each replica's device request reaches (index and UUID, with nvidia-smi), so
-        a request this machine cannot meet fails before the first round, and the launch records name the GPUs."""
+        a request this machine cannot meet fails before the first launch, and the server records name the GPUs."""
         from . import plan as plans
 
         gpu_side = next((s for s in plan["sides"] if s.get("gpu", True)), None)
@@ -415,15 +425,46 @@ class DockerBackend:
                                         "REPLICA_GPUS against this machine's GPUs")
             self._gpu_uuids[request] = [row[1].strip() for row in rows if len(row) > 1 and row[1].strip()]
         first, second = self._gpus(1), self._gpus(2)
-        if plan["scale_out"]["shared_gpu"] or (is_mig_request(first) and is_mig_request(second)):
-            # nvidia-smi in a container given a MIG device lists that device's parent GPU, so two MIG devices of one
-            # GPU show the same UUID: two MIG requests are not compared (check_plan has refused two equal strings).
+        if plan["scale_out"]["shared_gpu"]:
+            return
+        if is_mig_request(first) and is_mig_request(second):
+            # nvidia-smi's GPU query in a container given a MIG device lists that device's parent GPU, so two MIG
+            # devices of one GPU show the same GPU UUID: two MIG requests are compared by their MIG devices' UUIDs.
+            self._compare_mig(gpu_side, first, second)
             return
         same = set(self._gpu_uuids[first]) & set(self._gpu_uuids[second])
         if same:  # two strings for one GPU, such as an index and its UUID, or a MIG device and its whole parent GPU
             raise runner.RoundError(
                 f"scaleOut.sharedGpu is false (each replica on its own GPU), but REPLICA_GPUS {first} and {second} "
                 f"both reach GPU {', '.join(sorted(same))}: give each replica a different GPU, or set "
+                "scaleOut.sharedGpu: true")
+
+    def _compare_mig(self, gpu_side: Mapping, first: str, second: str) -> None:
+        """Two MIG device requests, sharedGpu false: refuse two that reach one MIG device (such as `0:0` and that
+        device's `MIG-...` id), by the MIG UUIDs `nvidia-smi -L` lists through each. When it lists none (a listing this
+        code does not know), the two are not compared, and the run keeps a note saying so."""
+        for replica, request in ((1, first), (2, second)):
+            if request in self._mig_uuids:
+                continue
+            try:
+                code, log = self.docker.run(self._name(f"gpu-mig-{replica}"), {
+                    "Image": gpu_side["image"], "Entrypoint": ["nvidia-smi"], "Cmd": ["-L"],
+                    "Labels": {LABEL: self.run_id},
+                    "HostConfig": self._host({"NetworkMode": "none", "DeviceRequests": _gpu_request(request),
+                                              "Memory": HELPER_MEMORY})}, timeout_s=60)
+            except runner.RoundError:
+                code, log = 1, ""
+            self._mig_uuids[request] = MIG_UUID.findall(log) if code == 0 else []
+        if not (self._mig_uuids[first] and self._mig_uuids[second]):
+            self.notes.append(f"REPLICA_GPUS {first} and {second} are MIG devices whose own UUIDs nvidia-smi -L "
+                              "did not list, so the run could not check that they are two different devices; each "
+                              "replica needs its own (scaleOut.sharedGpu false)")
+            return
+        same = set(self._mig_uuids[first]) & set(self._mig_uuids[second])
+        if same:
+            raise runner.RoundError(
+                f"scaleOut.sharedGpu is false (each replica on its own GPU), but REPLICA_GPUS {first} and {second} "
+                f"both reach MIG device {', '.join(sorted(same))}: give each replica a different MIG device, or set "
                 "scaleOut.sharedGpu: true")
 
     def on_stop(self) -> None:
@@ -484,7 +525,7 @@ class DockerBackend:
             if side.get("compile_cache") != "warm":
                 continue
             volume = self.cache_volumes[side["key"]] = f"{self.cache_prefix}-{self.run_id[-8:]}-{side['key'].lower()}"
-            self.docker.remove_volume(volume)  # an earlier attempt's caches would make the first round warm
+            self.docker.remove_volume(volume)  # an earlier attempt's caches would make the first launch warm
             self.docker.volume(volume)
             code, _ = self.docker.run(self._name("prepare-cache"), {
                 "Image": side["image"], "User": "0:0", "Entrypoint": ["sh", "-c"], "Cmd": ["chmod 1777 /cache"],
@@ -508,7 +549,15 @@ class DockerBackend:
         if state is None:
             return
         was_running = bool(state.get("Running"))
-        state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+        try:
+            state = (self.docker.inspect(self.server_container) or {}).get("State") or {}
+        except Exception as error:
+            if not self._stop_requested:
+                raise  # no stop: the run fails here (exit 3), before it has changed anything
+            # A stop came during the pulls: the server is left as it is either way, so a state that cannot be read
+            # only goes unrecorded, and the run ends as stopped (partial), not failed.
+            self.notes.append(f"the live server's state was not read again after the stop: {type(error).__name__}")
+            return
         if state.get("Running") and not self._stop_requested:
             self._server_stopped = True  # set first: a stop that fails half-way is still undone
             self.docker.stop(self.server_container, grace_s=self.stop_grace_s)
@@ -528,7 +577,7 @@ class DockerBackend:
         for volume in self.cache_volumes.values():
             self.docker.remove_volume(volume)
 
-    # ---- one round ----
+    # ---- one launch ----
 
     def _name(self, what: str) -> str:
         return f"rhvp-cmp-{self.run_id[-8:]}-{what}".lower()
@@ -569,8 +618,9 @@ class DockerBackend:
                                         f"nvidia-smi could not read the GPU (exit {code})", runner.GPU_NOT_FREE)
             time.sleep(10)
 
-    def start(self, plan: Mapping, round_: Mapping, side: Mapping, spec: Mapping, replica: int = 1) -> dict:
-        name = self._name(f"r{round_['index']:02d}-{round_['side'].lower()}" + (f"-{replica}" if replica > 1 else ""))
+    def start(self, plan: Mapping, launch: Mapping, side: Mapping, spec: Mapping, replica: int = 1) -> dict:
+        name = self._name(f"{launch['index']:02d}-{launch['side'].replace('~', '-').lower()}"  # a twin: a-same
+                          + (f"-{replica}" if replica > 1 else ""))
         env = dict(spec["env"])
         if self.hf_token:
             env["HF_TOKEN"] = self.hf_token
@@ -611,10 +661,10 @@ class DockerBackend:
             return "the server was killed: out of memory"
         return f"the server exited with code {state.get('ExitCode')}" if state else "the server container is gone"
 
-    def run_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> Path:
+    def run_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> Path:
         return guidellm.run(plan, target, out_dir)
 
-    def start_load(self, plan: Mapping, round_: Mapping, target: str, out_dir: Path) -> guidellm.Running:
+    def start_load(self, plan: Mapping, launch: Mapping, target: str, out_dir: Path) -> guidellm.Running:
         return guidellm.start(plan, target, out_dir)
 
     def router(self, plan: Mapping, targets: list[str], out_dir: Path):
@@ -625,7 +675,7 @@ class DockerBackend:
         except routers.RouterError as error:
             raise runner.RoundError(str(error)) from None
 
-    def launch_facts(self, handle: Mapping) -> dict:
+    def server_facts(self, handle: Mapping) -> dict:
         """The environment the server process saw (see the module's docstring), the image's own entrypoint, and for
         a side on a GPU the device request its container got (`gpus`) with the UUIDs prepare() read through it."""
         config = (self.docker.image(handle["image"]) or {}).get("Config") or {}

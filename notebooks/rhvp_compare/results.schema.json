@@ -1,20 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:rhvp-image-compare:results:1",
+  "$id": "urn:rhvp-image-compare:results:2",
   "title": "Image comparison results",
-  "description": "One run of the image comparison: the plan declared before the first round, every round as measured, and the paired analysis. Written by rhvp_compare after every round to <results root>/<run.id>/results.json (on OpenShift the results volume, mounted at /results); `run.status` says whether the run finished and `run.error_code` why it did not. Times are UTC (RFC 3339); durations are seconds unless the key says ms. Side A is the baseline, side B the candidate; every ratio is B/A. $defs/status describes the separate status.json document (ConfigMap compare-<run id>).",
+  "description": "One run of the image comparison: the plan declared before the first launch, every launch as measured, and the paired analysis. Written by rhvp_compare after every launch to <results root>/<run.id>/results.json (on OpenShift the results volume, mounted at /results); `run.status` says whether the run finished and `run.error_code` why it did not. Times are UTC (RFC 3339); durations are seconds unless the key says ms. A launch is one start of one server; a round launches every entry of the lineup (A, A~same, B, B~same) once. Side A is the baseline, side B the subject; every ratio is B/A. $defs/status describes the separate status.json document (ConfigMap compare-<run id>).",
   "type": "object",
   "required": [
     "schema",
     "run",
     "plan",
     "provenance",
-    "rounds",
+    "launches",
     "analysis"
   ],
   "properties": {
     "schema": {
-      "const": "rhvp-image-compare/1",
+      "const": "rhvp-image-compare/2",
       "description": "The schema name and major version. A reader checks it first."
     },
     "run": {
@@ -46,18 +46,18 @@
             "partial",
             "failed"
           ],
-          "description": "complete: every planned round finished, with every load level usable; partial: the run ended with failed or missing rounds, or with load levels where requests failed; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."
+          "description": "complete: every planned launch finished, with every load level usable; partial: the run ended with failed or missing launches, or with load levels where requests failed; failed: the run stopped on an error before the end; running: still going, or the runner died (see finished_at)."
         },
         "error_code": {
           "enum": [
             null,
-            "ROUNDS_FAILED",
+            "LAUNCHES_FAILED",
             "REQUESTS_FAILED",
             "STOPPED",
             "RUN_TIMEOUT",
             "RUNNER_FAILED"
           ],
-          "description": "null when every planned round finished. ROUNDS_FAILED: every round ran and some failed (partial); REQUESTS_FAILED: every round ran, but at some load level of some round requests failed or none finished, and that level is left out (partial); STOPPED: stopped by SIGTERM, for example a deleted Job (partial); RUN_TIMEOUT: stopped near the Job's time limit (partial); RUNNER_FAILED: the run failed outside a round, for example before the first one (failed). A config that cannot be run (PLAN_INVALID), and a run that found another comparison running (RUN_ACTIVE), write no results file; those codes appear only in the log summary and the termination message."
+          "description": "null when every planned launch finished. LAUNCHES_FAILED: every launch ran and some failed (partial); REQUESTS_FAILED: every launch ran, but at some load level of some launch requests failed or none finished, and that level is left out (partial); STOPPED: stopped by SIGTERM, for example a deleted Job (partial); RUN_TIMEOUT: stopped near the Job's time limit (partial); RUNNER_FAILED: the run failed outside a launch, for example before the first one (failed). A config that cannot be run (PLAN_INVALID), and a run that found another comparison running (RUN_ACTIVE), write no results file; those codes appear only in the log summary and the termination message."
         },
         "started_at": {
           "type": "string"
@@ -86,7 +86,7 @@
             "string",
             "null"
           ],
-          "description": "Set when the live server was running when the run began but had stopped by itself before the backend came to take it away: its state then (under docker the container's status, such as exited, or gone when the container had been removed). The backend left it as it was, so nothing brings it back after the run and server_restored stays null; run.notes, results.md and the log say so too. null otherwise; files written before this field existed do not have it."
+          "description": "Set when the live server was running when the run began but had stopped by itself during the image pulls, before the runner would have stopped it (also in a run that was itself stopped during the pulls): its state then (under docker the container's status, such as exited, or gone when the container had been removed). The backend left it as it was, so nothing brings it back after the run and server_restored stays null; run.notes, results.md and the log say so too. null otherwise; files written before this field existed do not have it."
         },
         "synthetic": {
           "type": "boolean",
@@ -179,7 +179,8 @@
             "B": {
               "$ref": "#/$defs/side_provenance"
             }
-          }
+          },
+          "description": "Per side; a twin runs its side's image, so it has no entry of its own."
         },
         "gpu": {
           "type": [
@@ -269,7 +270,7 @@
         },
         "nodes": {
           "type": "array",
-          "description": "Every node and GPU a round ran on, in the order first seen (node and gpu above keep the first). More than one node makes every verdict INCONCLUSIVE.",
+          "description": "Every node and GPU a launch ran on, in the order first seen (node and gpu above keep the first). More than one node gives every case NO VERDICT (more_than_one_node).",
           "items": {
             "type": "object",
             "required": [
@@ -308,12 +309,12 @@
         }
       }
     },
-    "rounds": {
+    "launches": {
       "type": "array",
+      "description": "Every launch that ran, in run order.",
       "items": {
-        "$ref": "#/$defs/round"
-      },
-      "description": "Measured rounds in run order. A round that failed is kept with its error."
+        "$ref": "#/$defs/launch"
+      }
     },
     "analysis": {
       "oneOf": [
@@ -324,7 +325,7 @@
           "$ref": "#/$defs/analysis"
         }
       ],
-      "description": "Recomputed from plan and rounds after every round, by rhvp_compare.analyze or any tool that writes the same shape."
+      "description": "Recomputed from plan and launches after every launch, by rhvp_compare.analyze or any tool that writes the same shape."
     }
   },
   "$defs": {
@@ -343,7 +344,8 @@
         "preset",
         "args",
         "env",
-        "gpu"
+        "gpu",
+        "compile_cache"
       ],
       "properties": {
         "key": {
@@ -386,7 +388,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "The side's extra environment variables, as the config gives them (sides[].env). At each start they are set after the preset's own, with {model_id} and the other placeholders filled in; what the server process saw is in each round's launches."
+          "description": "The side's extra environment variables, as the config gives them (sides[].env). At each start they are set after the preset's own, with {model_id} and the other placeholders filled in; what the server process saw is in each launch's servers."
         },
         "gpu": {
           "type": "boolean"
@@ -396,7 +398,7 @@
             "cold",
             "warm"
           ],
-          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up round. Missing in results written before it existed (cold)."
+          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up launch (its twin's launches use the same volume)."
         }
       }
     },
@@ -446,21 +448,28 @@
         }
       }
     },
-    "metric": {
+    "case": {
       "type": "object",
       "required": [
         "id",
+        "metric",
         "label",
         "unit",
         "better",
         "kind",
         "concurrency",
-        "role"
+        "role",
+        "group"
       ],
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^(startup\\.(ready_s|first_answer_s)|c[0-9]+\\.(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule)|scale\\.(ready_s|first_answer_s|load_triggered_s)|surge\\.(slo_attainment|goodput_rps|ttft_ms_median|itl_ms_median|output_tokens_per_s))$"
+          "pattern": "^(startup/(ready_s|first_answer_s)|c[0-9]+/(ttft_ms_median|itl_ms_median|output_tokens_per_s|tokens_per_joule\\[gpu\\])|scale/(ready_s|first_answer_s|load_triggered_s)|surge/(slo_attainment|goodput_rps|ttft_ms_median|itl_ms_median|output_tokens_per_s))$",
+          "description": "<level>/<metric>: startup, or c<concurrency> for a load level. The key in every launch's values map."
+        },
+        "metric": {
+          "type": "string",
+          "description": "The figure, the same at every level; with the role it makes the default floor group."
         },
         "label": {
           "type": "string"
@@ -477,10 +486,11 @@
         },
         "kind": {
           "enum": [
-            "speed",
+            "time",
+            "rate",
             "efficiency"
           ],
-          "description": "Picks the verdict words: FASTER/SLOWER for speed, MORE_EFFICIENT/LESS_EFFICIENT for efficiency."
+          "description": "Picks the verdict words: FASTER/SLOWER for time, BETTER/WORSE for rate and efficiency (tokens per joule)."
         },
         "concurrency": {
           "type": [
@@ -493,13 +503,17 @@
             "primary",
             "secondary"
           ],
-          "description": "primary: in the corrected family (plan.analysis.primary); secondary: the same test, interval and tie band with an uncorrected p-value, so its verdict is descriptive."
+          "description": "primary: in the corrected family (plan.analysis.primary); secondary: graded on an uncorrected p-value, descriptive only."
+        },
+        "group": {
+          "type": "string",
+          "description": "<role>:<metric>. A side's noise floor for a case is the largest over the cases of its group."
         }
       }
     },
     "plan": {
       "type": "object",
-      "description": "Everything fixed before the first round, so the metric family, test, correction, alpha and tie band are on record as declared.",
+      "description": "Everything fixed before the first launch, so the cases, the primary cases, alpha and the order of every launch are on record as declared.",
       "required": [
         "schema",
         "run_name",
@@ -507,21 +521,24 @@
         "platform",
         "model",
         "sides",
+        "lineup",
+        "twins",
+        "schedule",
         "rounds",
-        "pairs",
-        "aa_pairs",
         "warmup",
+        "launches",
+        "balance",
         "server",
         "load",
         "energy",
         "analysis",
-        "metrics",
-        "floor"
+        "cases",
+        "power"
       ],
       "properties": {
         "mode": {
           "const": "scaleout",
-          "description": "Set only in mode scaleout (the scale round); a plan without it is mode pairs."
+          "description": "Set only in mode scaleout (the scale round in every scored launch, docker only); a plan without it is mode levels, the default."
         },
         "model": {
           "type": "object",
@@ -540,48 +557,9 @@
           }
         },
         "rounds": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "index",
-              "side",
-              "kind",
-              "pair"
-            ],
-            "properties": {
-              "index": {
-                "type": "integer"
-              },
-              "side": {
-                "enum": [
-                  "A",
-                  "B"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "warmup",
-                  "scored",
-                  "aa"
-                ]
-              },
-              "pair": {
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              }
-            }
-          }
-        },
-        "pairs": {
           "type": "integer",
-          "minimum": 1
-        },
-        "aa_pairs": {
-          "type": "integer",
-          "minimum": 0
+          "minimum": 1,
+          "description": "Rounds; each launches every lineup entry once."
         },
         "warmup": {
           "type": "boolean"
@@ -618,6 +596,7 @@
           "required": [
             "source",
             "label",
+            "scope",
             "settle_s",
             "thanos_url",
             "min_samples"
@@ -632,52 +611,47 @@
             },
             "label": {
               "const": "GPU-only power"
+            },
+            "scope": {
+              "const": "gpu"
+            },
+            "min_samples": {
+              "type": "integer",
+              "minimum": 2,
+              "description": "No tokens per joule from fewer power samples in a level's window, also when the energy counter gives the mean."
             }
           }
         },
         "analysis": {
           "type": "object",
           "required": [
+            "rule",
+            "rule_fields",
             "baseline",
-            "candidate",
+            "subject",
             "ratio",
-            "test",
-            "correction",
-            "tie_band",
             "alpha",
-            "min_pairs",
-            "ci_level",
             "primary"
           ],
           "properties": {
-            "test": {
-              "enum": [
-                "sign",
-                "wilcoxon"
-              ]
+            "rule": {
+              "const": "strict"
             },
-            "correction": {
-              "enum": [
-                "holm",
-                "bonferroni",
-                "bh",
-                "none"
-              ]
+            "rule_fields": {
+              "type": "object"
             },
-            "tie_band": {
-              "type": "number",
-              "minimum": 0
+            "baseline": {
+              "const": "A"
+            },
+            "subject": {
+              "const": "B"
+            },
+            "ratio": {
+              "const": "B/A"
             },
             "alpha": {
               "type": "number",
               "exclusiveMinimum": 0
-            },
-            "min_pairs": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "ci_level": {
-              "type": "number"
             },
             "primary": {
               "type": "array",
@@ -685,50 +659,175 @@
               "items": {
                 "type": "string"
               },
-              "description": "The primary metric ids, declared before the first round."
-            },
-            "family_rule": {
-              "type": "string"
+              "description": "The primary case ids, declared before the first launch."
             }
           }
         },
-        "metrics": {
+        "lineup": {
+          "type": "array",
+          "description": "The lineup in order: A, then its twin A~same, B, then B~same (twins as rounds.twins asks).",
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "of",
+              "twin_of",
+              "name"
+            ],
+            "properties": {
+              "key": {
+                "enum": [
+                  "A",
+                  "A~same",
+                  "B",
+                  "B~same"
+                ]
+              },
+              "of": {
+                "enum": [
+                  "A",
+                  "B"
+                ],
+                "description": "The side this entry launches."
+              },
+              "twin_of": {
+                "enum": [
+                  "A",
+                  "B",
+                  null
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "twins": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/metric"
+            "enum": [
+              "A",
+              "B"
+            ]
           },
-          "description": "Every metric the run reports, in report order; the correction counts only the primary ones."
+          "description": "The sides that have a twin."
         },
-        "floor": {
+        "schedule": {
+          "const": "rotate-reverse",
+          "description": "Round r (from 1) over a lineup g of n entries: off = (r-1) % n, cyc = ((r-1) // n) % 2, order[k] = g[(k+off) % n], reversed when cyc is 1."
+        },
+        "launches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "round",
+              "pos",
+              "side",
+              "of",
+              "kind"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer"
+              },
+              "round": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "null for a warm-up launch."
+              },
+              "pos": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Position in its round, from 1."
+              },
+              "side": {
+                "enum": [
+                  "A",
+                  "A~same",
+                  "B",
+                  "B~same"
+                ]
+              },
+              "of": {
+                "enum": [
+                  "A",
+                  "B"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "warmup",
+                  "scored"
+                ]
+              }
+            }
+          }
+        },
+        "balance": {
+          "type": "object",
+          "required": [
+            "balanced",
+            "step",
+            "pairs"
+          ],
+          "description": "Counted over the planned orders: every entry in every position equally often, and in every compared pair each first equally often with a zero sum of position differences. step: the smallest balanced round count."
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/case"
+          },
+          "description": "Every case the run reports, in report order; the correction counts only the primary ones."
+        },
+        "power": {
           "type": "object",
           "required": [
             "family_size",
-            "min_adjusted_p",
+            "min_rounds",
             "reachable",
-            "pairs_needed"
+            "both_twins",
+            "must_agree",
+            "max_primary_cases",
+            "plain"
           ],
-          "description": "The smallest adjusted p-value the planned pairs can give a primary metric (all pairs one way): when it is above alpha no primary metric can be FASTER or SLOWER. family_size is the number of primary metrics.",
+          "description": "What the planned rounds allow before any measurement: min_rounds is the smallest n with family_size * 2^(1-n) < alpha; must_agree how many rounds must then lean the same way; max_primary_cases the most primary cases this many rounds can give a verdict.",
           "properties": {
             "family_size": {
               "type": "integer"
             },
-            "min_adjusted_p": {
-              "type": "number"
+            "min_rounds": {
+              "type": "integer"
             },
             "reachable": {
               "type": "boolean"
             },
-            "pairs_needed": {
+            "both_twins": {
+              "type": "boolean"
+            },
+            "must_agree": {
               "type": [
                 "integer",
                 "null"
               ]
+            },
+            "max_primary_cases": {
+              "type": "integer"
+            },
+            "plain": {
+              "type": "string"
             }
           }
         },
         "scale_out": {
           "type": "object",
-          "description": "Mode scaleout only: the scale round's settings, fixed before the first round.",
+          "description": "Mode scaleout only: the scale round's settings, fixed before the first launch.",
           "required": [
             "replicas_start",
             "replicas_end",
@@ -877,7 +976,7 @@
     },
     "level": {
       "type": "object",
-      "description": "One concurrency level of one round, from GuideLLM's report; in mode scaleout, the round's one surge (concurrency null).",
+      "description": "One concurrency level of one launch, from GuideLLM's report; in mode scaleout, the launch's one surge (concurrency null).",
       "required": [
         "concurrency",
         "started_at",
@@ -1010,7 +1109,7 @@
         },
         "at_s": {
           "$ref": "#/$defs/number_or_null",
-          "description": "When the line was written, in seconds since the round asked for the server (node clock)."
+          "description": "When the line was written, in seconds since the launch asked for the server (node clock)."
         },
         "source": {
           "const": "log"
@@ -1021,13 +1120,15 @@
         }
       }
     },
-    "round": {
+    "launch": {
       "type": "object",
       "required": [
         "index",
+        "round",
+        "pos",
         "side",
+        "of",
         "kind",
-        "pair",
         "status",
         "error",
         "error_code",
@@ -1038,33 +1139,50 @@
         "server_version",
         "startup",
         "levels",
-        "metrics",
+        "values",
         "artifacts",
-        "launches",
         "start_retries",
-        "load_retries"
+        "starts",
+        "load_timeouts",
+        "load_retries",
+        "servers"
       ],
       "properties": {
         "index": {
           "type": "integer"
         },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "null for a warm-up launch."
+        },
+        "pos": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "side": {
           "enum": [
             "A",
-            "B"
+            "A~same",
+            "B",
+            "B~same"
           ]
+        },
+        "of": {
+          "enum": [
+            "A",
+            "B"
+          ],
+          "description": "The side launched; a twin launches its side."
         },
         "kind": {
           "enum": [
             "warmup",
-            "scored",
-            "aa"
-          ]
-        },
-        "pair": {
-          "type": [
-            "integer",
-            "null"
+            "scored"
           ]
         },
         "status": {
@@ -1090,7 +1208,7 @@
             "STOPPED",
             "RUNNER_ERROR"
           ],
-          "description": "null when the round is ok. GPU_NOT_FREE: another pod or program still held the GPU; SIDE_FAILED: the side failed (bad image, pull failure, no node, or the server exited); SIDE_NEVER_READY: no model listed, or no answer, before the time limit; LOAD_FAILED: GuideLLM failed or timed out after its one retry, or its report is unusable; STOPPED: the runner was stopped during the round; RUNNER_ERROR: anything else (the platform's API, a fault in the runner)."
+          "description": "null when the launch is ok. GPU_NOT_FREE: another pod or program still held the GPU; SIDE_FAILED: the side failed (bad image, pull failure, no node, or the server exited); SIDE_NEVER_READY: no model listed, or no answer, before the time limit; LOAD_FAILED: GuideLLM failed or timed out after its one retry, or its report is unusable; STOPPED: the runner was stopped during the launch; RUNNER_ERROR: anything else (the platform's API, a fault in the runner)."
         },
         "started_at": {
           "type": "string"
@@ -1147,25 +1265,10 @@
             }
           }
         },
-        "launches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/launch"
-          },
-          "description": "Every server start in the round, by replica (1 for the round's first start, 2 for the replica a scale round adds)."
-        },
         "levels": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/level"
-          }
-        },
-        "metrics": {
-          "type": "object",
-          "description": "The round's figure for each metric id in plan.metrics that it measured (0 or more). A 0, such as 0 output tokens per second, gives no ratio: the analysis counts that pair as lost to this side (pairs_lost). The analysis reads only this map.",
-          "additionalProperties": {
-            "type": "number",
-            "minimum": 0
           }
         },
         "artifacts": {
@@ -1179,7 +1282,8 @@
               "type": "string"
             },
             "server_log_2": {
-              "type": "string"
+              "type": "string",
+              "description": "Mode scaleout: the log of the replica the forced step added."
             },
             "server_log_attempt_1": {
               "type": "string",
@@ -1187,31 +1291,35 @@
             },
             "server_log_2_attempt_1": {
               "type": "string",
-              "description": "Mode scaleout: the same for the second replica, when it was started again."
+              "description": "Mode scaleout: the log of that replica's start that stopped at vLLM's start-up memory check, when it was started again."
             },
             "guidellm_try_1": {
               "type": "string",
-              "description": "GuideLLM's log of the round's first try, whose GuideLLM timed out, so the round ran once more (runner.LOAD_RETRIES, load_retries): in mode pairs from a new start of the side, in mode scaleout from a new first replica. Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
+              "description": "GuideLLM's log of the launch's first try, whose GuideLLM timed out. Every artifact of that try is kept under its key plus _try_1, its file name with .try-1 before the extension."
             },
             "router_try_1": {
               "type": "string",
-              "description": "Mode scaleout: the router's log of that first try."
+              "description": "Mode scaleout: the router's log of the first try."
             },
             "server_log_try_1": {
               "type": "string",
-              "description": "The server log of that first try (in mode scaleout, of its first replica), taken down before the round ran again."
+              "description": "The server log of that first try (in mode scaleout, of its first replica), taken down before the launch ran again."
             },
             "server_log_2_try_1": {
               "type": "string",
-              "description": "Mode scaleout: the second replica's log of that first try, taken down before the round ran again."
+              "description": "Mode scaleout: the second replica's log of the first try, taken down before the launch ran again."
             },
             "load_report_try_1": {
               "type": "string",
-              "description": "A GuideLLM report that the timed-out GuideLLM of that first try left, if it left one. Not read."
+              "description": "A GuideLLM report that the timed-out GuideLLM of that first try left, if it left one. Not read. A report left in the folder by an earlier attempt of the run is removed before each load, so this is always the try's own."
             },
             "server_log_attempt_1_try_1": {
               "type": "string",
               "description": "The server log of a start of that first try (in mode scaleout, of its first replica) that stopped at vLLM's start-up memory check."
+            },
+            "server_log_2_attempt_1_try_1": {
+              "type": "string",
+              "description": "Mode scaleout: the log of a start of the second replica of that first try that stopped at vLLM's start-up memory check."
             }
           }
         },
@@ -1224,20 +1332,46 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times the side was started again in this round after its server stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). Each start of a replica is tried again at most once (its launch record's start_retries); a second such failure of the same start fails the round (SIDE_FAILED). A round whose load ran again (load_retries) starts its replicas anew, each start with its own retry. This is the sum over the round's launch records, those of a discarded try included; each record's start_retries and discarded say which replica it was. The first replica's start-up figures are timed from its last start; a replica that a scale-out round adds is timed from when it was first asked for, so its first try's time counts."
+          "description": "How many times a server of this launch was started again after it stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of a server: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts its servers anew, each with its own retry. In mode scaleout this is the sum over the launch's server records, a discarded try's included; each record's start_retries, replica and discarded say which server it was. The start-up figures are timed from the side's last start; the replica the forced step adds is timed from when it was first asked for, so the time its stopped start took counts."
+        },
+        "values": {
+          "type": "object",
+          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio: that case gets NO VERDICT (nonpositive_value), and on a side or its twin so does every case whose floor uses that comparison (analysis.nonpositive_twins). The analysis reads only this map.",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "starts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many servers this launch started: in mode levels 1, in mode scaleout 2 for a scored launch (the first replica and the one the forced step adds), plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count."
+        },
+        "load_timeouts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "How many times GuideLLM timed out in this launch (in mode scaleout, during the surge, also before its first request). After the first time-out the launch runs once more (runner.LOAD_RETRIES) with the same requests: in mode levels from a new start of the side; in mode scaleout GuideLLM, the router and the replicas that had started are taken down and the launch starts from a new first replica. A second time-out fails the launch (LOAD_FAILED). Counted against the side in analysis.load_timeouts, whether or not the launch then finished."
         },
         "load_retries": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1,
-          "description": "How many times the round ran again after GuideLLM timed out (at most once), set when that try is discarded. Mode pairs takes the side down and starts it again from the GPU check, timed from that new start, and GuideLLM runs with the same requests. Mode scaleout runs the whole round once more: a new first replica, started and timed, then the surge with the same requests and a new second replica. The first try's files are the *_try_1 artifacts and its launch records are marked discarded; every figure of the round comes from the last try."
+          "description": "How many times the load (in mode scaleout, the surge) ran again after a GuideLLM time-out: set only once the second GuideLLM run has begun, so a launch stopped or failed before that reads 0 here while load_timeouts reads 1. Every figure of a launch whose load ran again comes from that second try, timed from the new start; the first try's files are the *_try_1 artifacts and its server records are marked discarded."
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/server"
+          },
+          "description": "Every server the launch started, as a server record: replica 1 the side (in mode scaleout its first replica), replica 2 the replica the forced step adds. A launch that ran again (load_retries) lists its discarded try's records first."
         },
         "scale": {
           "type": [
             "object",
             "null"
           ],
-          "description": "Mode scaleout, a scored or A/A round that reached the forced step: the step, the second replica, and how the router shared the surge out. Times in seconds are since the surge's first request reached the router, by the runner's clock.",
+          "description": "Mode scaleout, a scored launch (a twin's too) that reached the forced step: the step, the second replica, and how the router shared the surge out. Times in seconds are since the surge's first request reached the router, by the runner's clock.",
           "required": [
             "surge_started_at",
             "step_after_s",
@@ -1380,15 +1514,678 @@
             },
             "load_triggered_s": {
               "$ref": "#/$defs/number_or_null",
-              "description": "The first scale-up the server itself logged after the surge began (metric scale.load_triggered_s)."
+              "description": "The first scale-up the server itself logged after the surge began (case scale/load_triggered_s)."
             }
+          }
+        }
+      },
+      "description": "One launch: one start of one server, as measured."
+    },
+    "comparison": {
+      "type": "object",
+      "description": "One case, side B (the subject) against side A (the baseline).",
+      "required": [
+        "case",
+        "subject",
+        "baseline",
+        "role",
+        "kind",
+        "better",
+        "group",
+        "n_rounds",
+        "n_unpaired",
+        "n_untied",
+        "n_lower",
+        "n_higher",
+        "subject_median",
+        "baseline_median",
+        "ratio",
+        "gap",
+        "ratios",
+        "floor",
+        "bar",
+        "p_raw",
+        "p_raw_fraction",
+        "p_corrected",
+        "order_split",
+        "lost",
+        "outcome",
+        "reason",
+        "verdict",
+        "load_timeouts"
+      ],
+      "properties": {
+        "case": {
+          "type": "string"
+        },
+        "subject": {
+          "const": "B"
+        },
+        "baseline": {
+          "const": "A"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "secondary"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "time",
+            "rate",
+            "efficiency"
+          ]
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher"
+          ]
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "n_rounds": {
+          "type": "integer",
+          "description": "Rounds with both a B and an A figure."
+        },
+        "n_unpaired": {
+          "type": "integer",
+          "description": "Rounds with only one of the two."
+        },
+        "n_untied": {
+          "type": "integer",
+          "description": "Paired rounds where the figures differ: the sign test's trials."
+        },
+        "n_lower": {
+          "type": "integer",
+          "description": "Rounds with B/A below 1."
+        },
+        "n_higher": {
+          "type": "integer",
+          "description": "Rounds with B/A above 1."
+        },
+        "subject_median": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "baseline_median": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "M, the median of B/A over the paired rounds (the mean of the two middle values for an even count)."
+        },
+        "gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "abs(M - 1)."
+        },
+        "ratios": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "floor": {
+          "type": "object",
+          "required": [
+            "source",
+            "subject",
+            "baseline",
+            "mode"
+          ],
+          "properties": {
+            "source": {
+              "const": "twins"
+            },
+            "subject": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "value",
+                "n",
+                "provisional",
+                "spread",
+                "outlier_rounds",
+                "case"
+              ],
+              "properties": {
+                "value": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "abs(median(side / twin) - 1), the largest over the case's group."
+                },
+                "n": {
+                  "type": "integer",
+                  "description": "Rounds with both the side's and its twin's figure, for the case that set the value."
+                },
+                "provisional": {
+                  "type": "boolean",
+                  "description": "From fewer than 8 rounds."
+                },
+                "spread": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Interquartile range of side / twin over its median, for information."
+                },
+                "outlier_rounds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "description": "Rounds outside the Tukey fences; named, never dropped."
+                },
+                "case": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The case of the group whose floor is the largest."
+                }
+              }
+            },
+            "baseline": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "value",
+                "n",
+                "provisional",
+                "spread",
+                "outlier_rounds",
+                "case"
+              ],
+              "properties": {
+                "value": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "abs(median(side / twin) - 1), the largest over the case's group."
+                },
+                "n": {
+                  "type": "integer",
+                  "description": "Rounds with both the side's and its twin's figure, for the case that set the value."
+                },
+                "provisional": {
+                  "type": "boolean",
+                  "description": "From fewer than 8 rounds."
+                },
+                "spread": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Interquartile range of side / twin over its median, for information."
+                },
+                "outlier_rounds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "description": "Rounds outside the Tukey fences; named, never dropped."
+                },
+                "case": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The case of the group whose floor is the largest."
+                }
+              }
+            },
+            "mode": {
+              "const": "TWO-SIDED"
+            }
+          }
+        },
+        "bar": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "The subject's floor plus the baseline's; null without both."
+        },
+        "p_raw": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Exact two-sided sign test over the untied rounds; null for one paired round or none."
+        },
+        "p_raw_fraction": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "p_corrected": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Holm-adjusted over the primary cases with a p-value; null for a secondary case (graded on p_raw)."
+        },
+        "order_split": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[rounds where B ran before A, rounds where A ran first], over the paired rounds."
+        },
+        "lost": {
+          "type": "object",
+          "required": [
+            "A",
+            "B"
+          ],
+          "description": "Rounds a side lost through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at the case's level) while the other side did not; any makes the case NO VERDICT (side_failed)."
+        },
+        "outcome": {
+          "enum": [
+            "better",
+            "worse",
+            "tie",
+            "unresolved",
+            "no_verdict"
+          ],
+          "description": "What programs read, with reason."
+        },
+        "reason": {
+          "enum": [
+            null,
+            "inside_noise",
+            "not_significant",
+            "order_unbalanced",
+            "single_measurement",
+            "too_few_rounds",
+            "no_floor",
+            "one_sided_floor",
+            "zero_floor",
+            "nonpositive_value",
+            "order_not_recorded",
+            "side_failed",
+            "more_than_one_node"
+          ],
+          "description": "null for better, worse and tie. side_failed and more_than_one_node are this pattern's own."
+        },
+        "verdict": {
+          "enum": [
+            "FASTER",
+            "SLOWER",
+            "BETTER",
+            "WORSE",
+            "TIE",
+            "UNRESOLVED",
+            "NO VERDICT"
+          ],
+          "description": "The display word."
+        },
+        "load_timeouts": {
+          "type": "object",
+          "required": [
+            "A",
+            "B"
+          ],
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "Of the case's paired rounds, how many had a GuideLLM time-out in that side's own launch (its twin's are in analysis.load_timeouts). A launch whose load timed out once ran again from a new start, so its figures come from that start."
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "required": [
+        "tool",
+        "rule",
+        "comparisons",
+        "same_vs_same",
+        "nonpositive_twins",
+        "refusals",
+        "notes",
+        "outcomes",
+        "nodes",
+        "load_timeouts"
+      ],
+      "properties": {
+        "tool": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "description": "What wrote this section."
+        },
+        "rule": {
+          "type": "object",
+          "required": [
+            "name",
+            "fields",
+            "family_size",
+            "plain",
+            "min_rounds"
+          ],
+          "properties": {
+            "name": {
+              "const": "strict"
+            },
+            "fields": {
+              "type": "object"
+            },
+            "family_size": {
+              "type": "integer",
+              "description": "Primary cases with a p-value: the size of Holm's family."
+            },
+            "plain": {
+              "type": "string",
+              "description": "corrected for testing N cases at once, or one case tested."
+            },
+            "min_rounds": {
+              "type": "object",
+              "required": [
+                "primary",
+                "secondary"
+              ]
+            }
+          }
+        },
+        "comparisons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/comparison"
+          }
+        },
+        "same_vs_same": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "side",
+              "twin",
+              "case",
+              "n",
+              "ratio",
+              "floor",
+              "spread",
+              "outlier_rounds",
+              "provisional",
+              "p_raw",
+              "order_split"
+            ]
+          },
+          "description": "Each side against its twin, per case: the median of side / twin, the floor it gives, and the uncorrected sign test (outside the family). A side and case whose comparison with the twin has a figure of 0 has no row here: see nonpositive_twins."
+        },
+        "nonpositive_twins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "side",
+              "twin",
+              "case",
+              "side_rounds",
+              "twin_rounds",
+              "cases"
+            ],
+            "properties": {
+              "side": {
+                "type": "string"
+              },
+              "twin": {
+                "type": "string"
+              },
+              "case": {
+                "type": "string"
+              },
+              "side_rounds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Rounds in which the side's own figure was 0 or less."
+              },
+              "twin_rounds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Rounds in which the twin's figure was 0 or less."
+              },
+              "cases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The cases whose floor uses this comparison (the case's floor group): each gets NO VERDICT (nonpositive_value)."
+              }
+            }
+          },
+          "description": "Each side and case whose comparison with the twin has a figure of 0 or less in some paired round. That gives no ratio, so the side has no noise floor on the case's floor group, and every case in the group gets NO VERDICT (nonpositive_value); the floor is never taken from the rounds that are left. Also named in analysis.notes."
+        },
+        "refusals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "scope",
+              "message"
+            ]
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Loud notes, such as a side that differs from its own twin more often than chance."
+        },
+        "outcomes": {
+          "type": "object",
+          "required": [
+            "primary",
+            "secondary"
+          ],
+          "description": "Counts of each verdict word, by role."
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "load_timeouts": {
+          "type": "object",
+          "required": [
+            "A",
+            "B"
+          ],
+          "properties": {
+            "A": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "B": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "GuideLLM time-outs over every measured launch of each side, its twin's included, whether the launch then finished or not. A server that hangs under load on one side only shows here, and the notebook and results.md say so next to the verdicts."
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "description": "status.json in ConfigMap compare-<run id> (labels app.kubernetes.io/component=compare-run and compare-run-id=<run id>), next to result.json (the whole results file, left out above about 900 kB). Rewritten after every launch; written by summary.status.",
+      "required": [
+        "schema",
+        "run_id",
+        "phase",
+        "error_code",
+        "completed_rounds",
+        "total_rounds",
+        "launches_done",
+        "launches_total",
+        "launches_failed",
+        "levels_unusable",
+        "server_restored",
+        "eta_seconds",
+        "started_at",
+        "finished_at",
+        "sides",
+        "primary",
+        "outcomes",
+        "results_file"
+      ],
+      "properties": {
+        "schema": {
+          "const": "rhvp-image-compare-status/2"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "running",
+            "complete",
+            "partial",
+            "failed"
+          ],
+          "description": "run.status."
+        },
+        "error_code": {
+          "$ref": "#/properties/run/properties/error_code"
+        },
+        "levels_unusable": {
+          "type": "array",
+          "description": "Load levels of finished launches left out of the comparison because requests failed there, or none finished.",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "round",
+              "side",
+              "kind",
+              "concurrency",
+              "errored",
+              "successful"
+            ]
+          }
+        },
+        "server_restored": {
+          "$ref": "#/properties/run/properties/server_restored"
+        },
+        "eta_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "While running: the mean launch length so far times the launches left; otherwise null."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sides": {
+          "type": "object"
+        },
+        "primary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "case",
+              "verdict",
+              "outcome",
+              "reason",
+              "ratio",
+              "bar",
+              "p_corrected",
+              "n_rounds"
+            ]
+          }
+        },
+        "outcomes": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "results_file": {
+          "type": "string",
+          "description": "The results file's path under the results root."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "When this status was written (UTC)."
+        },
+        "completed_rounds": {
+          "type": "integer",
+          "description": "Rounds whose every launch ran (ok or failed)."
+        },
+        "total_rounds": {
+          "type": "integer"
+        },
+        "launches_done": {
+          "type": "integer"
+        },
+        "launches_total": {
+          "type": "integer"
+        },
+        "launches_failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "round",
+              "side",
+              "kind",
+              "error_code"
+            ]
           }
         }
       }
     },
-    "launch": {
+    "server": {
       "type": "object",
-      "description": "One start of a side's server (rhvp_compare/launch.py): what the runner asked for, and the environment the server process saw, for the allow-listed names only.",
+      "description": "One server a launch started (rhvp_compare/servers.py): what the runner asked for, and the environment the server process saw, for the allow-listed names only.",
       "required": [
         "replica",
         "entrypoint",
@@ -1403,7 +2200,7 @@
         "replica": {
           "type": "integer",
           "minimum": 1,
-          "description": "1 for the round's first server start; 2 and up for each replica a scale-out round adds, in start order. A round that ran again (load_retries) lists its discarded try's records first."
+          "description": "1 for the launch's first server (the side); 2 for the replica the forced step adds in mode scaleout."
         },
         "started_at": {
           "type": [
@@ -1482,14 +2279,14 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 1,
-          "description": "How many times this replica was started again in the round after its server stopped at vLLM's start-up memory check (at most once); the record describes the last start."
+          "description": "How many times this server was started again after it stopped at vLLM's start-up memory check (at most once); the record describes the last start."
         },
         "gpus": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The GPU request the platform got for this start: under docker the device request (\"all\" or device ids, from RHVP_COMPARE_GPUS or RHVP_COMPARE_REPLICA_GPUS); a vLLM server uses the first GPU it sees. null: not recorded (OpenShift, a side without a GPU, or a file from before this field)."
+          "description": "The GPU request the platform got for this server: under docker the device request (\"all\" or device ids, from RHVP_COMPARE_GPUS or RHVP_COMPARE_REPLICA_GPUS); a vLLM server uses the first GPU it sees. null: not recorded (OpenShift, or a side without a GPU)."
         },
         "gpu_uuids": {
           "type": [
@@ -1499,423 +2296,11 @@
           "items": {
             "type": "string"
           },
-          "description": "The UUIDs of the GPUs that request reached, as nvidia-smi listed them before the first round (mode scaleout). null: not read."
+          "description": "The UUIDs of the GPUs that request reached, as nvidia-smi's GPU query listed them before the first launch (mode scaleout); for a MIG device, its parent GPU's UUID. null: not read."
         },
         "discarded": {
           "type": "boolean",
-          "description": "true for a start of a round's first try, taken down when its GuideLLM timed out and the round ran again (the round's load_retries; in mode scaleout both replicas of that try): none of the round's figures come from it. Absent in files from before this field."
-        }
-      }
-    },
-    "analysis_row": {
-      "type": "object",
-      "required": [
-        "id",
-        "label",
-        "unit",
-        "better",
-        "kind",
-        "role",
-        "n_pairs",
-        "pairs_lost",
-        "a_median",
-        "b_median",
-        "ratios",
-        "median_ratio",
-        "ci",
-        "p_sign",
-        "p_wilcoxon",
-        "p_value",
-        "p_adjusted",
-        "reachable",
-        "outcome",
-        "verdict",
-        "reason"
-      ],
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "unit": {
-          "type": "string"
-        },
-        "better": {
-          "enum": [
-            "lower",
-            "higher"
-          ]
-        },
-        "kind": {
-          "enum": [
-            "speed",
-            "efficiency"
-          ]
-        },
-        "role": {
-          "enum": [
-            "primary",
-            "secondary"
-          ]
-        },
-        "n_pairs": {
-          "type": "integer",
-          "description": "Pairs where both rounds measured this metric."
-        },
-        "pairs_lost": {
-          "type": "object",
-          "required": [
-            "A",
-            "B",
-            "both",
-            "other"
-          ],
-          "description": "Scored pairs that ran at least one round but give no ratio for this metric, by cause. A or B: only that side failed on its own account (its round failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, requests failed at this metric's load level, or its value was 0); both: both sides did; other: any other cause (a round stopped, not run yet, the GPU not free, a missing power reading). Any A or B makes the verdict INCONCLUSIVE (reason pairs_lost_to_one_side_failing).",
-          "properties": {
-            "A": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "B": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "both": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "other": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        },
-        "a_median": {
-          "$ref": "#/$defs/number_or_null"
-        },
-        "b_median": {
-          "$ref": "#/$defs/number_or_null"
-        },
-        "ratios": {
-          "type": "array",
-          "items": {
-            "type": "number"
-          },
-          "description": "B/A per pair, in pair order."
-        },
-        "median_ratio": {
-          "$ref": "#/$defs/number_or_null",
-          "description": "The median of the ratios on the log scale: the middle ratio, or for an even count the geometric mean of the two middle ones, so swapping A and B gives exactly the reciprocal."
-        },
-        "ci": {
-          "type": "object",
-          "required": [
-            "low",
-            "high",
-            "level"
-          ],
-          "description": "Distribution-free interval for the median ratio (order statistics); its actual coverage is at least level, or null bounds when too few pairs.",
-          "properties": {
-            "low": {
-              "$ref": "#/$defs/number_or_null"
-            },
-            "high": {
-              "$ref": "#/$defs/number_or_null"
-            },
-            "level": {
-              "$ref": "#/$defs/number_or_null"
-            }
-          }
-        },
-        "p_sign": {
-          "type": "number",
-          "description": "Exact two-sided sign test on the ratios (ratios of exactly 1 left out)."
-        },
-        "p_wilcoxon": {
-          "type": "number",
-          "description": "Exact two-sided Wilcoxon signed-rank test on log ratios."
-        },
-        "p_value": {
-          "type": "number",
-          "description": "The test plan.analysis.test names."
-        },
-        "p_adjusted": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "description": "p_value after plan.analysis.correction over the primary metrics; null for a secondary metric, whose verdict uses p_value uncorrected."
-        },
-        "reachable": {
-          "type": "boolean",
-          "description": "Whether this metric's pairs could reach alpha at all: for a primary metric, the smallest corrected p-value its own number of pairs allows next to the other primary metrics' (exact for Holm and Bonferroni, a lower bound for bh); for a secondary metric, 2^(1-n)."
-        },
-        "outcome": {
-          "enum": [
-            "better",
-            "tie",
-            "worse",
-            "inconclusive"
-          ],
-          "description": "B against A, in the metric's own direction."
-        },
-        "verdict": {
-          "enum": [
-            "FASTER",
-            "TIE",
-            "SLOWER",
-            "MORE_EFFICIENT",
-            "LESS_EFFICIENT",
-            "INCONCLUSIVE"
-          ],
-          "description": "The outcome in words for the metric's kind: B is FASTER/SLOWER (speed) or MORE_EFFICIENT/LESS_EFFICIENT (efficiency) than A."
-        },
-        "reason": {
-          "enum": [
-            "too_few_pairs",
-            "interval_inside_tie_band",
-            "median_inside_tie_band_but_too_few_pairs_for_an_interval",
-            "median_inside_tie_band_but_interval_is_not",
-            "significant_outside_tie_band",
-            "test_and_median_disagree",
-            "not_significant_outside_tie_band",
-            "outside_tie_band_but_too_few_pairs_to_reach_alpha",
-            "pairs_lost_to_one_side_failing",
-            "rounds_ran_on_more_than_one_node"
-          ],
-          "description": "Why the verdict is what it is. TIE needs the median and its whole interval inside the tie band; FASTER/SLOWER need a corrected p-value at most alpha with the test leaning the same way as the median; the last two reasons override any other verdict."
-        }
-      }
-    },
-    "analysis": {
-      "type": "object",
-      "required": [
-        "tool",
-        "method",
-        "metrics",
-        "outcomes",
-        "noise_floor"
-      ],
-      "properties": {
-        "tool": {
-          "type": "object",
-          "required": [
-            "name",
-            "version"
-          ],
-          "description": "What wrote this section."
-        },
-        "method": {
-          "type": "object",
-          "required": [
-            "test",
-            "correction",
-            "tie_band",
-            "alpha",
-            "family_size",
-            "pairs_planned",
-            "pairs_usable_min",
-            "min_adjusted_p"
-          ],
-          "description": "plan.analysis, plus family_size (the number of primary metrics), the pairs planned, the fewest usable pairs of a primary metric, and min_adjusted_p: the smallest corrected p-value any primary metric's pairs allow."
-        },
-        "metrics": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/analysis_row"
-          }
-        },
-        "outcomes": {
-          "type": "object",
-          "required": [
-            "primary",
-            "secondary"
-          ],
-          "description": "How many metrics got each verdict, primary and secondary apart.",
-          "properties": {
-            "primary": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "integer"
-              }
-            },
-            "secondary": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "integer"
-              }
-            }
-          }
-        },
-        "noise_floor": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "description": "From the A/A pairs (side A twice): how far two rounds of one image land apart. null when the run had no A/A pairs.",
-          "items": {
-            "type": "object",
-            "required": [
-              "id",
-              "pairs",
-              "median_abs_change",
-              "max_abs_change"
-            ],
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "pairs": {
-                "type": "integer"
-              },
-              "median_abs_change": {
-                "$ref": "#/$defs/number_or_null",
-                "description": "exp(median |log ratio|) - 1 over the A/A pairs: the typical relative change between two rounds of one image."
-              },
-              "max_abs_change": {
-                "$ref": "#/$defs/number_or_null"
-              }
-            }
-          }
-        }
-      }
-    },
-    "status": {
-      "type": "object",
-      "description": "status.json in ConfigMap compare-<run id> (labels app.kubernetes.io/component=compare-run and compare-run-id=<run id>), next to result.json (the whole results file, left out above about 900 kB). Rewritten after every round; written by summary.status.",
-      "required": [
-        "schema",
-        "run_id",
-        "phase",
-        "error_code",
-        "completed_pairs",
-        "total_pairs",
-        "rounds_done",
-        "rounds_total",
-        "rounds_failed",
-        "levels_unusable",
-        "server_restored",
-        "eta_seconds",
-        "started_at",
-        "finished_at",
-        "sides",
-        "primary",
-        "outcomes",
-        "results_file"
-      ],
-      "properties": {
-        "schema": {
-          "const": "rhvp-image-compare-status/1"
-        },
-        "run_id": {
-          "type": "string"
-        },
-        "phase": {
-          "enum": [
-            "running",
-            "complete",
-            "partial",
-            "failed"
-          ],
-          "description": "run.status."
-        },
-        "error_code": {
-          "$ref": "#/properties/run/properties/error_code"
-        },
-        "completed_pairs": {
-          "type": "integer",
-          "description": "Scored pairs with both rounds run (ok or failed)."
-        },
-        "total_pairs": {
-          "type": "integer"
-        },
-        "rounds_done": {
-          "type": "integer"
-        },
-        "rounds_total": {
-          "type": "integer"
-        },
-        "rounds_failed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "index",
-              "side",
-              "kind",
-              "error_code"
-            ]
-          }
-        },
-        "levels_unusable": {
-          "type": "array",
-          "description": "Load levels of finished rounds left out of the comparison because requests failed there, or none finished.",
-          "items": {
-            "type": "object",
-            "required": [
-              "index",
-              "side",
-              "kind",
-              "concurrency",
-              "errored",
-              "successful"
-            ]
-          }
-        },
-        "server_restored": {
-          "$ref": "#/properties/run/properties/server_restored"
-        },
-        "eta_seconds": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "description": "While running: the mean round length so far times the rounds left; otherwise null."
-        },
-        "started_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "finished_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "sides": {
-          "type": "object"
-        },
-        "primary": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "id",
-              "verdict",
-              "median_ratio",
-              "ci",
-              "p_adjusted",
-              "n_pairs"
-            ]
-          }
-        },
-        "outcomes": {
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "results_file": {
-          "type": "string",
-          "description": "The results file's path under the results root."
-        },
-        "updated_at": {
-          "type": "string",
-          "description": "When this status was written (UTC)."
+          "description": "true for a server of a launch's first try, taken down when its GuideLLM timed out and the launch ran again (the launch's load_retries; in mode scaleout every replica of that try): none of the launch's figures come from it."
         }
       }
     }

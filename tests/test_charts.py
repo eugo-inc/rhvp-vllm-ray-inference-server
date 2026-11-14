@@ -244,8 +244,8 @@ def test_compare_job_name_follows_the_pod_template(compare):
 
 def test_compare_config_is_global_compare_plus_the_model(compare):
     config = json.loads(one(compare["notebook-compare"], "ConfigMap")["data"]["compare.json"])
-    # mode pairs, the default, is left out, so a pairs run keeps the run id it had before the setting existed.
-    assert GLOBAL["global"]["compare"]["mode"] == "pairs" and "mode" not in config
+    # mode levels, the default, is left out, so a levels run keeps the run id it had before the setting existed.
+    assert GLOBAL["global"]["compare"]["mode"] == "levels" and "mode" not in config
     want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k not in ("enabled", "mode")}
     assert {k: v for k, v in config.items() if k != "model"} == json.loads(json.dumps(want))
     assert config["model"] == {k: GLOBAL["global"]["model"][k] for k in ("id", "source", "revision")}
@@ -253,7 +253,7 @@ def test_compare_config_is_global_compare_plus_the_model(compare):
     from rhvp_compare import plan as plans
 
     plan = plans.build(config, "openshift")
-    assert plan["floor"]["reachable"] and plan["energy"]["source"] == "dcgm"
+    assert plan["power"]["reachable"] and plan["energy"]["source"] == "dcgm"
     for side in plan["sides"]:
         assert side["image"].startswith("docker.io/vllm/vllm-openai:v") and "@sha256:" in side["image"]
 
@@ -347,6 +347,14 @@ def test_gpu_operator_config(render):
     policy = one(docs(render / "charts/nvidia-gpu-config.yaml"), "ClusterPolicy")
     assert {"effect": "NoSchedule", "key": "nvidia.com/gpu", "value": "true"} in policy["spec"]["daemonsets"]["tolerations"]
     assert policy["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"
+    exporter = policy["spec"]["dcgmExporter"]
+    assert exporter["serviceMonitor"] == {"enabled": True} and "env" not in exporter  # the defaults, compare off
+    # While the comparison is on, GPU power every 2 s: at least 10 samples in a 60 s load level (energy.minSamples).
+    on = one(docs(render / "charts/nvidia-gpu-config-compare.yaml"), "ClusterPolicy")["spec"]["dcgmExporter"]
+    assert on["env"] == [{"name": "DCGM_EXPORTER_INTERVAL", "value": "2000"}]
+    assert on["serviceMonitor"] == {"enabled": True, "interval": "2s"}
+    off = one(docs(render / "charts/nvidia-gpu-config-compare-noenergy.yaml"), "ClusterPolicy")["spec"]
+    assert off["dcgmExporter"] == exporter
     nfd = one(docs(render / "charts/nfd-config.yaml"), "NodeFeatureDiscovery", "nfd-instance")
     assert nfd["spec"]["operand"]["image"] == "registry.redhat.io/openshift4/ose-node-feature-discovery-rhel9:v4.20"
     assert nfd["metadata"]["annotations"]["argocd.argoproj.io/sync-options"] == "SkipDryRunOnMissingResource=true"

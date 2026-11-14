@@ -14,7 +14,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import analyze, energy, guidellm, launch, plan as plans
+from . import analyze, energy, guidellm, plan as plans, servers
 
 PATH = Path(__file__).resolve().parents[1] / "compare-recordings" / "synthetic.json"
 SEED = 20260101
@@ -26,16 +26,16 @@ CONFIG = {
         {"name": "baseline", "image": "registry.example/inference-server:baseline", "preset": "vllm-openai"},
         {"name": "candidate", "image": "registry.example/inference-server:candidate", "preset": "vllm-openai"},
     ],
-    "rounds": {"pairs": 10, "warmup": True, "aaPairs": 2},
+    "rounds": {"count": 8, "warmup": True, "twins": "both"},
 }
 #: Side A's typical figures, and side B's against them (made up).
 A_BASE = {"ready_s": 92.0, "first_answer_s": 95.0, "ttft_ms": {1: 22.0, 8: 31.0, 32: 58.0},
           "itl_ms": {1: 6.1, 8: 7.4, 32: 11.8}, "tps": {1: 160.0, 8: 1050.0, 32: 2600.0},
           "power_w": {1: 95.0, 8: 160.0, 32: 230.0}}
 B_FACTOR = {"ready_s": 0.99, "first_answer_s": 0.80, "ttft_ms": 1.01, "itl_ms": 0.90, "tps": 1.10, "power_w": 1.02}
-#: The mode scaleout example: the same sides, one surge per round, the second replica asked for 30 s in.
+#: The mode scaleout example: the same sides and twins, one surge per scored launch, the second replica asked for
+#: 30 s in.
 SCALE_CONFIG = {**CONFIG, "runName": "synthetic-scale-out", "mode": "scaleout",
-                "rounds": {"pairs": 8, "warmup": True, "aaPairs": 0},
                 "scaleOut": {"requestRate": 6, "surgeSeconds": 120, "stepAfterSeconds": 30, "ttftMs": 500,
                              "tpotMs": 50}}
 #: Side A's typical scale-round figures, and side B's factors against them (made up).
@@ -52,9 +52,7 @@ def _iso(at: datetime) -> str:
     return at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _level(rng: random.Random, side: str, c: int, at: float, seconds: float) -> dict:
-    b = side == "B"
-
+def _level(rng: random.Random, b: bool, c: int, at: float, seconds: float) -> dict:
     def jitter(value: float, key: str) -> float:
         return value * (B_FACTOR[key] if b else 1.0) * rng.uniform(0.98, 1.02)
 
@@ -71,32 +69,32 @@ def _level(rng: random.Random, side: str, c: int, at: float, seconds: float) -> 
         "output_tokens": int(tps * seconds), "output_tokens_per_s": tps, "requests_per_s": tps / 128,
         "usable": True, "note": None,
         "energy": {"source": "dcgm", "label": plans.ENERGY_LABEL, "method": "energy_counter",
-                   "samples": int(seconds / 15), "mean_power_w": power, "energy_j": power * seconds,
+                   "samples": int(seconds / 2), "mean_power_w": power, "energy_j": power * seconds,
                    "tokens_per_joule": tps / power, "joules_per_token": power / tps, "note": None},
     }
 
 
-def _launch(plan: dict, side: str, replica: int, started_at: str) -> dict:
-    spec = plans.side_spec(plan, next(s for s in plan["sides"] if s["key"] == side))
+def _server(plan: dict, of: str, replica: int, started_at: str) -> dict:
+    spec = plans.side_spec(plan, next(s for s in plan["sides"] if s["key"] == of))
     scale = plan.get("mode") == plans.SCALEOUT  # docker: the device request each replica got (both on GPU 0)
-    return launch.record(replica, spec.get("command"), spec.get("args") or [], spec.get("env"), "process",
-                         started_at=started_at, image_entrypoint=["vllm", "serve"], image_cmd=None,
-                         gpus="0" if scale else None,
-                         gpu_uuids=["GPU-00000000-0000-0000-0000-000000000000"] if scale else None)
+    return servers.record(replica, spec.get("command"), spec.get("args") or [], spec.get("env"), "process",
+                          started_at=started_at, image_entrypoint=["vllm", "serve"], image_cmd=None,
+                          gpus="0" if scale else None,
+                          gpu_uuids=["GPU-00000000-0000-0000-0000-000000000000"] if scale else None)
 
 
 def synthesize() -> dict:
-    """The whole synthetic results file."""
+    """The whole synthetic results file. Every launch, a twin's too, draws its own noise."""
     return _synthesize(CONFIG, "openshift")
 
 
 def synthesize_scale_out() -> dict:
-    """A synthetic run in mode scaleout (docker): one surge per round, a second replica at the forced step."""
+    """A synthetic run in mode scaleout (docker): one surge per scored launch, a second replica at the forced step."""
     return _synthesize(SCALE_CONFIG, "docker")
 
 
 def _surge(rng: random.Random, b: bool, plan: dict, at: float) -> tuple[dict, dict]:
-    """A round's surge level and its scale record (made up)."""
+    """A launch's surge level and its scale record (made up)."""
     scale = plan["scale_out"]
 
     def jitter(key: str) -> float:
@@ -147,10 +145,10 @@ def _synthesize(config: dict, platform: str) -> dict:
     plan = plans.build(config, platform)
     scale_mode = plan.get("mode") == plans.SCALEOUT
     clock = START
-    rounds = []
-    for planned in plan["rounds"]:
-        side = planned["side"]
-        b = side == "B" and planned["kind"] != plans.AA
+    launches = []
+    for planned in plan["launches"]:
+        side, of = planned["side"], planned["of"]
+        b = of == "B"
         started = clock
         ready = A_BASE["ready_s"] * (B_FACTOR["ready_s"] if b else 1.0) * rng.uniform(0.97, 1.03)
         first = A_BASE["first_answer_s"] * (B_FACTOR["first_answer_s"] if b else 1.0) * rng.uniform(0.97, 1.03)
@@ -161,19 +159,19 @@ def _synthesize(config: dict, platform: str) -> dict:
         for key, label, share in PHASES:
             breakdown.append({"phase": key, "label": label, "seconds": round(ready * share, 2),
                               "at_s": None, "source": "log", "count": 1})
+        folder = f"launches/{planned['index']:02d}-{plans.token(side)}-{planned['kind']}"
         record = {
-            "index": planned["index"], "side": side, "kind": planned["kind"], "pair": planned["pair"],
-            "status": "ok", "error": None, "error_code": None, "started_at": _iso(started), "finished_at": None,
-            "node": "gpu-node-1",
-            "image_digest": f"registry.example/inference-server@sha256:{('a' if side == 'A' else 'b') * 64}",
+            "index": planned["index"], "round": planned["round"], "pos": planned["pos"], "side": side, "of": of,
+            "kind": planned["kind"], "status": "ok", "error": None, "error_code": None,
+            "started_at": _iso(started), "finished_at": None, "node": "gpu-node-1",
+            "image_digest": f"registry.example/inference-server@sha256:{('b' if b else 'a') * 64}",
             "server_version": {"vllm": "0.0.0-example", "source": "endpoint"},
             "startup": {"ready_s": round(ready, 3), "first_answer_s": round(first, 3),
                         "clock": "runner, from just before the server was asked for", "breakdown": breakdown},
-            "levels": [], "metrics": {"startup.ready_s": ready, "startup.first_answer_s": first},
-            "artifacts": {"server_log": f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/server.log"},
-            "launches": [_launch(plan, side, 1, _iso(started))],
-            "start_retries": 0,
-            "load_retries": 0,
+            "levels": [], "values": {"startup/ready_s": ready, "startup/first_answer_s": first},
+            "artifacts": {"server_log": f"{folder}/server.log"},
+            "servers": [_server(plan, of, 1, _iso(started))],
+            "starts": 1, "start_retries": 0, "load_timeouts": 0, "load_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
         if planned["kind"] != plans.WARMUP and scale_mode:
@@ -181,44 +179,44 @@ def _synthesize(config: dict, platform: str) -> dict:
             record["levels"], record["scale"] = [level], scale
             at += plan["scale_out"]["surge_s"] + 2
             asked = datetime.fromtimestamp(level["start_epoch"] + scale["step_at_s"], timezone.utc)
-            record["launches"].append(_launch(plan, side, 2, _iso(asked)))
-            record["artifacts"]["server_log_2"] = (f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/"
-                                                   "server-2.log")
-            record["artifacts"]["load_report"] = (f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/"
-                                                  "guidellm.json")
-            record["metrics"].update({"scale.ready_s": scale["new_replica"]["ready_s"],
-                                      "scale.first_answer_s": scale["new_replica"]["first_answer_s"],
-                                      **guidellm.surge_metrics(level)})
+            record["servers"].append(_server(plan, of, 2, _iso(asked)))
+            record["starts"] = 2
+            record["artifacts"]["server_log_2"] = f"{folder}/server-2.log"
+            record["artifacts"]["load_report"] = f"{folder}/guidellm.json"
+            record["values"].update({"scale/ready_s": scale["new_replica"]["ready_s"],
+                                     "scale/first_answer_s": scale["new_replica"]["first_answer_s"],
+                                     **guidellm.surge_values(level)})
         elif planned["kind"] != plans.WARMUP:
             seconds = plan["load"]["seconds_per_level"]
             for c in plan["load"]["concurrencies"]:
-                level = _level(rng, "B" if b else "A", c, at, seconds)
+                level = _level(rng, b, c, at, seconds)
                 record["levels"].append(level)
                 at += seconds + 2
-                record["metrics"].update({f"c{c}.ttft_ms_median": level["ttft_ms"]["median"],
-                                          f"c{c}.itl_ms_median": level["itl_ms"]["median"],
-                                          f"c{c}.output_tokens_per_s": level["output_tokens_per_s"],
-                                          f"c{c}.tokens_per_joule": level["energy"]["tokens_per_joule"]})
-            record["artifacts"]["load_report"] = (f"rounds/{planned['index']:02d}-{side}-{planned['kind']}/"
-                                                  "guidellm.json")
+                record["values"].update({f"c{c}/ttft_ms_median": level["ttft_ms"]["median"],
+                                         f"c{c}/itl_ms_median": level["itl_ms"]["median"],
+                                         f"c{c}/output_tokens_per_s": level["output_tokens_per_s"],
+                                         f"c{c}/tokens_per_joule[gpu]": level["energy"]["tokens_per_joule"]})
+            record["artifacts"]["load_report"] = f"{folder}/guidellm.json"
         clock = datetime.fromtimestamp(at + 30, timezone.utc)
         record["finished_at"] = _iso(clock)
-        rounds.append(record)
+        launches.append(record)
     results = {
         "schema": plans.SCHEMA,
         "run": {"id": plan["run_id"], "name": plan["run_name"], "status": "complete", "error_code": None,
                 "started_at": _iso(START),
                 "finished_at": _iso(clock), "platform": platform,
-                "server_restored": True if platform == "openshift" else None, "synthetic": True,
+                "server_restored": True if platform == "openshift" else None,
+                "server_found_down": None, "synthetic": True,
                 "notes": ["Synthetic: written by notebooks/rhvp_compare/example.py, never measured."], "errors": []},
         "plan": plan,
         "provenance": {
             "harness": {"name": "rhvp_compare", "version": "1"},
             "load_tool": {"name": "guidellm", "image": plan["load"]["image"], "version": "0.8.1"},
             "seeds": {"load": plan["load"]["seed"], "server": plan["server"]["seed"]},
-            "sides": {s["key"]: {"image": s["image"], "image_digest": rounds[i]["image_digest"],
+            "sides": {s["key"]: {"image": s["image"],
+                                 "image_digest": next(r["image_digest"] for r in launches if r["of"] == s["key"]),
                                  "server_version": {"vllm": "0.0.0-example", "source": "endpoint"}}
-                      for i, s in enumerate(plan["sides"])},
+                      for s in plan["sides"]},
             "gpu": {"product": "Example-GPU", "driver": "0.0", "cuda_driver": "0.0", "memory_mib": 24000, "count": 1,
                     "source": "made up"},
             "node": {"name": "gpu-node-1", "arch": "amd64", "instance_type": "example.large", "os_image": "example",
@@ -226,7 +224,7 @@ def _synthesize(config: dict, platform: str) -> dict:
             "nodes": [{"name": "gpu-node-1", "gpu": "Example-GPU"}],
             "cluster": {"openshift_version": "4.20.0"},
         },
-        "rounds": rounds,
+        "launches": launches,
         "analysis": None,
     }
     results["analysis"] = analyze.analyze(results)

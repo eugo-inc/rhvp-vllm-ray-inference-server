@@ -23,7 +23,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
-from rhvp_compare import dockerapi, energy, guidellm, kube, launch, logs, plan as plans, runner  # noqa: E402
+from rhvp_compare import dockerapi, energy, guidellm, kube, logs, plan as plans, runner, servers  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
 REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1.json").read_text())
@@ -57,15 +57,17 @@ def test_a_level_with_errors_stays_out_of_the_comparison():
     report["benchmarks"][1]["metrics"]["request_totals"]["errored"] = 2
     levels = guidellm.levels(report)
     assert not levels[1]["usable"] and "2 requests failed" in levels[1]["note"]
-    flat = guidellm.flat_metrics(levels)
-    assert "c1.itl_ms_median" in flat and not any(k.startswith("c4.") for k in flat)
+    flat = guidellm.flat_values(levels)
+    assert "c1/itl_ms_median" in flat and not any(k.startswith("c4/") for k in flat)
 
 
-def test_flat_metrics_take_tokens_per_joule_from_the_energy_entry():
+def test_flat_values_take_tokens_per_joule_from_the_energy_entry():
     levels = guidellm.levels(REPORT)
     levels[0]["energy"] = {"tokens_per_joule": 2.5}
-    flat = guidellm.flat_metrics(levels)
-    assert flat["c1.tokens_per_joule"] == 2.5 and "c4.tokens_per_joule" not in flat
+    flat = guidellm.flat_values(levels)
+    assert flat["c1/tokens_per_joule[gpu]"] == 2.5 and "c4/tokens_per_joule[gpu]" not in flat
+    ids = {c["id"] for c in _plan()["cases"]}
+    assert set(guidellm.flat_values(guidellm.levels(REPORT))) <= ids  # the ids of the plan's cases
 
 
 @pytest.mark.parametrize("report", [{}, {"benchmarks": []}, {"benchmarks": [{"metrics": {}}]}])
@@ -109,6 +111,35 @@ def test_run_stops_a_hung_load_and_reports_a_bad_exit(tmp_path):
         guidellm.run(plan, "http://side:8000", tmp_path / "out", executable=str(fail))
     assert not caught.value.timed_out and "code 3" in str(caught.value)
     assert (tmp_path / "out" / "guidellm.log").read_text() == "no\n"
+
+
+class _Halt(BaseException):
+    pass
+
+
+def test_a_stop_while_a_timed_out_guidellm_is_taken_down_kills_it_and_keeps_the_time_out(tmp_path):
+    # GuideLLM ignores SIGTERM; the runner's stop lands while run() waits for it to exit after the time-out.
+    plan = _plan(timeoutSeconds=30)
+    plan["load"]["timeout_s"] = 1
+    stubborn = tmp_path / "stubborn.sh"
+    stubborn.write_text("#!/bin/sh\necho $$ > \"$(dirname \"$0\")/pid\"\ntrap '' TERM\nwhile :; do sleep 1; done\n")
+    stubborn.chmod(0o755)
+
+    def halt(signum, frame):
+        raise _Halt()
+
+    previous = signal.signal(signal.SIGALRM, halt)
+    signal.setitimer(signal.ITIMER_REAL, 2.0)  # 1 s after the time-out, inside the 15 s wait for SIGTERM to work
+    try:
+        with pytest.raises(_Halt) as caught:
+            guidellm.run(plan, "http://side:8000", tmp_path / "out", executable=str(stubborn))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert caught.value.load_timed_out  # the runner counts the time-out all the same
+    pid = int((tmp_path / "pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # and GuideLLM was killed, not left running
 
 
 def test_run_returns_the_report(tmp_path):
@@ -178,15 +209,36 @@ def test_window_power_prefers_the_energy_counter():
     assert by_power.method == "power_mean" and by_power.mean_w == pytest.approx(100.0) and by_power.samples == 9
     too_few = energy.window_power(power[:1], 0, 9, 2)
     assert too_few.mean_w is None and "at least 2" in too_few.note
+    # The plan's minimum holds for the counter too: a DCGM exporter at its default 30 s gives a 60 s level 2 readings
+    # of each, and no figure.
+    slow_power = [energy.Sample(0, 200.0), energy.Sample(30, 200.0)]
+    slow_counter = [energy.Sample(0, 0), energy.Sample(30, 6_000_000)]
+    refused = energy.window_power(slow_power, 0, 60, 10, slow_counter)
+    assert refused.mean_w is None and refused.method is None and "at least 10 are needed" in refused.note
+    ten = [energy.Sample(6 * i, 200.0) for i in range(10)]
+    stale = energy.window_power(ten, 0, 60, 10, slow_counter)  # 2 counter readings: the power samples give the mean
+    assert stale.method == "power_mean" and stale.mean_w == pytest.approx(200.0) and stale.samples == 10
+    counter = [energy.Sample(6 * i, 6 * i * 150_000) for i in range(10)]  # ten distinct readings: 150 W
+    by_counter = energy.window_power(ten, 0, 60, 10, counter)
+    assert by_counter.method == "energy_counter" and by_counter.mean_w == pytest.approx(150.0)
+    # The thresholds exactly: 9 power samples are one short of 10; 9 distinct counter readings are too, also when
+    # repeats of one value (a scrape faster than the exporter's update) make it 10 samples.
+    short = energy.window_power(ten[:9], 0, 60, 10, counter)
+    assert short.mean_w is None and short.samples == 9 and "at least 10 are needed" in short.note
+    nine = energy.window_power(ten, 0, 60, 10, counter[:9])
+    assert nine.method == "power_mean" and nine.mean_w == pytest.approx(200.0)
+    repeated = counter[:9] + [energy.Sample(57, counter[8].value)]
+    assert len(repeated) == 10 and len(energy.collapse(repeated)) == 9
+    assert energy.window_power(ten, 0, 60, 10, repeated).method == "power_mean"
 
 
-def test_flat_metrics_keep_a_zero():
+def test_flat_values_keep_a_zero():
     levels = guidellm.levels(REPORT)
     levels[0]["output_tokens_per_s"] = 0.0
     levels[0]["energy"] = energy.level_energy(levels[0], energy.Power(150.0, 20, "power_mean", None), "nvidia-smi")
-    flat = guidellm.flat_metrics(levels)
+    flat = guidellm.flat_values(levels)
     c = levels[0]["concurrency"]
-    assert flat[f"c{c}.output_tokens_per_s"] == 0.0 and flat[f"c{c}.tokens_per_joule"] == 0.0
+    assert flat[f"c{c}/output_tokens_per_s"] == 0.0 and flat[f"c{c}/tokens_per_joule[gpu]"] == 0.0
     assert levels[0]["energy"]["joules_per_token"] is None
 
 
@@ -257,7 +309,8 @@ def test_repeated_counter_values_are_dropped_before_the_division():
     counter = [energy.Sample(10, 0), energy.Sample(11, 500_000), energy.Sample(12, 1_000_000),
                energy.Sample(13, 1_000_000)]
     assert energy.collapse(counter) == counter[:3]
-    assert energy.window_power([], 10, 13, 2, counter).mean_w == pytest.approx(500.0)
+    power = [energy.Sample(t, 400.0) for t in (10, 11, 12, 13)]
+    assert energy.window_power(power, 10, 13, 2, counter).mean_w == pytest.approx(500.0)
     flat = [energy.Sample(10, 5000), energy.Sample(11, 5000)]
     power = [energy.Sample(10, 90), energy.Sample(11, 110)]
     result = energy.window_power(power, 10, 11, 2, flat)  # one distinct value: fall back to the power samples
@@ -309,6 +362,13 @@ def test_image_digest_from_the_pod():
     assert kube.image_digest(pod) == "docker.io/x/a@sha256:abc"
     pod["status"]["containerStatuses"][0]["imageID"] = "docker-pullable://x/a@sha256:def"
     assert kube.image_digest(pod) == "x/a@sha256:def"
+    # A runtime that reports only the image's own id: the image the pod asked for, when it is pinned by digest.
+    pod["status"]["containerStatuses"][0]["imageID"] = "sha256:0123"
+    assert kube.image_digest(pod) is None
+    pod["spec"] = {"containers": [{"name": "server", "image": "quay.io/x/a:1@sha256:feed"}]}
+    assert kube.image_digest(pod) == "quay.io/x/a:1@sha256:feed"
+    pod["spec"]["containers"][0]["image"] = "quay.io/x/a:1"
+    assert kube.image_digest(pod) is None
     assert kube.image_digest({}) is None
 
 
@@ -434,7 +494,7 @@ def test_a_paused_autoscaler_that_cannot_be_resumed_says_how():
 
 def test_the_openshift_job_refuses_the_scale_out_mode_before_it_changes_anything(tmp_path, capsys):
     config = _plan_config()
-    config.update(mode="scaleout", rounds={"pairs": 7, "warmup": False})
+    config.update(mode="scaleout", rounds={"count": 7, "warmup": False})
     path = tmp_path / "compare.json"
     path.write_text(json.dumps(config))
     backend, calls = _side_backend(server_replicas=1, scaled_object={}, env_extra=SCALED)
@@ -528,12 +588,12 @@ def test_later_sides_run_on_the_first_sides_node():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    first = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    first = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
     assert "kubernetes.io/hostname" not in first["spec"]["nodeSelector"]
     backend.kube.node = lambda name: {"metadata": {"name": name, "labels": {"kubernetes.io/hostname": "gpu-1"}}}
     backend._pod = lambda handle, fresh=False: {"spec": {"nodeName": "gpu-1.example"}}
     assert backend.facts({"name": "p", "gpu": True})["node_name"] == "gpu-1.example"
-    later = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    later = backend.pod_body(plan, plan["launches"][2], side, plans.side_spec(plan, side))
     assert later["spec"]["nodeSelector"] == {"kubernetes.io/arch": "arm64", "kubernetes.io/hostname": "gpu-1"}
 
 
@@ -583,8 +643,8 @@ def test_a_side_pod_has_its_own_time_limit():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    warm = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
-    scored = backend.pod_body(plan, plan["rounds"][2], side, plans.side_spec(plan, side))
+    warm = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
+    scored = backend.pod_body(plan, plan["launches"][2], side, plans.side_spec(plan, side))
     load = 2 * plan["load"]["timeout_s"] + plan["energy"]["settle_s"] + 600
     assert warm["spec"]["activeDeadlineSeconds"] == int(plan["server"]["warmup_timeout_s"] + load)
     assert scored["spec"]["activeDeadlineSeconds"] == int(plan["server"]["ready_timeout_s"] + load)
@@ -597,7 +657,7 @@ def test_guidellm_gets_the_token_only_when_real(secret, passed, monkeypatch, tmp
     backend.prepare(plan)
     seen = {}
     monkeypatch.setattr(guidellm, "run", lambda plan, target, out_dir, env=None: seen.setdefault("env", env))
-    backend.run_load(plan, plan["rounds"][2], "http://side:8000", tmp_path)
+    backend.run_load(plan, plan["launches"][2], "http://side:8000", tmp_path)
     assert seen["env"] == ({"HF_TOKEN": "hf_abc"} if passed else None)
 
 
@@ -606,11 +666,18 @@ def test_side_pod_like_the_patterns_server():
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][1]
-    body = backend.pod_body(plan, plan["rounds"][3], side, plans.side_spec(plan, side))
+    twin = plan["launches"][5]  # launch 6: side B's twin in round 1, which launches side B
+    assert (twin["index"], twin["side"], twin["of"], twin["round"]) == (6, "B~same", "B", 1)
+    body = backend.pod_body(plan, twin, side, plans.side_spec(plan, side))
     spec = body["spec"]
     [container] = spec["containers"]
-    assert body["metadata"]["name"].startswith("cmp-") and body["metadata"]["name"].endswith("-r04-b")
-    assert body["metadata"]["labels"][kube.LABEL_RUN] == plan["run_id"]
+    assert body["metadata"]["name"] == f"cmp-{plan['run_id'][-8:]}-06-b-same"
+    labels = body["metadata"]["labels"]
+    assert labels[kube.LABEL_RUN] == plan["run_id"]
+    assert (labels["rhvp-compare/side"], labels["rhvp-compare/launch"], labels["rhvp-compare/round"]) == (
+        "B-same", "6", "1")
+    warm = backend.pod_body(plan, plan["launches"][1], side, plans.side_spec(plan, side))
+    assert warm["metadata"]["name"].endswith("-02-b") and warm["metadata"]["labels"]["rhvp-compare/round"] == "warmup"
     assert spec["restartPolicy"] == "Never" and spec["nodeSelector"] == {"kubernetes.io/arch": "arm64"}
     assert spec["tolerations"] == [{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}]
     assert container["resources"]["requests"]["nvidia.com/gpu"] == container["resources"]["limits"]["nvidia.com/gpu"]
@@ -632,7 +699,7 @@ def test_the_token_goes_in_by_reference_and_only_when_real(secret, referenced):
     plan = _plan()
     backend.prepare(plan)
     side = plan["sides"][0]
-    body = backend.pod_body(plan, plan["rounds"][0], side, plans.side_spec(plan, side))
+    body = backend.pod_body(plan, plan["launches"][0], side, plans.side_spec(plan, side))
     env = {e["name"]: e for e in body["spec"]["containers"][0]["env"]}
     assert ("HF_TOKEN" in env) is referenced
     if referenced:
@@ -648,11 +715,11 @@ def test_a_side_without_a_gpu_and_the_ray_preset():
                        {"name": "b", "image": "x/b:1", "preset": "ray-serve-llm", "gpu": False}]
     plan = plans.build(config, "openshift")
     backend.prepare(plan)
-    mock = backend.pod_body(plan, plan["rounds"][0], plan["sides"][0], plans.side_spec(plan, plan["sides"][0]))
+    mock = backend.pod_body(plan, plan["launches"][0], plan["sides"][0], plans.side_spec(plan, plan["sides"][0]))
     assert mock["spec"]["tolerations"] == []
     assert "nvidia.com/gpu" not in json.dumps(mock["spec"]["containers"][0]["resources"])
     assert mock["spec"]["containers"][0]["command"] == ["guidellm", "mock-server"]
-    ray = backend.pod_body(plan, plan["rounds"][1], plan["sides"][1], plans.side_spec(plan, plan["sides"][1]))
+    ray = backend.pod_body(plan, plan["launches"][1], plan["sides"][1], plans.side_spec(plan, plan["sides"][1]))
     assert {"name": "config", "configMap": {"name": "ray-serve-llm-config"}} in ray["spec"]["volumes"]
     assert plan["energy"]["source"] == "none"
 
@@ -907,7 +974,7 @@ def test_a_signal_before_the_server_stop_leaves_it_running(tmp_path, sig, at):
     assert docker.server_state["Running"]
     run = results["run"]
     assert (run["status"], run["error_code"], run["server_restored"]) == ("partial", runner.STOPPED, None)
-    assert results["rounds"] == [] and run["server_found_down"] is None
+    assert results["launches"] == [] and run["server_found_down"] is None
     assert run["errors"] == ["stopped by SIGTERM"]  # the runner's words for any stop; no cleanup error
     assert signal.getsignal(sig) != the_runner._on_term  # the earlier handler is back
 
@@ -936,6 +1003,36 @@ def test_a_server_that_stopped_by_itself_is_recorded_also_in_a_run_stopped_durin
     assert "**The live server had stopped by itself**" in (the_runner.dir / "results.md").read_text()
 
 
+class FailingReread(HookDocker):
+    """The second read of the server's state (after the pulls) fails, as a Docker API error would."""
+
+    def inspect(self, cid):
+        if self.inspects == 1:
+            self.inspects += 1
+            raise runner.RoundError("docker could not inspect a container: HTTP 500")
+        return super().inspect(cid)
+
+
+def test_a_state_read_that_fails_during_a_stop_leaves_the_run_partial(tmp_path):
+    """A stop lands during the pulls, and the state read after them fails: the server is left as it is either way,
+    so the run is stopped (partial, exit 1) with a note, not failed (exit 3). Without a stop the same error fails
+    the run before it has changed anything."""
+    held = {}
+    docker = FailingReread(lambda: os.kill(os.getpid(), signal.SIGTERM), at="pull",
+                           server_state={"Running": True, "Status": "running"})
+    backend = _docker_backend(docker, results_root=tmp_path, RHVP_COMPARE_SERVER_CONTAINER="live")
+    the_runner = held["runner"] = runner.Runner(_plan(), backend, tmp_path, sleep=lambda s: None)
+    results = the_runner.run()
+    run = results["run"]
+    assert (run["status"], run["error_code"], run["server_found_down"]) == ("partial", runner.STOPPED, None)
+    assert runner.exit_code(results) == runner.EXIT_PARTIAL and _stops(docker) == []
+    assert "the live server's state was not read again after the stop: RoundError" in run["notes"]
+    quiet = FailingReread(None, server_state={"Running": True, "Status": "running"})
+    with pytest.raises(runner.RoundError, match="inspect"):
+        _docker_backend(quiet, results_root=tmp_path, RHVP_COMPARE_SERVER_CONTAINER="live").prepare(_plan())
+    assert _stops(quiet) == []
+
+
 def test_the_local_gpu_check_sees_the_hosts_gpu_programs(monkeypatch):
     monkeypatch.setattr(dockerapi.time, "sleep", lambda s: None)
     docker = FakeDocker()
@@ -957,7 +1054,7 @@ SLO_REPORT = json.loads((FIXTURES / "guidellm-report-v0.8.1-slo.json").read_text
 
 
 def _scale_plan(**scale) -> dict:
-    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"count": 7, "warmup": True},
               "scaleOut": {"requestRate": 2.5, "surgeSeconds": 60, "stepAfterSeconds": 10, "ttftMs": 300,
                            "tpotMs": 25, **scale}}
     return plans.build(config, "docker")
@@ -985,7 +1082,7 @@ def test_the_surge_command_runs_a_constant_rate_with_the_latency_goals():
     one_goal = guidellm.command(_scale_plan(tpotMs=None), "t", "o")
     assert json.loads(one_goal[one_goal.index("--metrics") + 1])["slo"] == {"ttft_ms": 300}
     assert guidellm.command(_plan(), "t", "o")[guidellm.command(_plan(), "t", "o").index("--metrics") + 1] == (
-        "kind=generative,sample_size=0")  # mode pairs: unchanged
+        "kind=generative,sample_size=0")  # mode levels: unchanged
 
 
 def test_the_surge_level_from_a_report_with_latency_goals():
@@ -994,10 +1091,10 @@ def test_the_surge_level_from_a_report_with_latency_goals():
     assert level["slo_attainment"] == pytest.approx(0.9574468085106383)
     assert level["slo_determined_requests"] == 47 and level["goodput_rps"] == pytest.approx(11.0)
     assert level["requests"] == {"successful": 47, "errored": 0, "incomplete": 1}
-    flat = guidellm.surge_metrics(level)
-    assert set(flat) == {"surge.slo_attainment", "surge.goodput_rps", "surge.ttft_ms_median", "surge.itl_ms_median",
-                         "surge.output_tokens_per_s"}
-    assert flat["surge.ttft_ms_median"] == level["ttft_ms"]["median"]
+    flat = guidellm.surge_values(level)
+    assert set(flat) == {"surge/slo_attainment", "surge/goodput_rps", "surge/ttft_ms_median", "surge/itl_ms_median",
+                         "surge/output_tokens_per_s"}
+    assert flat["surge/ttft_ms_median"] == level["ttft_ms"]["median"]
 
 
 def test_a_surge_with_failed_requests_keeps_its_attainment_only():
@@ -1007,12 +1104,12 @@ def test_a_surge_with_failed_requests_keeps_its_attainment_only():
     metrics["slo_attainment"] = 0.5
     level = guidellm.surge_level(report)
     assert not level["usable"] and "count as requests that missed the latency goals" in level["note"]
-    assert set(guidellm.surge_metrics(level)) == {"surge.slo_attainment", "surge.goodput_rps"}
+    assert set(guidellm.surge_values(level)) == {"surge/slo_attainment", "surge/goodput_rps"}
 
 
 @pytest.mark.parametrize("successful, errored, attainment, goodput, expected", [
-    (0, 0, None, None, {"surge.slo_attainment": 0.0, "surge.goodput_rps": 0.0}),  # nothing finished: a 0
-    (0, 6, 0.0, None, {"surge.slo_attainment": 0.0, "surge.goodput_rps": 0.0}),   # all failed: GuideLLM's 0
+    (0, 0, None, None, {"surge/slo_attainment": 0.0, "surge/goodput_rps": 0.0}),  # nothing finished: a 0
+    (0, 6, 0.0, None, {"surge/slo_attainment": 0.0, "surge/goodput_rps": 0.0}),   # all failed: GuideLLM's 0
     (10, 0, None, None, {}),  # judged none (a goal it cannot measure): missing, not 0
 ])
 def test_a_surge_that_gives_no_attainment(successful, errored, attainment, goodput, expected):
@@ -1023,8 +1120,8 @@ def test_a_surge_that_gives_no_attainment(successful, errored, attainment, goodp
     if goodput is None:
         del metrics["request_goodput"]
     level = guidellm.surge_level(report)
-    got = {k: v for k, v in guidellm.surge_metrics(level).items() if k in ("surge.slo_attainment",
-                                                                        "surge.goodput_rps")}
+    got = {k: v for k, v in guidellm.surge_values(level).items() if k in ("surge/slo_attainment",
+                                                                       "surge/goodput_rps")}
     assert got == expected
     if successful and attainment is None:
         assert "judged no request" in level["note"]
@@ -1055,7 +1152,7 @@ def test_the_first_scale_up_the_server_logged():
 
 
 class ReplicaDocker(FakeDocker):
-    """FakeDocker with the calls a side's start, its launch facts and the cache volumes make."""
+    """FakeDocker with the calls a side's start, its server facts and the cache volumes make."""
 
     def __init__(self, exec_result=(0, "VLLM_X=1\0HF_TOKEN=hf_s\0PATH=/bin\0")):
         super().__init__()
@@ -1085,17 +1182,23 @@ class ReplicaDocker(FakeDocker):
 
 
 class ProbedDocker(ReplicaDocker):
-    """nvidia-smi's answer per GPU probe: `answers` maps the probe's replica (1 or 2) to its index, UUID line."""
+    """nvidia-smi's answer per GPU probe: `answers` maps the probe's replica (1 or 2) to its index, UUID line; `mig`
+    maps it to the MIG device UUID `nvidia-smi -L` lists under the parent GPU (none listed when left out)."""
 
-    def __init__(self, answers: dict):
+    def __init__(self, answers: dict, mig: dict | None = None):
         super().__init__()
-        self.answers = answers
+        self.answers, self.mig = answers, mig or {}
 
     def run(self, name, body, timeout_s=300.0, log_to=None):
         self.calls.append(("run", name, body))
         for replica, answer in self.answers.items():
             if f"gpu-probe-{replica}" in name:
                 return 0, f"2026-01-01T00:00:00Z {answer}\n"
+            if f"gpu-mig-{replica}" in name:
+                listed = "2026-01-01T00:00:00Z GPU 0: Test GPU (UUID: GPU-0000)\n"
+                if replica in self.mig:
+                    listed += f"2026-01-01T00:00:00Z   MIG 1g.10gb Device  0: (UUID: {self.mig[replica]})\n"
+                return 0, listed
         return 0, ""
 
 
@@ -1103,7 +1206,7 @@ def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
     docker = ProbedDocker({1: "0, GPU-0000", 2: "1, GPU-1111"})  # what nvidia-smi lists for each replica's GPU
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_CPUSET="0-3",
                               RHVP_COMPARE_CACHE_VOLUME="cc")
-    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"count": 7, "warmup": True},
               "scaleOut": {"sharedGpu": False},
               "sides": [{"name": "a", "image": "x/a:1", "compileCache": "warm"}, {"name": "b", "image": "x/b:1"}]}
     plan = plans.build(config, "docker")
@@ -1113,24 +1216,24 @@ def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
     chmod = [body for kind, name, body in [c for c in docker.calls if c[0] == "run"] if "cache" in name]
     assert chmod[0]["Cmd"] == ["chmod 1777 /cache"] and chmod[0]["HostConfig"]["CpusetCpus"] == "0-3"
     side_a, side_b = plan["sides"]
-    round_ = plan["rounds"][2]
-    first = backend.start(plan, round_, side_a, plans.side_spec(plan, side_a))
-    second = backend.start(plan, round_, side_a, plans.side_spec(plan, side_a), replica=2)
+    launch = plan["launches"][2]  # launch 3, side A
+    first = backend.start(plan, launch, side_a, plans.side_spec(plan, side_a))
+    second = backend.start(plan, launch, side_a, plans.side_spec(plan, side_a), replica=2)
     assert second["name"] == first["name"] + "-2" and second["replica"] == 2
     host1, host2 = docker.created[first["name"]]["HostConfig"], docker.created[second["name"]]["HostConfig"]
     assert host1["DeviceRequests"][0]["DeviceIDs"] == ["0"] and host2["DeviceRequests"][0]["DeviceIDs"] == ["1"]
     assert f"{volume}:/cache" in host2["Binds"] and "/cache" not in host2["Tmpfs"] and host2["CpusetCpus"] == "0-3"
-    cold = backend.start(plan, plan["rounds"][3], side_b, plans.side_spec(plan, side_b))
+    cold = backend.start(plan, plan["launches"][4], side_b, plans.side_spec(plan, side_b))  # launch 5, side B
     cold_host = docker.created[cold["name"]]["HostConfig"]
     assert "/cache" in cold_host["Tmpfs"] and not any(b.endswith(":/cache") for b in cold_host["Binds"])
     with pytest.raises(runner.RoundError, match="replica 3 needs one more"):
-        backend.start(plan, round_, side_a, plans.side_spec(plan, side_a), replica=3)
+        backend.start(plan, launch, side_a, plans.side_spec(plan, side_a), replica=3)
     backend.cleanup()
     assert docker.volumes_removed == [volume, volume]
 
 
 def _scale_plan_for(shared: bool) -> dict:
-    config = {**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True},
+    config = {**_plan_config(), "mode": "scaleout", "rounds": {"count": 7, "warmup": True},
               "scaleOut": {"sharedGpu": shared}}
     return plans.build(config, "docker")
 
@@ -1164,7 +1267,7 @@ def test_docker_refuses_a_shared_gpu_setting_that_does_not_match_where_the_repli
 
 def test_a_mismatched_shared_gpu_setting_ends_the_run_plan_invalid_before_anything_changes(tmp_path):
     config_path = tmp_path / "compare.json"
-    config_path.write_text(json.dumps({**_plan_config(), "mode": "scaleout", "rounds": {"pairs": 7, "warmup": True}}))
+    config_path.write_text(json.dumps({**_plan_config(), "mode": "scaleout", "rounds": {"count": 7, "warmup": True}}))
     docker = FakeDocker()
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1")
     termination = tmp_path / "termination"
@@ -1175,7 +1278,7 @@ def test_a_mismatched_shared_gpu_setting_ends_the_run_plan_invalid_before_anythi
     assert not (tmp_path / "results").exists()
 
 
-def test_docker_reads_each_replicas_gpus_before_the_first_round_and_records_them():
+def test_docker_reads_each_replicas_gpus_before_the_first_launch_and_records_them():
     docker = ProbedDocker({1: "0, GPU-0000", 2: "1, GPU-1111"})
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1")
     plan = _scale_plan_for(False)
@@ -1184,11 +1287,11 @@ def test_docker_reads_each_replicas_gpus_before_the_first_round_and_records_them
     assert [b["HostConfig"]["DeviceRequests"][0]["DeviceIDs"] for b in probes] == [["0"], ["1"]]
     assert probes[0]["Cmd"] == ["--query-gpu=index,uuid", "--format=csv,noheader"]
     side_a = plan["sides"][0]
-    second = backend.start(plan, plan["rounds"][2], side_a, plans.side_spec(plan, side_a), replica=2)
-    facts = backend.launch_facts(second)
+    second = backend.start(plan, plan["launches"][2], side_a, plans.side_spec(plan, side_a), replica=2)
+    facts = backend.server_facts(second)
     assert facts["gpus"] == "1" and facts["gpu_uuids"] == ["GPU-1111"]
-    record = launch.record(2, None, [], facts["env"], facts["env_source"], gpus=facts["gpus"],
-                           gpu_uuids=facts["gpu_uuids"])
+    record = servers.record(2, None, [], facts["env"], facts["env_source"], gpus=facts["gpus"],
+                            gpu_uuids=facts["gpu_uuids"])
     assert (record["gpus"], record["gpu_uuids"]) == ("1", ["GPU-1111"])
     shared = _docker_backend(ReplicaDocker())  # sharedGpu true, no REPLICA_GPUS: one request, read once
     shared.docker.run_log = "2026-01-01T00:00:00Z 0, GPU-0000\n"
@@ -1205,7 +1308,7 @@ def test_two_requests_that_reach_one_gpu_fail_in_prepare_when_each_replica_needs
     backend.check_plan(plan)
     with pytest.raises(runner.RoundError, match="REPLICA_GPUS 0 and GPU-0000 both reach GPU GPU-0000"):
         backend.prepare(plan)
-    assert ("stop", "live") not in docker.calls
+    assert _stops(docker) == []  # the server was never stopped
     shared = _docker_backend(ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"}),
                              RHVP_COMPARE_REPLICA_GPUS="0,GPU-0000")
     with pytest.raises(plans.PlanError, match="gives replica 1 GPU 0 and replica 2 GPU GPU-0000"):
@@ -1224,17 +1327,42 @@ def test_mig_requests_are_told_from_whole_gpus(request_, mig):
 
 @pytest.mark.parametrize("replica_gpus", ["0:0,0:1", "MIG-aaaa,MIG-bbbb"])
 def test_two_mig_devices_of_one_gpu_run_when_each_replica_needs_its_own(replica_gpus):
-    # nvidia-smi in a container given a MIG device lists the parent GPU's UUID, so both probes show GPU-0000: two MIG
-    # requests are not compared, and the run goes on. Their launch records name the parent GPU.
-    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"})
+    # nvidia-smi's GPU query in a container given a MIG device lists the parent GPU's UUID, so both probes show
+    # GPU-0000; nvidia-smi -L lists each request's own MIG device, and two different devices run. Their server
+    # records name the parent GPU.
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"}, mig={1: "MIG-aaaa", 2: "MIG-bbbb"})
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS=replica_gpus)
     plan = _scale_plan_for(False)
     backend.check_plan(plan)
     backend.prepare(plan)
+    assert backend.notes == []
+    listed = [body for kind, name, body in [c for c in docker.calls if c[0] == "run"] if "gpu-mig" in name]
+    assert [b["Cmd"] for b in listed] == [["-L"], ["-L"]]
+    assert [b["HostConfig"]["DeviceRequests"][0]["DeviceIDs"] for b in listed] == [[r] for r in replica_gpus.split(",")]
     side_a = plan["sides"][0]
-    second = backend.start(plan, plan["rounds"][2], side_a, plans.side_spec(plan, side_a), replica=2)
-    facts = backend.launch_facts(second)
+    second = backend.start(plan, plan["launches"][2], side_a, plans.side_spec(plan, side_a), replica=2)
+    facts = backend.server_facts(second)
     assert facts["gpus"] == replica_gpus.split(",")[1] and facts["gpu_uuids"] == ["GPU-0000"]
+
+
+def test_one_mig_device_named_two_ways_fails_in_prepare_when_each_replica_needs_its_own():
+    # 0:0 and MIG-aaaa are two strings for one MIG device: check_plan lets them through, nvidia-smi -L does not.
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"}, mig={1: "MIG-aaaa", 2: "MIG-aaaa"})
+    docker.server_state = {"Running": True}
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0:0,MIG-aaaa", RHVP_COMPARE_SERVER_CONTAINER="live")
+    plan = _scale_plan_for(False)
+    backend.check_plan(plan)
+    with pytest.raises(runner.RoundError, match="REPLICA_GPUS 0:0 and MIG-aaaa both reach MIG device MIG-aaaa"):
+        backend.prepare(plan)
+    assert _stops(docker) == []  # the server was never stopped
+
+
+def test_mig_devices_whose_own_uuids_are_not_listed_run_with_a_note():
+    docker = ProbedDocker({1: "0, GPU-0000", 2: "0, GPU-0000"})  # nvidia-smi -L lists the parent GPU only
+    backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0:0,0:1")
+    backend.prepare(_scale_plan_for(False))
+    [note] = backend.notes
+    assert "REPLICA_GPUS 0:0 and 0:1 are MIG devices whose own UUIDs nvidia-smi -L did not list" in note
 
 
 def test_a_mig_device_and_its_whole_gpu_fail_in_prepare_when_each_replica_needs_its_own():
@@ -1245,7 +1373,7 @@ def test_a_mig_device_and_its_whole_gpu_fail_in_prepare_when_each_replica_needs_
     backend.check_plan(plan)
     with pytest.raises(runner.RoundError, match="REPLICA_GPUS 0 and 0:1 both reach GPU GPU-0000"):
         backend.prepare(plan)
-    assert ("stop", "live") not in docker.calls
+    assert _stops(docker) == []  # the server was never stopped
 
 
 def test_a_replica_gpu_this_machine_lacks_fails_in_prepare_before_the_server_stops():
@@ -1261,18 +1389,18 @@ def test_a_replica_gpu_this_machine_lacks_fails_in_prepare_before_the_server_sto
     backend = _docker_backend(docker, RHVP_COMPARE_REPLICA_GPUS="0,1", RHVP_COMPARE_SERVER_CONTAINER="live")
     with pytest.raises(runner.RoundError, match="the GPUs of replica 2 .REPLICA_GPUS 1. could not be reached"):
         backend.prepare(_scale_plan_for(False))
-    assert ("stop", "live") not in docker.calls
+    assert _stops(docker) == []  # the server was never stopped
 
 
-def test_docker_launch_facts_read_the_server_process_then_the_container():
+def test_docker_server_facts_read_the_server_process_then_the_container():
     docker = ReplicaDocker()
     backend = _docker_backend(docker)
-    facts = backend.launch_facts({"id": "c1", "image": "x/a:1"})
+    facts = backend.server_facts({"id": "c1", "image": "x/a:1"})
     assert facts == {"image_entrypoint": ["/usr/bin/tini", "--"], "image_cmd": ["serve"], "env_source": "process",
                      "env": {"VLLM_X": "1", "HF_TOKEN": "hf_s", "PATH": "/bin"}}
     assert docker.calls[-1] == ("exec", "c1", ["sh", "-c", dockerapi.SERVER_ENVIRON])
     no_shell = _docker_backend(ReplicaDocker(exec_result=runner.RoundError("docker could not start an exec")))
-    facts = no_shell.launch_facts({"id": "c1", "image": "x/a:1"})
+    facts = no_shell.server_facts({"id": "c1", "image": "x/a:1"})
     assert facts["env_source"] == "container" and facts["env"] == {"VLLM_Y": "2", "PATH": "/usr/bin"}
     assert dockerapi.environ("A=1\0B=x=y\0\0junk\0") == {"A": "1", "B": "x=y"}
 

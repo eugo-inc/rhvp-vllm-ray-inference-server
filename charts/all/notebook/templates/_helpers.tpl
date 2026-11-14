@@ -24,15 +24,15 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- end }}
 
 {{/* The comparison's config file: global.compare without "enabled", plus global.model.
-     "mode" is left out when it is pairs, the default, so a pairs run keeps the config,
+     "mode" is left out when it is levels, the default, so a levels run keeps the config,
      and so the run id, it had before the setting existed. */}}
 {{- define "notebook.compareConfig" -}}
 {{- $cfg := omit (.Values.global.compare | default dict) "enabled" -}}
 {{- if hasKey $cfg "mode" -}}
-{{- if not (and (kindIs "string" $cfg.mode) (has $cfg.mode (list "pairs" "scaleout"))) -}}
-{{- fail (printf "global.compare.mode must be pairs or scaleout; got %v" $cfg.mode) -}}
+{{- if not (and (kindIs "string" $cfg.mode) (has $cfg.mode (list "levels" "scaleout"))) -}}
+{{- fail (printf "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got %v" $cfg.mode) -}}
 {{- end -}}
-{{- if eq $cfg.mode "pairs" }}{{ $cfg = omit $cfg "mode" }}{{ end -}}
+{{- if eq $cfg.mode "levels" }}{{ $cfg = omit $cfg "mode" }}{{ end -}}
 {{- end -}}
 {{- $_ := set $cfg "model" (pick .Values.global.model "id" "source" "revision") -}}
 {{- toPrettyJson $cfg -}}

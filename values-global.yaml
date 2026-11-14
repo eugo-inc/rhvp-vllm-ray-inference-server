@@ -44,16 +44,19 @@ global:
   #
   # A run takes the pattern's own server down for its whole length: plan it as
   # a maintenance window. The runner scales the server to 0 before the first
-  # round (the comparison needs its GPU and its model volume) and back to 1
+  # launch (the comparison needs its GPU and its model volume) and back to 1
   # when the run ends, whether it finished, failed or was stopped. With the
-  # defaults below a run is 22 rounds; we estimate 2 to 3 hours on one GPU, but
-  # have not timed it on a cluster.
+  # defaults below a run is 8 rounds of 4 server starts plus 2 warm-up starts:
+  # 34 server starts. We estimate about 4 to 6 hours on one GPU, but have not
+  # timed it on a cluster.
   #
   # When on:
-  #   - a Job in vllm-notebook runs the rounds one at a time (A B, B A, ...),
-  #     each side as a pod in vllm-inference, writes results.json and
-  #     results.md to the PVC image-compare-results, and keeps a short status
-  #     in ConfigMap compare-<run id>;
+  #   - a Job in vllm-notebook starts the servers one at a time, each as a pod
+  #     in vllm-inference: in every round side A, an identical copy of A (its
+  #     twin, A~same), side B and B~same, in an order that rotates from round
+  #     to round. It writes results.json and results.md to the PVC
+  #     image-compare-results, and keeps a short status in ConfigMap
+  #     compare-<run id>;
   #   - the notebook compare_images.ipynb shows the results.
   # Any change below starts a new run (a new Job); a finished run is not run
   # again. One run at a time: a runner that finds another one still going
@@ -64,12 +67,13 @@ global:
   # the run repeats. Setting enabled back to false deletes nothing.
   compare:
     enabled: false
-    # pairs    - paired rounds of the two sides (described above).
+    # levels   - rounds of the two sides, each launch loaded at
+    #            load.concurrencies (described above). The default.
     # scaleout - the scale-out benchmark (the commented example at the end of
     #            this block). It runs with scripts/compare-local.sh (docker)
     #            for now: the OpenShift Job refuses it (PLAN_INVALID) until
     #            its scale round is built.
-    mode: pairs
+    mode: levels
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
     runName: vllm-two-releases
     # Exactly two sides: A, the baseline, first; then B, the candidate. Every
@@ -92,52 +96,64 @@ global:
         image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
         preset: vllm-openai
     rounds:
-      # Scored pairs. With the 4 default primary metrics and Holm's correction,
-      # fewer than 8 pairs can never give FASTER or SLOWER (the plan warns).
-      pairs: 10
-      # One unscored round per side first: pulls the image, fills the model
+      # Rounds of A, A~same, B, B~same. A verdict on a primary case needs every
+      # one of 8 rounds to lean the same way with the 4 default primary cases
+      # (fewer than 8 rounds give them NO VERDICT; the plan warns). 8, 16 and 24
+      # rounds put every entry in every position equally often.
+      # 8 rounds: 34 server starts with the warm-up, about 4 to 6 hours.
+      # 16 rounds: 66 server starts, about 8 to 12 hours.
+      count: 8
+      # One unmeasured launch per side first: pulls the image, fills the model
       # cache.
       warmup: true
-      # Extra pairs of side A against itself, to show the noise floor.
-      aaPairs: 0
+      # Which sides get a twin, the copy that measures how far two launches of
+      # one image land apart: both, A, B or none. Without both, every case gets
+      # NO VERDICT: A, B and none shorten a run that only checks the setup.
+      twins: both
     server:
       gpuMemoryUtilization: 0.85
       maxModelLen: 8192
     load:
-      # GuideLLM, one level after another in each round.
+      # GuideLLM, one level after another in each launch.
       concurrencies: [1, 8, 32]
       promptTokens: 256
       outputTokens: 128
       secondsPerLevel: 60
     analysis:
-      # Declared before the run. TIE needs the median ratio and its whole
-      # confidence interval within 1/(1+tieBand) and 1+tieBand; the interval
-      # needs at least 6 usable pairs at ciLevel 0.95.
-      tieBand: 0.05
+      # Declared before the run. Each side's noise floor is how far its median
+      # of side / twin lies from 1; the bar is B's floor plus A's. Outside the
+      # bar and significant (exact sign test, Holm over the primary cases,
+      # below alpha): FASTER or SLOWER, BETTER or WORSE. Inside the bar and not
+      # significant: TIE. Anything else: UNRESOLVED or NO VERDICT, with a
+      # reason.
       alpha: 0.05
-      ciLevel: 0.95
-      # Fewer usable pairs than this make a metric INCONCLUSIVE outright.
-      minPairs: 3
-      test: sign             # sign or wilcoxon
-      correction: holm       # holm, bonferroni, bh or none
-      # The primary metrics: only they share the correction, so only their
-      # verdicts are findings; every other metric is reported with an
+      # The primary cases: only they share the correction, so only their
+      # verdicts are findings; every other case is reported with an
       # uncorrected p-value, as a description. null means the default: time to
-      # first answer (startup.first_answer_s) and, at the highest concurrency,
-      # c<N>.ttft_ms_median, c<N>.output_tokens_per_s and c<N>.tokens_per_joule.
+      # first answer (startup/first_answer_s) and, at the highest concurrency,
+      # c<N>/ttft_ms_median, c<N>/output_tokens_per_s and
+      # c<N>/tokens_per_joule[gpu].
       primary: null
     energy:
-      # auto: DCGM (NVIDIA GPU Operator) through the cluster's monitoring;
-      # none: no tokens per joule.
+      # Tokens per joule from GPU-only power. auto: DCGM (NVIDIA GPU
+      # Operator) through the cluster's monitoring, read every 2 s while the
+      # comparison is on; none: no tokens per joule. A level with fewer power
+      # samples than energy.minSamples (10) gets no figure, and at 8 rounds one
+      # missing figure of side A or B costs a primary case its verdict.
       source: auto
     # Mode scaleout, for scripts/compare-local.sh (its config file is JSON
-    # with these keys, plus model). Each round starts one replica of the side,
-    # then sends requests at a fixed rate (the surge) through a router that
-    # picks the replica with the fewest requests in flight, and starts a
-    # second replica of the same image stepAfterSeconds after the surge's
-    # first request. The primary metrics are the new replica's time to first
-    # answer and the share of the surge's requests within the latency goals;
-    # with two primaries, 7 or more pairs are needed for FASTER or SLOWER.
+    # with these keys, plus model). Its rounds are the same A, A~same, B,
+    # B~same. Each scored launch starts one replica of its side, then sends
+    # requests at a fixed rate (the surge) through a router that picks the
+    # replica with the fewest requests in flight, and starts a second replica
+    # of the same image stepAfterSeconds after the surge's first request. The
+    # primary cases are the new replica's time to first answer and the share
+    # of the surge's requests within the latency goals. With two primaries, 7
+    # rounds are the fewest that can give a verdict, and at 8 rounds all 8
+    # must lean the same way. A figure of 0 (say, a surge with no request
+    # within the goals) is not a ratio: that case gets NO VERDICT. 8 rounds
+    # with the warm-up start 66 servers (two in each scored launch, twins
+    # included); about 5 to 7 hours is an estimate, never timed on a GPU.
     # Energy is not measured in this mode. compileCache: warm (docker only)
     # keeps a side's compile caches from its warm-up round for its scored
     # rounds; cold, the default, starts every replica with empty caches.
@@ -151,7 +167,7 @@ global:
     #       image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
     #       preset: vllm-openai
     #       compileCache: cold
-    #   rounds: {pairs: 8, warmup: true, aaPairs: 0}
+    #   rounds: {count: 8, warmup: true, twins: both}
     #   server:
     #     # Each replica's share of the GPU: with sharedGpu, two replicas
     #     # need it at most 0.475, so 0.85 above is refused in this mode.

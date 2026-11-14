@@ -5,7 +5,7 @@ The log comes with one timestamp per line (Kubernetes `pods/log?timestamps=true`
 put an RFC 3339 time first). Two kinds of entry come out:
 
 - phases the server times itself ("Loading weights took 1.23 seconds"): `seconds` is the server's own figure;
-- moments ("Application startup complete."): `at_s` is the line's time since the round asked for the server, by the
+- moments ("Application startup complete."): `at_s` is the line's time since the launch asked for the server, by the
   node's clock.
 
 The patterns follow vLLM's log lines and change between vLLM versions, so a breakdown lists only what it found; a
@@ -105,7 +105,7 @@ def memory_profiling_failed(log: str) -> bool:
 
 
 def breakdown(log: str, started_epoch: float) -> list[dict]:
-    """The start-up phases found in `log`, in log order. `started_epoch` is when the round asked for the server."""
+    """The start-up phases found in `log`, in log order. `started_epoch` is when the launch asked for the server."""
     out: list[dict] = []
     seen: set[str] = set()
     timed: dict[str, dict] = {}

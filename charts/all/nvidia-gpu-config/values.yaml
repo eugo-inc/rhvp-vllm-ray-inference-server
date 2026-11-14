@@ -1,3 +1,10 @@
+# global.compare comes from values-global.yaml; this stub keeps it off. While it is
+# on (and its energy source is not none), the ClusterPolicy reads GPU power every
+# 2 s for the comparison's tokens per joule.
+global:
+  compare:
+    enabled: false
+
 # GPU time-slicing (NVIDIA GPU Operator): the device plugin offers each GPU on
 # every GPU node as `replicas` GPUs, and the pods that get them take turns on it.
 # Off by default: every pod that asks for a GPU gets a whole one.

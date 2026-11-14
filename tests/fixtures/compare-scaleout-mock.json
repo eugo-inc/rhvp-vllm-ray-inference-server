@@ -10,8 +10,7 @@
      "preset": "guidellm-mock", "command": ["sh", "-c", "sleep 8 && exec guidellm mock-server \"$@\"", "mock-server"],
      "args": ["--ttft-ms", "40", "--itl-ms", "8", "--max-concurrent-requests", "2"]}
   ],
-  "rounds": {"pairs": 7, "warmup": false, "aaPairs": 0},
+  "rounds": {"count": 7, "warmup": false, "twins": "both"},
   "load": {"promptTokens": 64, "outputTokens": 32},
-  "scaleOut": {"requestRate": 10, "surgeSeconds": 40, "stepAfterSeconds": 5, "ttftMs": 500, "tpotMs": 50},
-  "analysis": {"correction": "holm"}
+  "scaleOut": {"requestRate": 10, "surgeSeconds": 40, "stepAfterSeconds": 5, "ttftMs": 500, "tpotMs": 50}
 }

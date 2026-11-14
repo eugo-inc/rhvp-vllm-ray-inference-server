@@ -16,6 +16,8 @@
 #                                (also with energy.source=none and image.override, with
 #                                bigger side pods: a new Job with the same config, and with
 #                                mode scaleout and a nested block, passed through as given)
+#   charts/nvidia-gpu-config-compare*.yaml the ClusterPolicy with global.compare.enabled=true
+#                                (a 2 s DCGM interval), and with energy.source=none (none)
 #   charts/nvidia-gpu-config-timeslicing.yaml  with the opt-in GPU time-slicing on
 #   charts/ray-serve-llm-scaling.yaml  in-pod autoscaling from 1 to 2 replicas sharing the GPU
 #   charts/ray-serve-llm-cache-<mode>.yaml  compileCache.mode node and shared
@@ -190,7 +192,13 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
   > "${RENDER_DIR}/charts/notebook-compare-scaleout.yaml"
 helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" "${SETS[@]}" \
   --set timeSlicing.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-timeslicing.yaml"
-echo "rendered charts/*-variant.yaml, charts/notebook-compare*.yaml and charts/nvidia-gpu-config-timeslicing.yaml"
+helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
+  "${SETS[@]}" --set global.compare.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-compare.yaml"
+helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
+  "${SETS[@]}" --set global.compare.enabled=true --set global.compare.energy.source=none \
+  > "${RENDER_DIR}/charts/nvidia-gpu-config-compare-noenergy.yaml"
+echo "rendered charts/*-variant.yaml, charts/notebook-compare*.yaml, charts/nvidia-gpu-config-compare*.yaml and"
+echo "  charts/nvidia-gpu-config-timeslicing.yaml"
 
 # Scale-out settings (charts/all/ray-serve-llm/templates/_settings.tpl). --set reads 0.5 as a
 # string, so the GPU share goes in as JSON. Two replicas on half a GPU each must each claim at
@@ -244,7 +252,7 @@ refuse gpu-per-replica-workers ray-serve-llm vllm-inference \
   "server.gpuPerReplica (0.5) must be 1 or equal engineKwargs.tensor_parallel_size times pipeline_parallel_size (2)" \
   --set-json server.gpuPerReplica=0.5 --set server.engineKwargs.tensor_parallel_size=2 --set server.gpuCount=2
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
-refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be pairs or scaleout" \
+refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be levels or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge
 refuse keda-threshold ray-serve-llm vllm-inference "scaleOut.waitingRequestsPerPod must be a number above 0" \
   --set global.scaleOut.mode=keda --set scaleOut.waitingRequestsPerPod=0
