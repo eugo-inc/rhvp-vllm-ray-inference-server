@@ -4,8 +4,9 @@
 A comparison is a list of launches. Each launch brings one side up, times its start, loads it with GuideLLM at a
 few concurrency levels, reads its GPU power, and takes it down. A round launches every side and its twin (an
 identical copy of the side) once, A, A~same, B, B~same, in an order that rotates from round to round. Every case
-gets a paired verdict from the per-round ratios B/A and an exact sign test corrected for the number of primary
-cases, against a bar the twins measured: FASTER, SLOWER, BETTER, WORSE, TIE, UNRESOLVED or NO VERDICT.
+gets a paired verdict from the per-round ratios B/A and an exact sign test (corrected with Holm's method over the
+primary cases that have a p-value), against a bar the twins measured: FASTER, SLOWER, BETTER, WORSE, TIE, UNRESOLVED or
+NO VERDICT.
 
 Modules:
 

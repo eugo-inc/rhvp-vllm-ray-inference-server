@@ -519,22 +519,26 @@ The rule is fixed before the first launch and written into the results (`plan.an
   (`more_than_one_node`); a launch of side A or B that failed on its own account, in a round where the other side
   did not (`side_failed`: its launch failed with `SIDE_FAILED`, `SIDE_NEVER_READY` or `LOAD_FAILED`, or requests
   failed at that load level; the rounds that are left would flatter the side that failed, and `lost` counts them);
-  a figure of 0, such as no output tokens, on side A or B or on a twin (`nonpositive_value`: a 0 gives no ratio; in
-  a side's comparison with its twin it leaves the side with no noise floor, so every case of that floor group gets
-  no verdict; the results name the side and the round, and the notebook does for a 0 beside a twin); one paired
-  round (`single_measurement`); fewer rounds than any verdict needs (`too_few_rounds`); no twin, a twin on one side
-  only, or a floor of exactly 0 (`no_floor`, `one_sided_floor`, `zero_floor`).
+  a figure of 0, such as no output tokens, on side A or B in any round, or on a twin in a round where its side also has
+  a figure (`nonpositive_value`: a 0 gives no ratio; in a side's comparison with its twin it leaves the side with no
+  noise floor, so every case of that floor group gets no verdict; the results name the side and the round, and the
+  notebook does for a 0 beside a twin; a twin's 0 in a round where its side has no figure is neither graded nor named);
+  one paired round (`single_measurement`); fewer rounds than any verdict needs (`too_few_rounds`); no twin, a twin on
+  one side only, or a floor of exactly 0 (`no_floor`, `one_sided_floor`, `zero_floor`).
 
 Every outcome is in `analysis.comparisons[].outcome` (`better`, `worse`, `tie`, `unresolved`, `no_verdict`), with
 `reason` and the display word in `verdict`.
 
 With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
-cases. With the 4 default primary cases, fewer than 8 rounds give every primary case NO VERDICT
-(`too_few_rounds`); at 8 rounds a FASTER, SLOWER, BETTER or WORSE needs all 8 rounds to lean the same way, and at 16
-rounds 14 of the 16. A secondary case needs at least 6 rounds. A failed launch takes its round out of that case's
-count, so at 8 rounds one failed or unmeasured launch of A or B leaves the primary cases it touches without a
-verdict. `python -m rhvp_compare validate` prints what a plan allows, and the runner prints it before the first
-launch.
+cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
+p-value (and NO VERDICT) and leaves that count, so the other primary cases are corrected for fewer cases; the report and
+the notebook print how many cases were tested and how many were declared. With the 4 default primary cases, fewer than 8
+rounds give every primary case NO VERDICT (`too_few_rounds`; this minimum counts every declared primary case); at 8
+rounds a FASTER, SLOWER, BETTER or WORSE needs all 8 rounds to lean the same way, and at 16 rounds 14 of the 16 (13 when
+only 1 or 2 primary cases got a p-value). A secondary case needs at least 6 rounds. A failed launch takes its round out
+of that case's count, so at 8 rounds one failed or unmeasured launch of A or B leaves the primary cases it touches
+without a verdict. `python -m rhvp_compare validate` prints what a plan allows, and the runner prints it before the
+first launch.
 
 ### Where the results are
 
