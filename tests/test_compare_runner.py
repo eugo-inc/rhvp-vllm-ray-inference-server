@@ -367,7 +367,8 @@ def test_plan_scale_out_mode():
     assert (scale["request_rate"], scale["surge_s"], scale["step_after_s"], scale["slo"], scale["router"]) == (
         10, 40, 5, {"ttft_ms": 200, "tpot_ms": 20}, "least-busy")
     assert (scale["replicas_start"], scale["replicas_end"], scale["shared_gpu"]) == (1, 2, True)
-    assert "NO VERDICT (nonpositive_value)" in scale["surge_rule"]
+    # Written before the run, so it names no reason: more than one node or a side that failed can come first.
+    assert scale["surge_rule"].endswith("the case gets NO VERDICT") and "nonpositive_value" not in scale["surge_rule"]
     assert all(c["concurrency"] is None for c in plan["cases"])
     # Two servers in each scored launch, twins included; one in each warm-up launch.
     assert len(plan["launches"]) == 34 and plans.server_starts(plan) == 66

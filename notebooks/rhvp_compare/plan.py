@@ -407,7 +407,7 @@ def _scale_out(raw, sides: list[dict], server: Mapping) -> dict:
         "surge_rule": "SLO attainment and goodput are GuideLLM's: a failed request counts as one that missed the "
                       "goals, and requests still running when the surge ends are left out; a surge in which no "
                       "request finished counts as 0 attainment and 0 goodput, and a figure of 0 is not a ratio, so "
-                      "the case gets NO VERDICT (nonpositive_value)",
+                      "the case gets NO VERDICT",
     }
 
 
