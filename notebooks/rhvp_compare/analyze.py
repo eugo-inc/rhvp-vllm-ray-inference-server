@@ -169,12 +169,16 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
                                  "p_raw": test.p if test else None, "order_split": [first, len(both) - first]})
             if test and test.p < 0.05:
                 differs.append((side, case["id"], max(lower, higher), lower + higher, test.p))
+    # A note about a 0 ends with the reason its cases get, filled in once they are graded: another reason (more than
+    # one node, a side that failed) can come first. Note index -> the cases it names.
+    zero_notes: dict[int, list[str]] = {}
     for entry in nonpositive.values():  # the round and the side, then what it costs
         where = [f"side {entry['side']} in {_rounds(entry['side_rounds'])}"] if entry["side_rounds"] else []
         where += [f"its twin in {_rounds(entry['twin_rounds'])}"] if entry["twin_rounds"] else []
         notes.append(f"side {entry['side']}'s comparison with its twin on {entry['case']} has a figure of 0 "
                      f"({'; '.join(where)}): side {entry['side']} has no noise floor for {', '.join(entry['cases'])}, "
-                     f"and those cases get NO VERDICT (nonpositive_value)")
+                     f"and those cases get NO VERDICT")
+        zero_notes[len(notes) - 1] = list(entry["cases"])
     tested = sum(1 for row in same_vs_same if row["p_raw"] is not None)
     for side, case_id, most, untied, p in differs:  # what was measured; never a cause
         notes.append(f"side {side} and its twin differed on {case_id} the same way in {most} of {untied} rounds (p = "
@@ -208,8 +212,8 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
             beside_twin = (nonpositive.get((side, cid)) or {}).get("side_rounds") or []
             zero = [r for r in zero if r not in beside_twin]
             if zero:
-                notes.append(f"side {side} had a figure of 0 on {cid} in {_rounds(zero)}: {cid} gets NO VERDICT "
-                             f"(nonpositive_value)")
+                notes.append(f"side {side} had a figure of 0 on {cid} in {_rounds(zero)}: {cid} gets NO VERDICT")
+                zero_notes[len(notes) - 1] = [cid]
         first = sum(1 for r in positive if pos.get((r, subject), 0) < pos.get((r, baseline), 0))
         fs, fs_case = group_floor(subject, case)
         fb, fb_case = group_floor(baseline, case)
@@ -245,6 +249,11 @@ def analyse(rows: list[Mapping], positions: list[Mapping], twins: Mapping[str, s
         c["outcome"], c["reason"] = _decide(c, rule, needed[c["role"]], twins, subject, baseline, len(nodes) > 1)
         c["verdict"] = stats.word(c["outcome"], c["kind"])
         c.pop("_nonpositive")
+    reason_of = {c["case"]: c["reason"] for c in comparisons}
+    for index, named in zero_notes.items():  # the reason when the cases share one; no reason when they differ
+        reasons = {reason_of[cid] for cid in named}
+        if len(reasons) == 1:
+            notes[index] += f" ({reasons.pop()})"
 
     outcomes: dict[str, dict[str, int]] = {"primary": {}, "secondary": {}}
     for c in comparisons:

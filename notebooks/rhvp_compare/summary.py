@@ -87,6 +87,11 @@ def levels_unusable(results: Mapping) -> list[dict]:
     return out
 
 
+def launches(indexes: list[int]) -> str:
+    """"launch 2" or "launches 2, 5"."""
+    return f"launch{'es' if len(indexes) > 1 else ''} {', '.join(map(str, indexes))}"
+
+
 #: summary.surge_rate_fit: "all_failed" needs at least this share of a surge's judged requests (those that finished
 #: or failed) to have failed, in every scored surge of both sides; "all_missed" needs at most this share within the
 #: latency goals in every one. words.SCALE_RATE_ALL_FAILED and SCALE_RATE_ALL_MISSED state both.

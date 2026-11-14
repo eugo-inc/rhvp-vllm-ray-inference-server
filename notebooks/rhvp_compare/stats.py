@@ -51,7 +51,9 @@ TOO_FEW_ROUNDS = "too_few_rounds"          # fewer paired rounds than any verdic
 NO_FLOOR = "no_floor"                      # neither side has a twin (or a twin that gave figures)
 ONE_SIDED_FLOOR = "one_sided_floor"        # only one of the two sides has a floor
 ZERO_FLOOR = "zero_floor"                  # a floor of exactly zero on either side
-NONPOSITIVE_VALUE = "nonpositive_value"    # a paired figure of 0 or less (for example no output tokens)
+NONPOSITIVE_VALUE = "nonpositive_value"    # a figure of 0 or less (for example no output tokens) of the subject or
+#                                            the baseline in any round, paired or not, or in a side's comparison with
+#                                            its twin (then every case of that floor group)
 ORDER_NOT_RECORDED = "order_not_recorded"  # the order the sides ran in is unknown (never in this pattern)
 #: Two reasons only this pattern gives. A failed launch does not stop a run here, and a run whose launches landed on
 #: more than one node is still analysed, so these say why such a comparison is not graded.

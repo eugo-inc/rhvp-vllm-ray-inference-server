@@ -342,6 +342,36 @@ def test_a_sides_own_zero_beside_its_twin_counts_even_without_the_other_side():
     assert got["notes"][0].startswith("side A's comparison with its twin on t has a figure of 0 (side A in round 3)")
 
 
+def test_a_sides_own_zero_beside_its_twin_gives_one_note_not_two():
+    """Side A's 0 in round 3, where side B and A's twin have figures: the twin note names the round, so the note about
+    side A's own 0 does not name it again."""
+    base = _noisy(10.0, 5.0)
+    got = analyze.analyse(*_rows({**base, "A": base["A"][:2] + [0.0] + base["A"][3:]}), TWINS, SECONDARY)
+    assert got["notes"] == ["side A's comparison with its twin on t has a figure of 0 (side A in round 3): side A has "
+                            "no noise floor for t, and those cases get NO VERDICT (nonpositive_value)"]
+
+
+def test_a_note_about_a_0_names_the_reason_its_cases_get():
+    """Two nodes, or a side that failed, come before the 0, so the notes name that reason; a floor group whose cases
+    got different reasons is named without one."""
+    base = _noisy(10.0, 5.0)
+    rows, positions = _rows({**base, "B": [0.0] + base["B"][1:]})
+    split = analyze.analyse(rows, positions, {"A~same": "A"}, SECONDARY, nodes=["n1", "n2"])
+    assert split["notes"] == ["side B had a figure of 0 on t in round 1: t gets NO VERDICT (more_than_one_node)"]
+    rows = [r for r in rows if not (r["side"] == "B" and r["round"] == 3)]
+    failed = analyze.analyse(rows, positions, {"A~same": "A"}, SECONDARY,
+                             faults=[{"round": 3, "side": "B", "case": "t"}])
+    assert failed["notes"] == ["side B had a figure of 0 on t in round 1: t gets NO VERDICT (side_failed)"]
+    zeroed = {**base, "B~same": [base["B~same"][0], 0.0] + base["B~same"][2:]}
+    rows, positions = _group_rows({"c1/t": zeroed, "c8/t": base, "c8/n": base})
+    rows = [r for r in rows if not (r["case"] == "c8/t" and r["side"] == "B" and r["round"] == 3)]
+    mixed = analyze.analyse(rows, positions, TWINS, GROUP, faults=[{"round": 3, "side": "B", "case": "c8/t"}])
+    assert {c["case"]: c["reason"] for c in mixed["comparisons"]} == {
+        "c1/t": "nonpositive_value", "c8/t": "side_failed", "c8/n": None}
+    assert mixed["notes"] == ["side B's comparison with its twin on c1/t has a figure of 0 (its twin in round 2): "
+                              "side B has no noise floor for c1/t, c8/t, and those cases get NO VERDICT"]
+
+
 def test_the_floor_is_the_largest_over_its_group_and_a_twin_that_differs_is_loud():
     cases = [{"id": i, "better": "lower", "kind": "time", "role": "secondary", "group": "secondary:t"}
              for i in ("c1/t", "c8/t")]

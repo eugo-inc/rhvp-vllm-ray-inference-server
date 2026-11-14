@@ -218,8 +218,8 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                                      successful=u["successful"]) for u in troubled if u["concurrency"] is None]
     if surges:
         parts.append(line(words.RUN_SURGES.format(surges=", ".join(surges))))
-    mixed = [words.ENERGY_MIXED_LEVEL.format(concurrency=m["concurrency"], power=", ".join(map(str, m["power_mean"])),
-                                             counter=", ".join(map(str, m["energy_counter"])))
+    mixed = [words.ENERGY_MIXED_LEVEL.format(concurrency=m["concurrency"], power=summary.launches(m["power_mean"]),
+                                             counter=summary.launches(m["energy_counter"]))
              for m in summary.energy_methods_mixed(results)]
     if mixed:
         parts.append(line(words.ENERGY_MIXED.format(levels="; ".join(mixed))))
